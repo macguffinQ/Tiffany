@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+cargo_bin="${CARGO:-cargo}"
+if ! command -v "$cargo_bin" >/dev/null 2>&1; then
+  cargo_bin="$HOME/.cargo/bin/cargo"
+fi
+
+TIFFANY_QUIET=1 "$repo_dir/scripts/tiffany-build"
+
+echo "checking tiffany-loop fork format..."
+fmt_log="$(mktemp)"
+if ! (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" fmt -- --check 2>"$fmt_log"); then
+  cat "$fmt_log" >&2
+  rm -f "$fmt_log"
+  exit 1
+fi
+grep -v "imports_granularity = Item" "$fmt_log" >&2 || true
+rm -f "$fmt_log"
+
+echo "checking tiffany-loop CLI help..."
+"$repo_dir/scripts/tiffany-dev" --help >/dev/null 2>&1
+
+echo "checking orchestrator bridge..."
+"$repo_dir/scripts/tiffany-dev" orchestrator --legacy status >/dev/null 2>&1
+
+echo "checking orchestrator event stream..."
+"$repo_dir/target/debug/orchestrator" events --help >/dev/null 2>&1
+
+echo "check passed"

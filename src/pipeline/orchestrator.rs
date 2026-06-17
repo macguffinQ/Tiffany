@@ -1,0 +1,862 @@
+//! The main pipeline: Planner → Critic → Router → Workers → Reviewer.
+//!
+//! Tasks form a DAG; we run ready tasks in parallel (subject to per-adapter
+//! concurrency caps) and only proceed when dependencies are satisfied.
+
+use crate::agent_events;
+use crate::core::session_store::SessionStore;
+use crate::core::types::{Event, Session, Task, TaskStatus};
+use crate::core::worker::WorkerAdapter;
+use crate::roles::critic::Critic;
+use crate::roles::planner::Planner;
+use crate::roles::reviewer::Reviewer;
+use crate::roles::router::CapabilityRouter;
+use anyhow::{Context, Result};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinSet;
+use uuid::Uuid;
+
+/// Progress events emitted by the orchestrator for live terminal chat display.
+/// (Borrowed from Claude Code's terminal pattern: background task + mpsc channel.)
+#[derive(Clone, Debug)]
+pub enum RunProgress {
+    Planning,
+    Planned {
+        sub_task_count: usize,
+    },
+    Critiquing {
+        round: u32,
+    },
+    CritiqueResult {
+        approved: bool,
+        issues: usize,
+    },
+    Replanning {
+        attempt: u32,
+    },
+    Executing {
+        sub_task_count: usize,
+    },
+    WorkerStarted {
+        task_id: Uuid,
+        agent: String,
+    },
+    WorkerOutput {
+        task_id: Uuid,
+        agent: String,
+        content: String,
+    },
+    RoleOutput {
+        role: String,
+        content: String,
+    },
+    WorkerDone {
+        task_id: Uuid,
+        agent: String,
+        ok: bool,
+    },
+    Reviewing {
+        task_id: Uuid,
+    },
+    ReviewResult {
+        task_id: Uuid,
+        approved: bool,
+        issues: usize,
+    },
+    Done {
+        task_count: usize,
+    },
+    Failed(String),
+}
+
+pub struct Orchestrator {
+    pub planner: Arc<dyn Planner>,
+    pub critic: Arc<dyn Critic>,
+    pub reviewer: Arc<dyn Reviewer>,
+    pub router: Arc<CapabilityRouter>,
+    pub adapters: Arc<HashMap<String, Arc<dyn WorkerAdapter>>>,
+    pub session_store: Arc<SessionStore>,
+    pub max_replan: u32,
+    pub enable_critic: bool,
+    pub enable_reviewer: bool,
+}
+
+impl Orchestrator {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        planner: Arc<dyn Planner>,
+        critic: Arc<dyn Critic>,
+        reviewer: Arc<dyn Reviewer>,
+        router: Arc<CapabilityRouter>,
+        adapters: HashMap<String, Arc<dyn WorkerAdapter>>,
+        session_store: Arc<SessionStore>,
+        max_replan: u32,
+        enable_critic: bool,
+        enable_reviewer: bool,
+    ) -> Self {
+        Self {
+            planner,
+            critic,
+            reviewer,
+            router,
+            adapters: Arc::new(adapters),
+            session_store,
+            max_replan,
+            enable_critic,
+            enable_reviewer,
+        }
+    }
+
+    pub async fn run(&self, top_task: Task) -> Result<Vec<Task>> {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        self.run_with_progress(top_task, tx).await
+    }
+
+    /// Like `run`, but pushes progress events to `tx` for live terminal chat display.
+    /// The terminal UI should drain `tx` on every render to keep input responsive.
+    pub async fn run_with_progress(
+        &self,
+        top_task: Task,
+        tx: UnboundedSender<RunProgress>,
+    ) -> Result<Vec<Task>> {
+        // Wrap body in async block so we can log any error before returning.
+        // This is the safety net — without it, an `Err` from critique / replan
+        // / reviewer silently exits and terminal chat is left spinning forever.
+        let result: Result<Vec<Task>> = async { self.run_inner(&top_task, tx.clone()).await }.await;
+        if let Err(ref e) = result {
+            tracing::error!(
+                "Pipeline exiting with error (was at some stage, terminal chat may be stuck): {:#}",
+                e
+            );
+            let _ = tx.send(RunProgress::Failed(format!("{:#}", e)));
+        }
+        result
+    }
+
+    /// Internal pipeline body. Returns Err on any LLM/network/parse failure.
+    /// Errors propagate out of `run_with_progress` which logs them.
+    async fn run_inner(
+        &self,
+        top_task: &Task,
+        tx: UnboundedSender<RunProgress>,
+    ) -> Result<Vec<Task>> {
+        // 1. Plan
+        let _ = tx.send(RunProgress::Planning);
+        tracing::info!("planning task: {}", top_task.prompt);
+        let plan_start = std::time::Instant::now();
+        let mut plan = self
+            .planner
+            .plan_with_progress(top_task, Some(tx.clone()))
+            .await
+            .context("planning task")?;
+        apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
+        tracing::info!(
+            "→ Planning done: {} sub-tasks in {:?}",
+            plan.sub_tasks.len(),
+            plan_start.elapsed()
+        );
+        let _ = tx.send(RunProgress::Planned {
+            sub_task_count: plan.sub_tasks.len(),
+        });
+
+        // 2. Critique loop (before consuming plan.sub_tasks)
+        if self.enable_critic {
+            for i in 0..self.max_replan {
+                let _ = tx.send(RunProgress::Critiquing { round: i + 1 });
+                tracing::info!("→ Critiquing started (round {})", i + 1);
+                let crit_start = std::time::Instant::now();
+                let crit = self
+                    .critic
+                    .critique_with_progress(top_task, &plan, Some(tx.clone()))
+                    .await
+                    .with_context(|| format!("critiquing plan round {}", i + 1))?;
+                tracing::info!(
+                    "→ Critiquing done (round {}): approved={}, {} issues in {:?}",
+                    i + 1,
+                    crit.approved,
+                    crit.issues.len(),
+                    crit_start.elapsed()
+                );
+                let _ = tx.send(RunProgress::CritiqueResult {
+                    approved: crit.approved,
+                    issues: crit.issues.len(),
+                });
+                if crit.approved {
+                    break;
+                }
+                tracing::info!(
+                    "critic rejected (round {}): {} issues",
+                    i + 1,
+                    crit.issues.len()
+                );
+                let _ = tx.send(RunProgress::Replanning { attempt: i + 1 });
+                tracing::info!("→ Replanning started (attempt {})", i + 1);
+                let replan_start = std::time::Instant::now();
+                let replanned = self
+                    .planner
+                    .replan_with_progress(top_task, &crit, Some(tx.clone()))
+                    .await;
+                plan = match replanned {
+                    Ok(new_plan) => new_plan,
+                    Err(err) => {
+                        tracing::warn!(
+                            "replanning after critique round {} failed; continuing with previous plan: {:#}",
+                            i + 1,
+                            err
+                        );
+                        let _ = tx.send(RunProgress::RoleOutput {
+                            role: "planner".to_string(),
+                            content: format!(
+                                "replan failed; continuing with previous plan: {}",
+                                format!("{:#}", err)
+                                    .lines()
+                                    .next()
+                                    .unwrap_or("unknown replan error")
+                            ),
+                        });
+                        break;
+                    }
+                };
+                apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
+                tracing::info!(
+                    "→ Replanning done (attempt {}): {} sub-tasks in {:?}",
+                    i + 1,
+                    plan.sub_tasks.len(),
+                    replan_start.elapsed()
+                );
+            }
+        }
+
+        // 3. Execute DAG
+        // Do NOT pre-mark tasks as Running here — execute_dag's filter
+        // looks for Pending tasks and sets Running per spawn. Pre-marking
+        // would cause the filter to skip every task (DAG exits instantly
+        // with 0 executed).
+        let tasks = plan.sub_tasks;
+        let _ = tx.send(RunProgress::Executing {
+            sub_task_count: tasks.len(),
+        });
+        tracing::info!("→ Executing DAG: {} sub-tasks", tasks.len());
+        let exec_start = std::time::Instant::now();
+        let completed = self
+            .execute_dag(tasks, tx.clone())
+            .await
+            .context("executing task DAG")?;
+        tracing::info!("→ DAG execution done in {:?}", exec_start.elapsed());
+
+        // 4. Review
+        if self.enable_reviewer {
+            for t in &completed {
+                if t.status != TaskStatus::Completed {
+                    continue;
+                }
+                let _ = tx.send(RunProgress::Reviewing { task_id: t.id });
+                tracing::info!("→ Reviewing task {}", &t.id.to_string()[..8]);
+                // Look up the session for this task to get log + worktree paths
+                let session = self
+                    .session_store
+                    .list(1000)
+                    .ok()
+                    .and_then(|sessions| sessions.into_iter().find(|s| s.task_id == t.id));
+                let ctx = session
+                    .map(|s| {
+                        let worktree = t.worktree.clone().unwrap_or_else(|| {
+                            self.session_store
+                                .log_dir()
+                                .parent()
+                                .unwrap_or_else(|| std::path::Path::new("."))
+                                .join("worktrees")
+                                .join(t.id.to_string())
+                        });
+                        crate::core::types::ReviewContext {
+                            session_log_path: self.session_store.log_path(s.id),
+                            worktree_path: worktree,
+                        }
+                    })
+                    .unwrap_or_else(|| crate::core::types::ReviewContext {
+                        session_log_path: self.session_store.log_path(uuid::Uuid::new_v4()),
+                        worktree_path: t
+                            .worktree
+                            .clone()
+                            .unwrap_or_else(|| std::path::PathBuf::from(".")),
+                    });
+                let rev_start = std::time::Instant::now();
+                let rev = self
+                    .reviewer
+                    .review_with_progress(t, &ctx, Some(tx.clone()))
+                    .await
+                    .with_context(|| format!("reviewing task {}", t.id))?;
+                tracing::info!(
+                    "→ Reviewing done task {}: approved={}, {} issues in {:?}",
+                    &t.id.to_string()[..8],
+                    rev.approved,
+                    rev.issues.len(),
+                    rev_start.elapsed()
+                );
+                let _ = tx.send(RunProgress::ReviewResult {
+                    task_id: t.id,
+                    approved: rev.approved,
+                    issues: rev.issues.len(),
+                });
+                if !rev.approved {
+                    tracing::warn!("reviewer rejected task {}: {:?}", t.id, rev.issues);
+                } else {
+                    tracing::info!("reviewer approved task {}", t.id);
+                }
+            }
+        }
+
+        let _ = tx.send(RunProgress::Done {
+            task_count: completed.len(),
+        });
+        tracing::info!("→ Pipeline done: {} tasks", completed.len());
+        Ok(completed)
+    }
+
+    async fn execute_dag(
+        &self,
+        mut tasks: Vec<Task>,
+        tx: UnboundedSender<RunProgress>,
+    ) -> Result<Vec<Task>> {
+        let total = tasks.len();
+        let by_id: HashMap<Uuid, Task> = tasks.iter().map(|t| (t.id, t.clone())).collect();
+        let mut completed_ids: HashSet<Uuid> = HashSet::new();
+        let mut results: Vec<Task> = Vec::new();
+        let mut joinset: JoinSet<(Uuid, String, Result<Session>)> = JoinSet::new();
+
+        loop {
+            // Find ready tasks: status==Pending (only — NOT Running) and all
+            // deps done. Including Running caused re-spawn: a task already in
+            // flight (e.g. worktree created, worker running) would be
+            // spawned AGAIN on the next loop iteration, and the second
+            // `git worktree add` would fail with "already exists".
+            let ready: Vec<Task> = tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Pending)
+                .filter(|t| t.deps.iter().all(|d| completed_ids.contains(d)))
+                .cloned()
+                .collect();
+
+            for mut t in ready {
+                t.status = TaskStatus::Running;
+                // Update the in-list task to Running
+                if let Some(slot) = tasks.iter_mut().find(|x| x.id == t.id) {
+                    slot.status = TaskStatus::Running;
+                }
+                let assignment = self.router.resolve(&t)?;
+                if t.model_hint.is_none() {
+                    t.model_hint = Some(assignment.model.clone());
+                }
+                if t.model_provider_hint.is_none() {
+                    t.model_provider_hint = assignment.provider.clone();
+                }
+                let adapter = self
+                    .adapters
+                    .get(&assignment.runtime)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("no adapter for runtime '{}'", assignment.runtime)
+                    })?
+                    .clone();
+                let task_id = t.id;
+                let agent = adapter.name().to_string();
+                let _ = tx.send(RunProgress::WorkerStarted {
+                    task_id,
+                    agent: agent.clone(),
+                });
+                let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+                let progress_tx = tx.clone();
+                let output_agent = agent.clone();
+                let forwarder = tokio::spawn(async move {
+                    let mut last_output_key: Option<String> = None;
+                    while let Some(event) = event_rx.recv().await {
+                        if event.kind == "heartbeat" {
+                            continue;
+                        }
+                        let content = format_worker_event(&output_agent, &event);
+                        if agent_events::is_low_value_output(&content) {
+                            continue;
+                        }
+                        if let Some(key) = agent_events::normalized_output_key(&content, 240_000) {
+                            if last_output_key.as_deref() == Some(key.as_str()) {
+                                continue;
+                            }
+                            last_output_key = Some(key);
+                        }
+                        let _ = progress_tx.send(RunProgress::WorkerOutput {
+                            task_id,
+                            agent: output_agent.clone(),
+                            content,
+                        });
+                    }
+                });
+                joinset.spawn(async move {
+                    let res = adapter.start(&t, Some(event_tx)).await;
+                    let _ = forwarder.await;
+                    (task_id, agent, res.map(|h| h.session))
+                });
+            }
+
+            if joinset.is_empty() {
+                if completed_ids.len() < total {
+                    let remaining = tasks
+                        .iter()
+                        .filter(|t| !completed_ids.contains(&t.id))
+                        .count();
+                    anyhow::bail!(
+                        "task DAG stalled: {} task(s) remain with unsatisfied dependencies",
+                        remaining
+                    );
+                }
+                break;
+            }
+
+            if let Some(joined) = joinset.join_next().await {
+                let (task_id, agent, res) = joined?;
+                match res {
+                    Ok(mut session) => {
+                        let done_agent = if session.agent.trim().is_empty() {
+                            agent
+                        } else {
+                            session.agent.clone()
+                        };
+                        session.ended_at = Some(chrono::Utc::now());
+                        self.session_store
+                            .finalize(&session)
+                            .with_context(|| format!("finalizing worker session {}", session.id))?;
+
+                        // Mark the task complete.
+                        if let Some(slot) = tasks.iter_mut().find(|t| t.id == task_id) {
+                            slot.status = TaskStatus::Completed;
+                        }
+                        completed_ids.insert(task_id);
+                        if let Some(t) = by_id.get(&task_id).cloned() {
+                            let mut t = t;
+                            t.status = TaskStatus::Completed;
+                            results.push(t);
+                        }
+                        let _ = tx.send(RunProgress::WorkerDone {
+                            task_id,
+                            agent: done_agent,
+                            ok: true,
+                        });
+                    }
+                    Err(e) => {
+                        let error_message = format!("{:#}", e);
+                        tracing::error!("task {} failed: {}", task_id, error_message);
+                        if let Some(slot) = tasks.iter_mut().find(|t| t.id == task_id) {
+                            slot.status = TaskStatus::Failed;
+                            slot.error = Some(error_message.clone());
+                        }
+                        completed_ids.insert(task_id);
+                        let _ = tx.send(RunProgress::WorkerOutput {
+                            task_id,
+                            agent: agent.clone(),
+                            content: format!("{} error: {}", agent, error_message),
+                        });
+                        let _ = tx.send(RunProgress::WorkerDone {
+                            task_id,
+                            agent,
+                            ok: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        tracing::info!("executed {} / {} tasks", results.len(), total);
+        Ok(results)
+    }
+}
+
+fn apply_top_task_agent_hint(top_task: &Task, sub_tasks: &mut [Task]) {
+    for task in sub_tasks {
+        if task.agent_hint.is_none() {
+            if let Some(agent_hint) = &top_task.agent_hint {
+                task.agent_hint = Some(agent_hint.clone());
+            }
+        }
+        if task.worktree.is_none() {
+            if let Some(worktree) = &top_task.worktree {
+                task.worktree = Some(worktree.clone());
+            }
+        }
+    }
+}
+
+fn format_worker_event(agent: &str, event: &Event) -> String {
+    agent_events::format_runtime_output(agent, &event.kind, &event.payload, 240_000)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RoleConfig;
+    use crate::core::types::{
+        CritiqueOutput, Event, PlanOutput, ReviewContext, ReviewOutput, Role, Session,
+    };
+    use crate::core::worker::WorkerHandle;
+    use futures::stream::{self, BoxStream};
+
+    #[test]
+    fn top_task_agent_hint_is_applied_to_unhinted_subtasks() {
+        let mut top = Task::new("top");
+        top.agent_hint = Some("worker-cc".into());
+        let mut sub_tasks = vec![Task::new("a"), Task::new("b")];
+        sub_tasks[1].agent_hint = Some("custom".into());
+
+        apply_top_task_agent_hint(&top, &mut sub_tasks);
+
+        assert_eq!(sub_tasks[0].agent_hint.as_deref(), Some("worker-cc"));
+        assert_eq!(sub_tasks[1].agent_hint.as_deref(), Some("custom"));
+    }
+
+    #[test]
+    fn top_task_worktree_is_applied_to_unhinted_subtasks() {
+        let mut top = Task::new("top");
+        top.worktree = Some(std::path::PathBuf::from("/tmp/project"));
+        let mut sub_tasks = vec![Task::new("a"), Task::new("b")];
+        sub_tasks[1].worktree = Some(std::path::PathBuf::from("/tmp/other"));
+
+        apply_top_task_agent_hint(&top, &mut sub_tasks);
+
+        assert_eq!(
+            sub_tasks[0].worktree.as_deref(),
+            Some(std::path::Path::new("/tmp/project"))
+        );
+        assert_eq!(
+            sub_tasks[1].worktree.as_deref(),
+            Some(std::path::Path::new("/tmp/other"))
+        );
+    }
+
+    struct StaticPlanner;
+
+    #[async_trait::async_trait]
+    impl Planner for StaticPlanner {
+        async fn plan(&self, _top_task: &Task) -> Result<PlanOutput> {
+            Ok(PlanOutput {
+                sub_tasks: vec![Task::new("sub-task")],
+                rationale: "test plan".to_string(),
+                estimated_cost_usd: 0.0,
+            })
+        }
+
+        async fn replan(&self, top_task: &Task, _critique: &CritiqueOutput) -> Result<PlanOutput> {
+            self.plan(top_task).await
+        }
+    }
+
+    struct FailingReplanPlanner;
+
+    #[async_trait::async_trait]
+    impl Planner for FailingReplanPlanner {
+        async fn plan(&self, _top_task: &Task) -> Result<PlanOutput> {
+            Ok(PlanOutput {
+                sub_tasks: vec![Task::new("original sub-task")],
+                rationale: "original plan".to_string(),
+                estimated_cost_usd: 0.0,
+            })
+        }
+
+        async fn replan(&self, _top_task: &Task, _critique: &CritiqueOutput) -> Result<PlanOutput> {
+            anyhow::bail!("planner returned no sub_tasks (parse failed)")
+        }
+    }
+
+    struct ApprovingCritic;
+
+    #[async_trait::async_trait]
+    impl Critic for ApprovingCritic {
+        async fn critique(&self, _top_task: &Task, _plan: &PlanOutput) -> Result<CritiqueOutput> {
+            Ok(CritiqueOutput {
+                approved: true,
+                issues: vec![],
+                suggestions: vec![],
+            })
+        }
+    }
+
+    struct RejectingCritic;
+
+    #[async_trait::async_trait]
+    impl Critic for RejectingCritic {
+        async fn critique(&self, _top_task: &Task, _plan: &PlanOutput) -> Result<CritiqueOutput> {
+            Ok(CritiqueOutput {
+                approved: false,
+                issues: vec!["needs a clearer worker prompt".to_string()],
+                suggestions: vec!["make the prompt direct".to_string()],
+            })
+        }
+    }
+
+    struct FailingCritic;
+
+    #[async_trait::async_trait]
+    impl Critic for FailingCritic {
+        async fn critique(&self, _top_task: &Task, _plan: &PlanOutput) -> Result<CritiqueOutput> {
+            anyhow::bail!("critic unavailable")
+        }
+    }
+
+    struct ApprovingReviewer;
+
+    #[async_trait::async_trait]
+    impl Reviewer for ApprovingReviewer {
+        async fn review(&self, _task: &Task, _ctx: &ReviewContext) -> Result<ReviewOutput> {
+            Ok(ReviewOutput {
+                approved: true,
+                issues: vec![],
+            })
+        }
+    }
+
+    struct CompletingAdapter;
+
+    #[async_trait::async_trait]
+    impl WorkerAdapter for CompletingAdapter {
+        fn name(&self) -> &str {
+            "test-worker"
+        }
+
+        async fn start(
+            &self,
+            task: &Task,
+            event_tx: Option<tokio::sync::mpsc::UnboundedSender<Event>>,
+        ) -> Result<WorkerHandle> {
+            if let Some(tx) = event_tx {
+                let _ = tx.send(Event {
+                    session_id: Uuid::new_v4(),
+                    task_id: task.id,
+                    ts: chrono::Utc::now(),
+                    kind: "assistant".into(),
+                    payload: serde_json::json!({
+                        "message": {
+                            "content": [
+                                { "type": "text", "text": "worker is making progress" }
+                            ]
+                        }
+                    }),
+                });
+            }
+            let mut session = Session::new(task.id, self.name(), Role::Worker);
+            session.model = task.model_hint.clone().unwrap_or_default();
+            Ok(WorkerHandle {
+                session,
+                kill: Arc::new(|| {}),
+            })
+        }
+
+        fn stream_events(&self, _session: &Session) -> BoxStream<'static, Result<Event>> {
+            Box::pin(stream::empty())
+        }
+
+        async fn cancel(&self, _session: &Session) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_diff(&self, _session: &Session) -> Result<String> {
+            Ok(String::new())
+        }
+
+        async fn build_context(
+            &self,
+            _reader: &dyn crate::core::session_store::SessionReader,
+            _parent_ids: &[Uuid],
+        ) -> Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    fn test_orchestrator(critic: Arc<dyn Critic>) -> (tempfile::TempDir, Orchestrator) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        let orch = Orchestrator::new(
+            Arc::new(StaticPlanner),
+            critic,
+            Arc::new(ApprovingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            std::collections::HashMap::new(),
+            store,
+            1,
+            true,
+            false,
+        );
+
+        (tmp, orch)
+    }
+
+    #[tokio::test]
+    async fn run_with_progress_reports_stage_errors() {
+        let (_tmp, orch) = test_orchestrator(Arc::new(FailingCritic));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let err = orch
+            .run_with_progress(Task::new("top task"), tx)
+            .await
+            .expect_err("critic failure");
+
+        let err_msg = format!("{:#}", err);
+        assert!(err_msg.contains("critiquing plan round 1"));
+        assert!(err_msg.contains("critic unavailable"));
+
+        let mut saw_failed = false;
+        while let Ok(event) = rx.try_recv() {
+            if let RunProgress::Failed(msg) = event {
+                saw_failed =
+                    msg.contains("critiquing plan round 1") && msg.contains("critic unavailable");
+            }
+        }
+        assert!(saw_failed, "expected Failed progress event");
+    }
+
+    #[tokio::test]
+    async fn run_with_progress_continues_when_replan_fails() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(FailingReplanPlanner),
+            Arc::new(RejectingCritic),
+            Arc::new(ApprovingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            false,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let completed = orch
+            .run_with_progress(Task::new("top task"), tx)
+            .await
+            .expect("failed replan should not abort execution");
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].prompt, "original sub-task");
+        let mut saw_replan_warning = false;
+        while let Ok(event) = rx.try_recv() {
+            if let RunProgress::RoleOutput { role, content } = event {
+                saw_replan_warning = role == "planner"
+                    && content.contains("replan failed; continuing with previous plan");
+            }
+        }
+        assert!(saw_replan_warning, "expected visible replan fallback event");
+    }
+
+    #[tokio::test]
+    async fn execute_dag_errors_when_dependencies_never_become_ready() {
+        let (_tmp, orch) = test_orchestrator(Arc::new(ApprovingCritic));
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut first = Task::new("first");
+        let mut second = Task::new("second");
+        first.deps.push(second.id);
+        second.deps.push(first.id);
+
+        let err = orch
+            .execute_dag(vec![first, second], tx)
+            .await
+            .expect_err("cyclic DAG should not complete");
+
+        assert!(
+            format!("{:#}", err).contains("task DAG stalled"),
+            "unexpected error: {:#}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_dag_finalizes_completed_worker_sessions() {
+        let (_tmp, mut orch) = test_orchestrator(Arc::new(ApprovingCritic));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let task = Task::new("complete me");
+        let task_id = task.id;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let completed = orch.execute_dag(vec![task], tx).await.unwrap();
+        assert_eq!(completed.len(), 1);
+
+        let sessions = orch.session_store.list(10).unwrap();
+        let session = sessions
+            .iter()
+            .find(|s| s.task_id == task_id)
+            .expect("worker session should be finalized");
+        assert_eq!(session.agent, "test-worker");
+        assert!(session.ended_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn execute_dag_passes_resolved_worker_model_to_adapter() {
+        let (_tmp, mut orch) = test_orchestrator(Arc::new(ApprovingCritic));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let task = Task::new("use routed model");
+        let task_id = task.id;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let _ = orch.execute_dag(vec![task], tx).await.unwrap();
+
+        let sessions = orch.session_store.list(10).unwrap();
+        let session = sessions
+            .iter()
+            .find(|s| s.task_id == task_id)
+            .expect("worker session should be finalized");
+        assert_eq!(session.model, "test-model");
+    }
+
+    #[tokio::test]
+    async fn execute_dag_forwards_worker_output_events() {
+        let (_tmp, mut orch) = test_orchestrator(Arc::new(ApprovingCritic));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let _ = orch
+            .execute_dag(vec![Task::new("stream me")], tx)
+            .await
+            .unwrap();
+
+        let mut saw_worker_output = false;
+        while let Ok(event) = rx.try_recv() {
+            if let RunProgress::WorkerOutput { content, .. } = event {
+                saw_worker_output = content.contains("test-worker assistant")
+                    && content.contains("worker is making progress");
+            }
+        }
+        assert!(saw_worker_output, "expected forwarded WorkerOutput event");
+    }
+}

@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  printf '%s\n' \
+    "Usage: ./scripts/tiffany-build [cargo-build-args...]" \
+    "" \
+    "Builds both binaries:" \
+    "  - target/*/orchestrator" \
+    "  - tiffany-ui/codex-rs/target/*/tiffany" \
+    "" \
+    "Examples:" \
+    "  ./scripts/tiffany-build" \
+    "  ./scripts/tiffany-build --release --locked"
+  exit 0
+fi
+
+cargo_bin="${CARGO:-cargo}"
+if ! command -v "$cargo_bin" >/dev/null 2>&1; then
+  cargo_bin="$HOME/.cargo/bin/cargo"
+fi
+
+cargo_flags=("$@")
+if [[ "${TIFFANY_QUIET:-0}" == "1" ]]; then
+  cargo_flags+=(--quiet)
+fi
+
+run_build() {
+  local label="$1"
+  local dir="$2"
+  shift 2
+
+  echo "building $label..."
+  if [[ "${TIFFANY_QUIET:-0}" == "1" ]]; then
+    local log_file
+    log_file="$(mktemp)"
+    if ! (cd "$dir" && "$cargo_bin" build "${cargo_flags[@]}" "$@" >"$log_file" 2>&1); then
+      cat "$log_file" >&2
+      rm -f "$log_file"
+      exit 1
+    fi
+    rm -f "$log_file"
+    return
+  fi
+
+  (cd "$dir" && "$cargo_bin" build "${cargo_flags[@]}" "$@")
+}
+
+run_build "orchestrator" "$repo_dir" --bin orchestrator
+run_build "tiffany-loop UI" "$repo_dir/tiffany-ui/codex-rs" -p codex-cli --bin tiffany
+
+echo "done"

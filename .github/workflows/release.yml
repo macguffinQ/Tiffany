@@ -1,0 +1,196 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build orchestrator
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Build tiffany-loop UI
+        shell: bash
+        working-directory: tiffany-ui/codex-rs
+        run: cargo build --release --locked --target ${{ matrix.target }} -p codex-cli --bin tiffany
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          name="tiffany-loop-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          staging="dist/${name}"
+          mkdir -p "${staging}"
+
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            cp "target/${{ matrix.target }}/release/orchestrator.exe" "${staging}/"
+            cp "tiffany-ui/codex-rs/target/${{ matrix.target }}/release/tiffany.exe" "${staging}/"
+          else
+            cp "target/${{ matrix.target }}/release/orchestrator" "${staging}/"
+            cp "tiffany-ui/codex-rs/target/${{ matrix.target }}/release/tiffany" "${staging}/"
+          fi
+
+          cp README.md README.zh-CN.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md "${staging}/"
+
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            powershell -NoProfile -Command "Compress-Archive -Path '${staging}' -DestinationPath 'dist/${name}.zip'"
+          else
+            tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiffany-loop-${{ github.ref_name }}-${{ matrix.target }}
+          path: dist/tiffany-loop-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  homebrew:
+    name: Update Homebrew tap
+    runs-on: ubuntu-latest
+    needs: publish
+    env:
+      HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO || 'macguffinQ/homebrew-tap' }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Skip if tap token is not configured
+        if: ${{ env.HOMEBREW_TAP_TOKEN == '' }}
+        run: echo "Set HOMEBREW_TAP_TOKEN to update the Homebrew tap automatically."
+
+      - name: Checkout tap
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HOMEBREW_TAP_REPO }}
+          token: ${{ env.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#v}"
+          arm_asset="tiffany-loop-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz"
+          arm_url="https://github.com/macguffinQ/Tiffany/releases/download/${GITHUB_REF_NAME}/tiffany-loop-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz"
+          source_url="https://github.com/macguffinQ/Tiffany/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+
+          arm_sha="$(
+            gh release view "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json assets \
+              --jq ".assets[] | select(.name == \"${arm_asset}\") | .digest" |
+              sed 's/^sha256://'
+          )"
+          source_sha="$(gh api "repos/${GITHUB_REPOSITORY}/tarball/${GITHUB_REF_NAME}" | sha256sum | awk '{print $1}')"
+
+          if [[ -z "${arm_sha}" || -z "${source_sha}" ]]; then
+            echo "Failed to calculate formula checksums" >&2
+            exit 1
+          fi
+
+          mkdir -p Formula
+          cat > Formula/tiffany-loop.rb <<EOF
+          class TiffanyLoop < Formula
+            desc "Lightweight multi-agent orchestration shell for Claude Code, Codex CLI, and LLM agents"
+            homepage "https://github.com/macguffinQ/Tiffany"
+            version "${version}"
+
+            if OS.mac? && Hardware::CPU.arm?
+              url "${arm_url}"
+              sha256 "${arm_sha}"
+            else
+              url "${source_url}"
+              sha256 "${source_sha}"
+              depends_on "rust" => :build
+            end
+
+            def install
+              if OS.mac? && Hardware::CPU.arm?
+                bin.install "orchestrator", "tiffany"
+              else
+                system "cargo", "install", *std_cargo_args
+                system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/cli")
+              end
+            end
+
+            test do
+              assert_match "orchestrator", shell_output("#{bin}/orchestrator --help")
+              assert_match "orchestrator", shell_output("#{bin}/tiffany orchestrator --help")
+            end
+          end
+          EOF
+
+          sed -i 's/^          //' Formula/tiffany-loop.rb
+
+      - name: Commit formula
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/tiffany-loop.rb
+
+          if git diff --cached --quiet; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+
+          git commit -m "Update tiffany-loop to ${GITHUB_REF_NAME}"
+          git push

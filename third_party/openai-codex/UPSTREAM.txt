@@ -1,0 +1,20 @@
+OpenAI Codex vendored source
+============================
+
+Source repository: https://github.com/openai/codex
+Vendored commit: e5253b97fb6c39b984d84acb409d0e9552de407f
+Commit date: 2026-06-15T14:04:01+01:00
+Commit subject: [codex] Skip plugin MCP OAuth for matching app routes (#27461)
+
+This directory vendors the OpenAI Codex TUI crate for reference and
+incremental migration into Tiffany.
+
+Included source:
+
+- codex-rs/tui/
+- LICENSE
+- NOTICE
+- README.md
+
+The vendored crate is not compiled directly by Tiffany. It is kept as an
+upstream reference so TUI components can be migrated with clear provenance.

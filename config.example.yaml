@@ -1,0 +1,118 @@
+# orchestrator config example
+# Copy to ~/.orchestrator/config.yaml and edit.
+#
+# Three-tier role resolution priority:
+#   1. CLI flag (e.g. --planner opus)        [highest]
+#   2. Task tag → override mapping
+#   3. Defaults below                        [lowest]
+
+# ─── LLM providers ───────────────────────────────────────────
+providers:
+  anthropic:
+    type: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+  openai:
+    type: openai
+    api_key: ${OPENAI_API_KEY}
+  minimax:
+    type: openai
+    api_key: ${MINIMAX_API_KEY}
+    base_url: https://api.minimaxi.com/v1
+  google:
+    type: google
+    api_key: ${GOOGLE_API_KEY}
+  ollama:
+    type: ollama
+    base_url: http://localhost:11434
+
+# ─── Worker runtimes ─────────────────────────────────────────
+runtimes:
+  claude-code:
+    type: subprocess
+    binary: claude
+    supports_mcp: true
+    supports_agent_teams: true
+  codex:
+    type: subprocess
+    binary: codex
+    supports_mcp: false
+    supports_agent_teams: false
+  direct:
+    type: sdk
+    supports_mcp: false
+    supports_agent_teams: false
+
+# ─── Models ──────────────────────────────────────────────────
+models:
+  - id: opus
+    provider: anthropic
+    name: claude-opus-4-6
+  - id: sonnet
+    provider: anthropic
+    name: claude-sonnet-4-6
+  - id: haiku
+    provider: anthropic
+    name: claude-haiku-4-5
+  - id: gpt4o
+    provider: openai
+    name: gpt-4o
+  - id: gpt4o-mini
+    provider: openai
+    name: gpt-4o-mini
+  - id: minimax-m3-claude
+    provider: minimax
+    name: MiniMax-M3
+  - id: minimax-m3-codex
+    provider: minimax
+    name: MiniMax-M3
+  - id: gemini-pro
+    provider: google
+    name: gemini-1.5-pro
+  - id: llama3
+    provider: ollama
+    name: llama3
+
+# ─── Role → (model, runtime) ─────────────────────────────────
+roles:
+  planner:
+    model: gpt4o
+    runtime: codex
+  critic:
+    model: opus
+    runtime: claude-code
+  worker-cc:
+    model: sonnet
+    runtime: claude-code
+    agent_teams: true
+  worker-codex:
+    model: gpt4o
+    runtime: codex
+  reviewer:
+    model: gpt4o-mini
+    runtime: codex
+
+# ─── Task-tag overrides ──────────────────────────────────────
+overrides:
+  - tag: refactor
+    role: worker-cc
+  - tag: architecture
+    role: worker-cc
+  - tag: boilerplate
+    role: worker-codex
+  - tag: docs
+    role: worker-codex
+  - tag: test
+    role: worker-codex
+
+# ─── Behavior ────────────────────────────────────────────────
+behavior:
+  worktree_base: ~/.orchestrator/worktrees
+  db_path: ~/.orchestrator/state.db
+  session_log_dir: ~/.orchestrator/sessions
+  enable_critic: true
+  enable_reviewer: true
+  max_replan: 2
+  cc_bypass_permissions: true  # pass --permission-mode bypassPermissions to Claude Code roles/workers
+  enable_ab_judge: false
+  mux: zellij                  # zellij | tmux | none
+  log_level: info              # trace | debug | info | warn | error

@@ -1,0 +1,80 @@
+[package]
+name = "tiffany-loop"
+version = "0.1.5"
+edition = "2021"
+description = "tiffany-loop: a lightweight multi-agent orchestration shell for Claude Code, Codex CLI, and other LLM CLIs"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/macguffinQ/Tiffany"
+homepage = "https://github.com/macguffinQ/Tiffany"
+keywords = ["agents", "cli", "llm", "orchestration", "tui"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "orchestrator"
+path = "src/main.rs"
+
+[lib]
+name = "orchestrator"
+path = "src/lib.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+crossterm = { version = "0.28", features = ["event-stream"] }
+ratatui = { version = "0.29", features = ["scrolling-regions", "unstable-widget-ref"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+shellexpand = "3"
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# HTTP / API
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+axum = "0.7"
+tower = "0.5"
+
+# Git
+git2 = "0.19"
+
+# IDs & time
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Errors
+anyhow = "1"
+thiserror = "1"
+
+# MCP
+rmcp = { version = "0.1", features = ["client", "transport-child-process"] }
+
+# Utilities
+which = "6"
+home = "0.5"
+dirs = "5"
+tempfile = "3"
+unicode-width = "0.2"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

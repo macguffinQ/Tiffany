@@ -1,0 +1,3468 @@
+//! CLI dispatch.
+
+use crate::config::Config;
+use crate::core::provider::ModelProvider;
+use crate::core::types::Task;
+use crate::pipeline::orchestrator::Orchestrator;
+use crate::tiffany_events::TiffanyProgressEvent;
+use crate::{adapters, cc_config, mux, roles, runtime, storage};
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
+
+pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
+    match cmd {
+        crate::Cmd::Init => {
+            let target = Config::init_default()?;
+            println!("Wrote default config to {}", target.display());
+            println!("Edit it, then run `orchestrator run \"...\"`");
+            Ok(())
+        }
+
+        crate::Cmd::Run {
+            prompt,
+            tag,
+            planner,
+            critic,
+            worker,
+            reviewer,
+            ab,
+            no_critic,
+            no_reviewer,
+        } => {
+            if ab {
+                anyhow::bail!("A/B dual-run mode is not implemented yet; rerun without --ab");
+            }
+            let cfg = Config::load(config_path)?;
+            let orch = build_orchestrator(
+                &cfg,
+                no_critic,
+                no_reviewer,
+                planner.as_deref(),
+                critic.as_deref(),
+                reviewer.as_deref(),
+            )
+            .await?;
+            let mut task = Task::new(prompt);
+            task.tags = tag;
+            if let Some(w) = worker {
+                task.agent_hint = runtime::normalize_agent_hint_with_roles(&w, &cfg.roles);
+            }
+            let results = orch.run(task).await?;
+            println!("\n✓ Completed {} task(s):", results.len());
+            for t in &results {
+                println!(
+                    "  - {} [{}] {}",
+                    t.id,
+                    format!("{:?}", t.role).to_lowercase(),
+                    t.prompt
+                );
+            }
+            Ok(())
+        }
+
+        crate::Cmd::Events {
+            prompt,
+            tag,
+            planner,
+            critic,
+            worker,
+            reviewer,
+            no_critic,
+            no_reviewer,
+        } => {
+            let cfg = Config::load(config_path)?;
+            let orch = build_orchestrator(
+                &cfg,
+                no_critic,
+                no_reviewer,
+                planner.as_deref(),
+                critic.as_deref(),
+                reviewer.as_deref(),
+            )
+            .await?;
+            let mut task = Task::new(prompt);
+            task.tags = tag;
+            if let Some(w) = worker {
+                task.agent_hint = runtime::normalize_agent_hint_with_roles(&w, &cfg.roles);
+            }
+
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let run = tokio::spawn(async move { orch.run_with_progress(task, tx).await });
+            let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
+
+            while let Some(event) = rx.recv().await {
+                let line = serde_json::to_string(&TiffanyProgressEvent::from(event))?;
+                stdout.write_all(line.as_bytes()).await?;
+                stdout.write_all(b"\n").await?;
+                stdout.flush().await?;
+            }
+
+            run.await??;
+            Ok(())
+        }
+
+        crate::Cmd::Tui {
+            detach,
+            new_tab,
+            ratatui,
+        } => {
+            if !detach && !new_tab {
+                if let Some(status) = run_tiffany_tui(config_path)? {
+                    if status.success() {
+                        return Ok(());
+                    }
+                    anyhow::bail!("tiffany-loop UI exited with status {}", status);
+                }
+                println!(
+                    "tiffany-loop UI binary not found; using legacy terminal chat. Run `./scripts/tiffany-dev` from source or install the `tiffany` binary for the primary UI."
+                );
+            }
+
+            // If user explicitly asked for a new zellij tab, do it
+            if mux::zellij::in_zellij() && new_tab {
+                println!("→ opening new zellij tab for terminal chat");
+                return mux::zellij::open_tui_in_new_tab();
+            }
+            if detach && !mux::zellij::in_zellij() {
+                return mux::fallback::detach_tui();
+            }
+            let cfg = Config::load(config_path)?;
+            let store = Arc::new(crate::core::session_store::SessionStore::open(
+                &cfg.behavior.session_log_dir,
+                &cfg.behavior.db_path,
+            )?);
+            let orch = build_orchestrator(&cfg, false, false, None, None, None).await?;
+            if ratatui {
+                crate::tui::terminal::run_with_mode_notice(
+                    store,
+                    Arc::new(orch),
+                    Arc::new(cfg),
+                    config_path,
+                    "--ratatui now uses the tiffany-loop-style normal scrollback renderer for stable resize and native selection.",
+                )
+                .await
+            } else {
+                crate::tui::terminal::run(store, Arc::new(orch), Arc::new(cfg), config_path).await
+            }
+        }
+
+        crate::Cmd::Acp {
+            agent,
+            no_critic,
+            no_reviewer,
+        } => {
+            let cfg = Config::load(config_path)?;
+            let orch = build_orchestrator(&cfg, no_critic, no_reviewer, None, None, None).await?;
+            crate::acp::serve_stdio(Arc::new(orch), agent, cfg.roles.clone()).await
+        }
+
+        crate::Cmd::Sessions { action } => {
+            let cfg = Config::load(config_path)?;
+            let store = crate::core::session_store::SessionStore::open(
+                &cfg.behavior.session_log_dir,
+                &cfg.behavior.db_path,
+            )?;
+            match action {
+                crate::SessionsCmd::List { limit } => {
+                    let sessions = store.list(limit)?;
+                    println!(
+                        "{:<36}  {:<12}  {:<10}  {}",
+                        "SESSION ID", "AGENT", "ROLE", "STARTED"
+                    );
+                    for s in sessions {
+                        println!(
+                            "{:<36}  {:<12}  {:<10}  {}",
+                            s.id,
+                            s.agent,
+                            s.role.as_str(),
+                            s.started_at.format("%Y-%m-%d %H:%M:%S")
+                        );
+                    }
+                }
+                crate::SessionsCmd::Show { id } => {
+                    let uuid = uuid::Uuid::parse_str(&id)
+                        .with_context(|| format!("invalid session id: {}", id))?;
+                    let sessions = store.get_many(&[uuid])?;
+                    if let Some(s) = sessions.into_iter().next() {
+                        let path = store.log_path(uuid);
+                        if path.exists() {
+                            let content = std::fs::read_to_string(&path)?;
+                            println!(
+                                "--- {} ({}, {}) ---\n{}",
+                                s.id,
+                                s.agent,
+                                s.role.as_str(),
+                                content
+                            );
+                        }
+                    } else {
+                        println!("session not found");
+                    }
+                }
+                crate::SessionsCmd::Grep { pattern } => {
+                    let hits = store.grep(&pattern)?;
+                    println!("{} hit(s) for {:?}", hits.len(), pattern);
+                    for (s, e) in hits {
+                        println!("[{}] {} @ {}: {}", s.id, e.kind, e.ts, e.payload);
+                    }
+                }
+                crate::SessionsCmd::ImportCc { project } => {
+                    use crate::cc_session_import;
+                    let cwd = match project {
+                        Some(p) => std::path::PathBuf::from(p),
+                        None => std::env::current_dir()?,
+                    };
+                    let report = cc_session_import::import_cc_sessions(&store, &cwd)?;
+                    println!(
+                        "discovered {} CC session(s) from {}; imported {}, backfilled {}, skipped {}",
+                        report.discovered,
+                        report.project.display(),
+                        report.imported,
+                        report.backfilled,
+                        report.skipped
+                    );
+                    for id in report.session_ids.iter().take(20) {
+                        println!("  {}", id);
+                    }
+                    if report.session_ids.len() > 20 {
+                        println!("  ... {} more", report.session_ids.len() - 20);
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        crate::Cmd::Roles { action } => handle_roles(config_path, action),
+
+        crate::Cmd::Status => {
+            let cfg = Config::load(config_path)?;
+            println!("config:  {}", config_path.display());
+            println!("db:      {}", cfg.behavior.db_path.display());
+            println!("logs:    {}", cfg.behavior.session_log_dir.display());
+            println!("mux:     {:?}", cfg.behavior.mux);
+            println!(
+                "claude:  bypass_permissions={}",
+                cfg.behavior.cc_bypass_permissions
+            );
+            if mux::zellij::in_zellij() {
+                println!(
+                    "zellij:  in session {}",
+                    std::env::var("ZELLIJ_SESSION_NAME").unwrap_or_default()
+                );
+            }
+            Ok(())
+        }
+
+        crate::Cmd::Doctor => {
+            println!("{}", crate::doctor::run(config_path).render_text());
+            Ok(())
+        }
+
+        crate::Cmd::Usage { window } => {
+            let cfg = Config::load(config_path)?;
+            let store = crate::core::session_store::SessionStore::open(
+                &cfg.behavior.session_log_dir,
+                &cfg.behavior.db_path,
+            )?;
+            let win = match window.as_str() {
+                "today" | "day" => crate::usage::UsageWindow::Today,
+                "month" => crate::usage::UsageWindow::ThisMonth,
+                "week" => crate::usage::UsageWindow::LastDays(7),
+                "all" => crate::usage::UsageWindow::All,
+                _ => crate::usage::UsageWindow::Today,
+            };
+            let u = crate::usage::compute_for_window(&store, win)?;
+            println!("=== Token usage ({}) ===\n", window);
+            println!(
+                "Total: {} tokens in · {} tokens out · ${:.4}",
+                u.total_tokens_in, u.total_tokens_out, u.total_cost_usd
+            );
+            println!("\nBy provider:");
+            let mut provs: Vec<_> = u.by_provider.iter().collect();
+            provs.sort_by(|a, b| b.1.tokens_in.cmp(&a.1.tokens_in));
+            for (name, p) in provs {
+                println!(
+                    "  {:<20} {} in / {} out / ${:.4} ({} sessions)",
+                    name, p.tokens_in, p.tokens_out, p.cost_usd, p.session_count
+                );
+            }
+            if !u.by_day.is_empty() {
+                println!("\nBy day:");
+                for d in &u.by_day {
+                    println!(
+                        "  {}  {} in / {} out / ${:.4}",
+                        d.date, d.tokens_in, d.tokens_out, d.cost_usd
+                    );
+                }
+            }
+            if cfg.behavior.token_plan.enabled {
+                println!("\nToken plan:");
+                if let Some(daily) = cfg.behavior.token_plan.daily_limit {
+                    let used = u.total_tokens_in + u.total_tokens_out;
+                    let pct = (used as f64 / daily as f64) * 100.0;
+                    println!("  daily: {}/{} ({:.1}%)", used, daily, pct);
+                    if pct >= cfg.behavior.token_plan.warn_at_percent as f64 {
+                        println!("  ⚠ approaching daily limit");
+                    }
+                }
+                if let Some(monthly) = cfg.behavior.token_plan.monthly_limit_usd {
+                    let pct = (u.total_cost_usd / monthly) * 100.0;
+                    println!(
+                        "  monthly: ${:.4}/${} ({:.1}%)",
+                        u.total_cost_usd, monthly, pct
+                    );
+                    if pct >= cfg.behavior.token_plan.warn_at_percent as f64 {
+                        println!("  ⚠ approaching monthly cost limit");
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        crate::Cmd::Config { action } => match action {
+            crate::ConfigCmd::Show => show_config(config_path),
+            crate::ConfigCmd::Set { role, model } => set_role_model(config_path, &role, &model),
+            crate::ConfigCmd::Get { role } => get_role_model(config_path, &role),
+            crate::ConfigCmd::UseClaude {
+                planner,
+                critic,
+                worker_cc,
+                worker_codex,
+                reviewer,
+            } => apply_claude_preset(
+                config_path,
+                planner.as_deref().unwrap_or("sonnet"),
+                critic.as_deref().unwrap_or("opus"),
+                worker_cc.as_deref().unwrap_or("sonnet"),
+                worker_codex.as_deref(),
+                reviewer.as_deref().unwrap_or("haiku"),
+            ),
+            crate::ConfigCmd::UseOpenai {
+                planner,
+                critic,
+                worker_cc,
+                worker_codex,
+                reviewer,
+            } => apply_role_models(
+                config_path,
+                &[
+                    ("planner", &planner),
+                    ("critic", &critic),
+                    ("worker-cc", &worker_cc),
+                    ("worker-codex", &worker_codex),
+                    ("reviewer", &reviewer),
+                ],
+            ),
+            crate::ConfigCmd::Wizard => run_wizard(config_path),
+            crate::ConfigCmd::SetKey {
+                provider,
+                kind,
+                key,
+            } => set_provider_key(config_path, &provider, kind.as_deref(), key.as_deref()),
+            crate::ConfigCmd::SetEndpoint {
+                provider,
+                url,
+                kind,
+            } => set_provider_endpoint(config_path, &provider, kind.as_deref(), &url),
+            crate::ConfigCmd::Provider { action } => match action {
+                None => run_provider_setup_ui(config_path, false, false),
+                Some(crate::ProviderConfigCmd::Ui { dry_run, check_env }) => {
+                    run_provider_setup_ui(config_path, dry_run, check_env)
+                }
+                Some(crate::ProviderConfigCmd::List) => list_providers(config_path),
+                Some(crate::ProviderConfigCmd::Presets) => list_provider_presets(),
+                Some(crate::ProviderConfigCmd::Delete { provider, dry_run }) => {
+                    delete_provider(config_path, &provider, dry_run)
+                }
+                Some(crate::ProviderConfigCmd::Setup {
+                    provider,
+                    kind,
+                    key,
+                    env,
+                    endpoint,
+                    dry_run,
+                    check_env,
+                }) => setup_provider(
+                    config_path,
+                    &provider,
+                    kind.as_deref(),
+                    key.as_deref(),
+                    env.as_deref(),
+                    endpoint.as_deref(),
+                    dry_run,
+                    check_env,
+                ),
+            },
+            crate::ConfigCmd::UseExpensiveOrchestrators {
+                orchestrator_model,
+                reviewer_model,
+                worker_model,
+            } => apply_expensive_orchestrators(
+                config_path,
+                &orchestrator_model,
+                &reviewer_model,
+                worker_model.as_deref(),
+            ),
+            crate::ConfigCmd::UseRoleset { name } => apply_roleset(config_path, &name),
+        },
+    }
+}
+
+fn run_tiffany_tui(config_path: &Path) -> Result<Option<std::process::ExitStatus>> {
+    if legacy_tui_forced() {
+        return Ok(None);
+    }
+
+    let Some(tiffany_bin) = find_tiffany_binary() else {
+        return Ok(None);
+    };
+    let orchestrator_bin =
+        std::env::current_exe().context("could not resolve current orchestrator executable")?;
+
+    let mut command = Command::new(tiffany_bin);
+    command
+        .arg("orchestrator")
+        .arg("--bin")
+        .arg(orchestrator_bin)
+        .arg("--orchestrator-config")
+        .arg(config_path);
+
+    Ok(Some(
+        command
+            .status()
+            .context("failed to launch tiffany-loop UI")?,
+    ))
+}
+
+fn legacy_tui_forced() -> bool {
+    std::env::var("ORCHESTRATOR_LEGACY_TUI")
+        .ok()
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn find_tiffany_binary() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("TIFFANY_BIN").filter(|value| !value.is_empty()) {
+        return Some(path.into());
+    }
+
+    let exe_name = if cfg!(windows) {
+        "tiffany.exe"
+    } else {
+        "tiffany"
+    };
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let adjacent = parent.join(exe_name);
+            if adjacent.exists() {
+                return Some(adjacent);
+            }
+        }
+    }
+
+    which::which(exe_name).ok()
+}
+
+fn show_config(config_path: &Path) -> Result<()> {
+    let config_path_display = config_path.display().to_string();
+    println!("=== Orchestrator config ===\n");
+    println!(
+        "config file:    {} (use `orchestrator init` to bootstrap)",
+        config_path_display
+    );
+
+    match Config::load(config_path) {
+        Ok(cfg) => {
+            println!("\nBehavior:");
+            println!(
+                "  worktree_base:    {}",
+                cfg.behavior.worktree_base.display()
+            );
+            println!("  db_path:          {}", cfg.behavior.db_path.display());
+            println!(
+                "  session_log_dir:  {}",
+                cfg.behavior.session_log_dir.display()
+            );
+            println!("  mux:              {:?}", cfg.behavior.mux);
+            println!("  log_level:        {}", cfg.behavior.log_level);
+            println!("  enable_critic:    {}", cfg.behavior.enable_critic);
+            println!("  enable_reviewer:  {}", cfg.behavior.enable_reviewer);
+            println!("  max_replan:       {}", cfg.behavior.max_replan);
+            println!(
+                "  cc_bypass_permissions: {}",
+                cfg.behavior.cc_bypass_permissions
+            );
+            println!("  enable_ab_judge:  {}", cfg.behavior.enable_ab_judge);
+
+            println!("\nProviders ({}):", cfg.providers.len());
+            for (name, p) in &cfg.providers {
+                let key_status = match &p.api_key {
+                    Some(k) if !k.is_empty() => "✓ set".to_string(),
+                    Some(_) => "(empty)".to_string(),
+                    None => "—".to_string(),
+                };
+                println!(
+                    "  - {:<10} type={:<10} api_key={}",
+                    name, p.kind, key_status
+                );
+            }
+
+            println!("\nModels ({}):", cfg.models.len());
+            for m in &cfg.models {
+                println!("  - {:<14} {} (provider: {})", m.id, m.name, m.provider);
+            }
+
+            println!("\nRoles ({}):", cfg.roles.len());
+            for (name, r) in &cfg.roles {
+                let at = if r.agent_teams { " [agent_teams]" } else { "" };
+                println!(
+                    "  - {:<14} → model={:<14} runtime={}{}",
+                    name, r.model, r.runtime, at
+                );
+            }
+
+            println!("\nTag overrides ({}):", cfg.overrides.len());
+            for o in &cfg.overrides {
+                println!("  - {} → {}", o.tag, o.role);
+            }
+        }
+        Err(e) => {
+            println!("  ⚠ could not load config: {:#}", e);
+        }
+    }
+
+    let am = crate::agent_md::AgentMd::load();
+    println!("\n─── AGENTS.md (orchestrator's own instructions) ───\n");
+    if am.content.is_empty() {
+        println!("  (none found)");
+        println!("  create one to set platform-level rules:");
+        println!("    mkdir -p ~/.orchestrator");
+        println!("    cat > ~/.orchestrator/AGENTS.md << 'EOF'");
+        println!("    # My orchestrator rules");
+        println!("    Default worker: sonnet");
+        println!("    Default critic: opus");
+        println!("    This project uses uv not pip");
+        println!("    Always run `pytest` before declaring done");
+        println!("    EOF");
+    } else {
+        for line in am.content.lines() {
+            println!("  │ {}", line);
+        }
+    }
+    println!("\nAGENTS.md sources:");
+    if am.sources.is_empty() {
+        println!("  (none)");
+    } else {
+        for s in &am.sources {
+            println!("  ✓ {}", s.display());
+        }
+    }
+
+    let cc = cc_config::CCConfig::load();
+    println!("\n=== Claude Code config (inherited) ===\n");
+    println!("CLAUDE.md ({} chars):", cc.system_prompt.len());
+    if cc.system_prompt.is_empty() {
+        println!("  (none found)");
+    } else {
+        for line in cc.system_prompt.lines().take(20) {
+            println!("  │ {}", line);
+        }
+        if cc.system_prompt.lines().count() > 20 {
+            println!(
+                "  │ ... ({} more lines)",
+                cc.system_prompt.lines().count() - 20
+            );
+        }
+    }
+
+    println!("\nCC Settings:");
+    println!("  model:          {:?}", cc.settings.model);
+    println!("  permission_mode: {:?}", cc.settings.permission_mode);
+    println!("  allowed_tools:  {:?}", cc.settings.allowed_tools);
+    println!("  disabled_mcpjson: {}", cc.settings.disabled_mcpjson);
+
+    println!("\nCC Agents ({}):", cc.agents.len());
+    for a in &cc.agents {
+        println!("  - {} ({})", a.name, a.source.display());
+        if !a.description.is_empty() {
+            println!("      {}", a.description);
+        }
+        if !a.tools.is_empty() {
+            println!("      tools: {:?}", a.tools);
+        }
+    }
+
+    println!("\nCC Commands ({}):", cc.commands.len());
+    for c in &cc.commands {
+        println!("  - /{} ({})", c.name, c.source.display());
+        if !c.description.is_empty() {
+            println!("      {}", c.description);
+        }
+    }
+
+    println!("\nMCP servers ({}):", cc.mcp_servers.len());
+    for s in &cc.mcp_servers {
+        println!("  - {} → {} {}", s.name, s.command, s.args.join(" "));
+    }
+
+    println!("\nCC Prior sessions ({}):", cc.prior_session_ids.len());
+    for s in cc.prior_session_ids.iter().take(10) {
+        println!("  - {}", s);
+    }
+    if cc.prior_session_ids.len() > 10 {
+        println!("  ... ({} more)", cc.prior_session_ids.len() - 10);
+    }
+
+    println!("\nAll sources:");
+    for s in &cc.sources {
+        println!("  ✓ {}", s);
+    }
+    Ok(())
+}
+
+fn set_role_model(config_path: &Path, role: &str, model_id: &str) -> Result<()> {
+    let mut cfg = Config::load(config_path)?;
+    if !cfg.models.iter().any(|m| m.id == model_id) {
+        anyhow::bail!(
+            "unknown model id '{}'. Available: {}",
+            model_id,
+            cfg.models
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    let entry = cfg.roles.entry(role.to_string());
+    let role_config = match entry {
+        std::collections::hash_map::Entry::Occupied(mut o) => {
+            o.get_mut().model = model_id.to_string();
+            o.into_mut().clone()
+        }
+        std::collections::hash_map::Entry::Vacant(v) => {
+            // Default runtime based on role name
+            let runtime = if role.contains("cc") {
+                "claude-code"
+            } else {
+                "codex"
+            }
+            .to_string();
+            v.insert(crate::config::RoleConfig {
+                model: model_id.to_string(),
+                runtime,
+                agent_teams: false,
+            })
+            .clone()
+        }
+    };
+    Config::write_role_to_config_file(config_path, role, &role_config)?;
+    println!("✓ {} → {}", role, model_id);
+    Ok(())
+}
+
+fn get_role_model(config_path: &Path, role: &str) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    if let Some(r) = cfg.roles.get(role) {
+        println!("{}: {} (runtime: {})", role, r.model, r.runtime);
+    } else {
+        println!(
+            "role '{}' not found in config. Available: {}",
+            role,
+            cfg.roles.keys().cloned().collect::<Vec<_>>().join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn apply_role_models(config_path: &Path, assignments: &[(&str, &str)]) -> Result<()> {
+    let mut cfg = Config::load(config_path)?;
+    for (role, model_id) in assignments {
+        if !cfg.models.iter().any(|m| m.id == *model_id) {
+            anyhow::bail!("unknown model id '{}' for role '{}'", model_id, role);
+        }
+        if let Some(r) = cfg.roles.get_mut(*role) {
+            r.model = model_id.to_string();
+            Config::write_role_to_config_file(config_path, role, r)?;
+        }
+    }
+    for (role, model_id) in assignments {
+        println!("✓ {} → {}", role, model_id);
+    }
+    Ok(())
+}
+
+fn handle_roles(config_path: &Path, action: crate::RolesCmd) -> Result<()> {
+    match action {
+        crate::RolesCmd::List => print_roles(config_path, None),
+        crate::RolesCmd::Show { role } => print_roles(config_path, role.as_deref()),
+        crate::RolesCmd::Register {
+            role,
+            model,
+            runtime,
+            provider,
+            model_name,
+            agent_teams,
+            no_agent_teams,
+        } => register_role(
+            config_path,
+            &role,
+            &model,
+            &runtime,
+            provider.as_deref(),
+            model_name.as_deref(),
+            agent_teams,
+            no_agent_teams,
+        ),
+    }
+}
+
+fn print_roles(config_path: &Path, selected_role: Option<&str>) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    if let Some(role) = selected_role {
+        let Some(role_cfg) = cfg.roles.get(role) else {
+            anyhow::bail!(
+                "unknown role '{}'. Available: {}",
+                role,
+                available_roles_for_cli(&cfg)
+            );
+        };
+        println!("{}", role_detail_for_cli(&cfg, role, role_cfg));
+        return Ok(());
+    }
+
+    println!("Registered roles:");
+    let mut roles = cfg.roles.iter().collect::<Vec<_>>();
+    roles.sort_by(|a, b| a.0.cmp(b.0));
+    if roles.is_empty() {
+        println!("  (none)");
+    }
+    for (role, role_cfg) in roles {
+        println!("  {}", role_detail_for_cli(&cfg, role, role_cfg));
+    }
+    println!(
+        "\nRegister: orchestrator roles register <role> --model <model-id> --runtime <runtime-id>"
+    );
+    Ok(())
+}
+
+fn register_role(
+    config_path: &Path,
+    role: &str,
+    model: &str,
+    runtime: &str,
+    provider: Option<&str>,
+    model_name: Option<&str>,
+    agent_teams: bool,
+    no_agent_teams: bool,
+) -> Result<()> {
+    if agent_teams && no_agent_teams {
+        anyhow::bail!("--agent-teams and --no-agent-teams cannot both be set");
+    }
+    let cfg = Config::load(config_path)?;
+    let Some(runtime_cfg) = cfg.runtimes.get(runtime) else {
+        anyhow::bail!(
+            "unknown runtime '{}'. Available: {}",
+            runtime,
+            available_runtimes_for_cli(&cfg)
+        );
+    };
+
+    let existing_model = cfg.models.iter().find(|m| m.id == model);
+    let model_write = match existing_model {
+        Some(existing) if provider.is_some() || model_name.is_some() => {
+            let provider = provider.unwrap_or(existing.provider.as_str());
+            if !cfg.providers.contains_key(provider) {
+                anyhow::bail!(
+                    "unknown provider '{}'. Available: {}",
+                    provider,
+                    available_providers_for_cli(&cfg)
+                );
+            }
+            Some(crate::config::ModelConfig {
+                id: model.to_string(),
+                provider: provider.to_string(),
+                name: model_name.unwrap_or(existing.name.as_str()).to_string(),
+            })
+        }
+        Some(_) => None,
+        None => {
+            let Some(provider) = provider else {
+                anyhow::bail!(
+                    "unknown model '{}'. Available: {}\nTo register it inline, add --provider <provider> --model-name <provider-model-name>.",
+                    model,
+                    available_models_for_cli(&cfg)
+                );
+            };
+            if !cfg.providers.contains_key(provider) {
+                anyhow::bail!(
+                    "unknown provider '{}'. Available: {}",
+                    provider,
+                    available_providers_for_cli(&cfg)
+                );
+            }
+            Some(crate::config::ModelConfig {
+                id: model.to_string(),
+                provider: provider.to_string(),
+                name: model_name.unwrap_or(model).to_string(),
+            })
+        }
+    };
+
+    if let Some(model_cfg) = &model_write {
+        Config::write_model_to_config_file(config_path, model_cfg)?;
+        println!(
+            "✓ model {} registered: provider={} name={}",
+            model_cfg.id, model_cfg.provider, model_cfg.name
+        );
+    }
+
+    let teams = if no_agent_teams {
+        false
+    } else if agent_teams {
+        true
+    } else {
+        default_agent_teams(role, runtime, runtime_cfg)
+    };
+    let role_cfg = crate::config::RoleConfig {
+        model: model.to_string(),
+        runtime: runtime.to_string(),
+        agent_teams: teams,
+    };
+    Config::write_role_to_config_file(config_path, role, &role_cfg)?;
+    println!("✓ role {} registered", role);
+    println!("  model: {}", model);
+    println!("  runtime: {}", runtime);
+    println!("  agent teams: {}", teams);
+    match role {
+        "planner" | "critic" | "reviewer" => {
+            println!(
+                "\nThis updates the fixed {} slot used by future orchestrator runs.",
+                role
+            );
+            println!("Restart the tiffany-loop TUI if it is already open.");
+        }
+        _ => {
+            println!("\nUse it with:");
+            println!("  orchestrator run \"...\" --worker {}", role);
+            println!("  /roles use {}   (legacy terminal chat)", role);
+        }
+    }
+    Ok(())
+}
+
+fn default_agent_teams(
+    role: &str,
+    runtime_id: &str,
+    runtime_cfg: &crate::config::RuntimeConfig,
+) -> bool {
+    runtime_cfg.supports_agent_teams
+        && matches!(runtime_id, "claude-code" | "claude")
+        && (role.contains("worker") || role.contains("executor") || role == "worker-cc")
+}
+
+fn role_detail_for_cli(cfg: &Config, role: &str, role_cfg: &crate::config::RoleConfig) -> String {
+    let model = cfg
+        .models
+        .iter()
+        .find(|m| m.id == role_cfg.model)
+        .map(|m| format!("{} ({})", m.id, m.name))
+        .unwrap_or_else(|| role_cfg.model.clone());
+    format!(
+        "{:<14} model={:<28} runtime={:<12} teams={}",
+        role, model, role_cfg.runtime, role_cfg.agent_teams
+    )
+}
+
+fn available_models_for_cli(cfg: &Config) -> String {
+    let mut values = cfg.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>();
+    values.sort();
+    if values.is_empty() {
+        "(none)".into()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn available_runtimes_for_cli(cfg: &Config) -> String {
+    let mut values = cfg.runtimes.keys().map(String::as_str).collect::<Vec<_>>();
+    values.sort();
+    if values.is_empty() {
+        "(none)".into()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn available_providers_for_cli(cfg: &Config) -> String {
+    let mut values = cfg.providers.keys().map(String::as_str).collect::<Vec<_>>();
+    values.sort();
+    if values.is_empty() {
+        "(none)".into()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn available_roles_for_cli(cfg: &Config) -> String {
+    let mut values = cfg.roles.keys().map(String::as_str).collect::<Vec<_>>();
+    values.sort();
+    if values.is_empty() {
+        "(none)".into()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn apply_claude_preset(
+    config_path: &Path,
+    planner: &str,
+    critic: &str,
+    worker_cc: &str,
+    worker_codex: Option<&str>,
+    reviewer: &str,
+) -> Result<()> {
+    let mut assignments: Vec<(&str, &str)> = vec![
+        ("planner", planner),
+        ("critic", critic),
+        ("worker-cc", worker_cc),
+        ("reviewer", reviewer),
+    ];
+    if let Some(wc) = worker_codex {
+        assignments.push(("worker-codex", wc));
+    }
+    apply_role_models(config_path, &assignments)?;
+    println!("\n✓ Switched to Claude preset (requires ANTHROPIC_API_KEY)");
+    Ok(())
+}
+
+fn write_config(cfg: &Config, path: &Path) -> Result<()> {
+    let path = crate::config::expand_home(path);
+    let yaml = serde_yaml::to_string(cfg)?;
+    std::fs::write(&path, yaml).with_context(|| format!("writing config to {}", path.display()))?;
+    Ok(())
+}
+
+// ── ANSI colors (minimal) ────────────────────────────────────
+
+mod ansi {
+    pub const BOLD: &str = "\x1b[1m";
+    pub const DIM: &str = "\x1b[2m";
+    pub const RESET: &str = "\x1b[0m";
+    pub const CYAN: &str = "\x1b[36m";
+    pub const GREEN: &str = "\x1b[32m";
+    pub const YELLOW: &str = "\x1b[33m";
+    pub const BLUE: &str = "\x1b[34m";
+    pub const MAGENTA: &str = "\x1b[35m";
+}
+
+fn c(color: &str, s: &str) -> String {
+    format!("{}{}{}", color, s, ansi::RESET)
+}
+
+// ── Interactive wizard (borrowed from openclaw's `onboard`) ──
+
+fn run_wizard(config_path: &Path) -> Result<()> {
+    use std::io::{self, Write};
+
+    println!(
+        "\n{}{}",
+        c(ansi::BOLD, "⚡ orchestrator setup wizard"),
+        c(ansi::DIM, " (borrowed from openclaw's `onboard`)")
+    );
+    println!();
+
+    let mut cfg = if config_path.exists() {
+        Config::load(config_path).unwrap_or_default()
+    } else {
+        Config::default()
+    };
+
+    // ── Step 1: pick providers ─────────────────────────────
+    println!("{}", c(ansi::BOLD, "Step 1: pick your LLM providers"));
+    println!("(multi-select, comma-separated; or just press Enter for Claude-only)\n");
+
+    let available_providers = vec![
+        (
+            "anthropic",
+            "Anthropic (Claude) — recommended",
+            "ANTHROPIC_API_KEY",
+            "https://console.anthropic.com/",
+        ),
+        (
+            "openai",
+            "OpenAI (GPT-4o, etc.)",
+            "OPENAI_API_KEY",
+            "https://platform.openai.com/",
+        ),
+        (
+            "google",
+            "Google (Gemini)",
+            "GOOGLE_API_KEY",
+            "https://aistudio.google.com/",
+        ),
+        (
+            "deepseek",
+            "DeepSeek (OpenAI-compatible, cheap)",
+            "DEEPSEEK_API_KEY",
+            "https://platform.deepseek.com/",
+        ),
+        (
+            "mistral",
+            "Mistral AI (OpenAI-compatible)",
+            "MISTRAL_API_KEY",
+            "https://console.mistral.ai/",
+        ),
+        (
+            "cohere",
+            "Cohere (Command R+)",
+            "COHERE_API_KEY",
+            "https://dashboard.cohere.com/",
+        ),
+        (
+            "ollama",
+            "Ollama (local, free)",
+            "OLLAMA_HOST",
+            "http://localhost:11434",
+        ),
+        (
+            "custom",
+            "Custom OpenAI-compatible endpoint",
+            "CUSTOM_API_KEY",
+            "",
+        ),
+    ];
+
+    for (i, (name, desc, env, _url)) in available_providers.iter().enumerate() {
+        println!(
+            "  {}{}{}  {} {}",
+            c(ansi::CYAN, &format!("[{}]", i + 1)),
+            c(ansi::DIM, &format!(" {:<10}", name)),
+            c(ansi::RESET, ""),
+            desc,
+            c(ansi::DIM, &format!("({})", env))
+        );
+    }
+    println!();
+
+    print!("{}", c(ansi::YELLOW, "Choose providers [1] (Enter=1): "));
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+    let picks: Vec<usize> = if input.is_empty() {
+        vec![1]
+    } else {
+        input
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect()
+    };
+    let chosen: Vec<&(&str, &str, &str, &str)> = picks
+        .iter()
+        .filter_map(|&i| available_providers.get(i - 1))
+        .collect();
+
+    println!(
+        "\n{} chosen: {}",
+        c(ansi::GREEN, "✓"),
+        chosen
+            .iter()
+            .map(|(n, _, _, _)| c(ansi::BOLD, n))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    // ── Step 2: configure each provider ────────────────────
+    println!("\n{}", c(ansi::BOLD, "Step 2: configure each provider"));
+    for (name, _desc, env_var, default_url) in &chosen {
+        let name_str: &str = name;
+        let env_val = std::env::var(env_var).unwrap_or_default();
+        if !env_val.is_empty() {
+            println!(
+                "  ✓ {}: {} found in env ({})",
+                c(ansi::GREEN, name_str),
+                c(ansi::DIM, &env_val),
+                env_var
+            );
+            let entry =
+                cfg.providers
+                    .entry(name.to_string())
+                    .or_insert(crate::config::ProviderConfig {
+                        kind: provider_kind(name).to_string(),
+                        api_key: None,
+                        base_url: None,
+                    });
+            entry.kind = provider_kind(name).to_string();
+            if entry.api_key.is_none() {
+                entry.api_key = Some(format!("${{{}}}", env_var));
+            }
+            // Set default base_url for OpenAI-compatible providers
+            if !default_url.is_empty() && entry.base_url.is_none() {
+                entry.base_url = Some(default_url.to_string());
+            }
+        } else {
+            print!(
+                "  {} API key for {} [or env var name, Enter=skip]: ",
+                c(ansi::YELLOW, "?"),
+                name
+            );
+            io::stdout().flush()?;
+            let mut key_input = String::new();
+            io::stdin().read_line(&mut key_input)?;
+            let key_input = key_input.trim();
+            let entry =
+                cfg.providers
+                    .entry(name.to_string())
+                    .or_insert(crate::config::ProviderConfig {
+                        kind: provider_kind(name).to_string(),
+                        api_key: None,
+                        base_url: None,
+                    });
+            entry.kind = provider_kind(name).to_string();
+            if !key_input.is_empty() {
+                if key_input.starts_with('$') {
+                    entry.api_key = Some(key_input.to_string());
+                } else {
+                    entry.api_key = Some(key_input.to_string());
+                }
+            }
+            // For OpenAI-compatible and custom providers, ask for base_url
+            let needs_url = matches!(
+                *name,
+                "openai" | "deepseek" | "mistral" | "cohere" | "custom" | "ollama"
+            );
+            if needs_url {
+                let prompt = if *name == "custom" {
+                    format!(
+                        "  {} Base URL for custom endpoint [{}]: ",
+                        c(ansi::YELLOW, "?"),
+                        default_url
+                    )
+                } else {
+                    format!("  {} Base URL [{}]: ", c(ansi::YELLOW, "?"), default_url)
+                };
+                print!("{}", prompt);
+                io::stdout().flush()?;
+                let mut url_input = String::new();
+                io::stdin().read_line(&mut url_input)?;
+                let url = url_input.trim();
+                if !url.is_empty() {
+                    entry.base_url = Some(url.to_string());
+                } else if !default_url.is_empty() {
+                    entry.base_url = Some(default_url.to_string());
+                }
+            }
+        }
+    }
+
+    // ── Step 3: define models ──────────────────────────────
+    println!("\n{}", c(ansi::BOLD, "Step 3: register models"));
+    let default_models = vec![
+        (
+            "opus",
+            "anthropic",
+            "claude-opus-4-6",
+            "Claude Opus 4.6 (smartest, $$)",
+        ),
+        (
+            "sonnet",
+            "anthropic",
+            "claude-sonnet-4-6",
+            "Claude Sonnet 4.6 (balanced, $)",
+        ),
+        (
+            "haiku",
+            "anthropic",
+            "claude-haiku-4-5",
+            "Claude Haiku 4.5 (cheapest, ¢)",
+        ),
+        ("gpt4o", "openai", "gpt-4o", "GPT-4o (OpenAI flagship)"),
+        ("gpt4o-mini", "openai", "gpt-4o-mini", "GPT-4o mini (cheap)"),
+        ("gemini-pro", "google", "gemini-1.5-pro", "Gemini 1.5 Pro"),
+        (
+            "deepseek-chat",
+            "deepseek",
+            "deepseek-chat",
+            "DeepSeek V3 (cheap)",
+        ),
+        (
+            "mistral-large",
+            "mistral",
+            "mistral-large-latest",
+            "Mistral Large",
+        ),
+        ("llama3", "ollama", "llama3", "Llama 3 (local)"),
+    ];
+    for (id, prov, name, _desc) in &default_models {
+        if !cfg.models.iter().any(|m| m.id == *id) {
+            cfg.models.push(crate::config::ModelConfig {
+                id: id.to_string(),
+                provider: prov.to_string(),
+                name: name.to_string(),
+            });
+        }
+    }
+    println!(
+        "  ✓ {} models registered",
+        c(ansi::GREEN, &cfg.models.len().to_string())
+    );
+
+    // ── Step 4: assign models to roles ──────────────────────
+    println!("\n{}", c(ansi::BOLD, "Step 4: assign models to roles"));
+    let has_anthropic = chosen.iter().any(|(n, _, _, _)| *n == "anthropic");
+    let default_assignments: Vec<(&str, &str)> = if has_anthropic {
+        vec![
+            ("planner", "sonnet"),
+            ("critic", "opus"),
+            ("worker-cc", "sonnet"),
+            ("worker-codex", "gpt4o"),
+            ("reviewer", "haiku"),
+        ]
+    } else {
+        vec![
+            ("planner", "gpt4o"),
+            ("critic", "gpt4o"),
+            ("worker-cc", "gpt4o"),
+            ("worker-codex", "gpt4o"),
+            ("reviewer", "gpt4o-mini"),
+        ]
+    };
+    for (role, default_model) in &default_assignments {
+        print!("  {} {} [{}]: ", c(ansi::YELLOW, "?"), role, default_model);
+        io::stdout().flush()?;
+        let mut role_input = String::new();
+        io::stdin().read_line(&mut role_input)?;
+        let chosen_model = role_input.trim();
+        let model_id = if chosen_model.is_empty() {
+            default_model.to_string()
+        } else {
+            chosen_model.to_string()
+        };
+        let runtime = if role.contains("cc") {
+            "claude-code"
+        } else {
+            "codex"
+        }
+        .to_string();
+        cfg.roles.insert(
+            role.to_string(),
+            crate::config::RoleConfig {
+                model: model_id,
+                runtime,
+                agent_teams: *role == "worker-cc",
+            },
+        );
+    }
+
+    // ── Step 5: tag overrides ──────────────────────────────
+    println!("\n{}", c(ansi::BOLD, "Step 5: tag-based routing overrides"));
+    println!("(comma-separated tag:role pairs, Enter=accept defaults)\n");
+    let default_overrides = vec![
+        ("refactor", "worker-cc"),
+        ("boilerplate", "worker-codex"),
+        ("test", "worker-codex"),
+    ];
+    for (tag, role) in &default_overrides {
+        println!("  {} → {}", c(ansi::CYAN, tag), c(ansi::BOLD, role));
+    }
+    print!("  Override (e.g. \"docs:worker-codex,test:worker-cc\") or Enter=keep: ");
+    io::stdout().flush()?;
+    let mut ov_input = String::new();
+    io::stdin().read_line(&mut ov_input)?;
+    let ov_input = ov_input.trim();
+    cfg.overrides = if ov_input.is_empty() {
+        default_overrides
+            .iter()
+            .map(|(t, r)| crate::config::OverrideConfig {
+                tag: t.to_string(),
+                role: r.to_string(),
+            })
+            .collect()
+    } else {
+        ov_input
+            .split(',')
+            .filter_map(|pair| {
+                let mut parts = pair.split(':');
+                let tag = parts.next()?.trim().to_string();
+                let role = parts.next()?.trim().to_string();
+                Some(crate::config::OverrideConfig { tag, role })
+            })
+            .collect()
+    };
+
+    // ── Step 6: behavior ────────────────────────────────────
+    println!(
+        "\n{}",
+        c(ansi::BOLD, "Step 6: behavior defaults (Enter=accept)")
+    );
+    cfg.behavior.worktree_base = std::path::PathBuf::from(prompt_default(
+        "Worktree base",
+        "~/.orchestrator/worktrees",
+    )?);
+    cfg.behavior.db_path =
+        std::path::PathBuf::from(prompt_default("DB path", "~/.orchestrator/state.db")?);
+    cfg.behavior.session_log_dir = std::path::PathBuf::from(prompt_default(
+        "Session log dir",
+        "~/.orchestrator/sessions",
+    )?);
+    print!("  Use zellij for terminal mux? [Y/n]: ");
+    io::stdout().flush()?;
+    let mut mux_input = String::new();
+    io::stdin().read_line(&mut mux_input)?;
+    cfg.behavior.mux = if mux_input.trim().to_lowercase().starts_with('n') {
+        crate::config::MuxKind::None
+    } else {
+        crate::config::MuxKind::Zellij
+    };
+
+    // ── Save ────────────────────────────────────────────────
+    write_config(&cfg, config_path)?;
+    println!(
+        "\n{} Config written to {}",
+        c(ansi::GREEN, "✓ done."),
+        c(ansi::BOLD, &config_path.display().to_string())
+    );
+    println!("\n  Try: {}", c(ansi::CYAN, "orchestrator status"));
+    println!("  Or:  {}", c(ansi::CYAN, "orchestrator tui"));
+    Ok(())
+}
+
+fn prompt_default(label: &str, default: &str) -> Result<String> {
+    use std::io::{self, Write};
+    print!("  {} [{}]: ", label, c(ansi::DIM, default));
+    io::stdout().flush()?;
+    let mut s = String::new();
+    io::stdin().read_line(&mut s)?;
+    let s = s.trim();
+    if s.is_empty() {
+        Ok(default.to_string())
+    } else {
+        Ok(s.to_string())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ProviderPreset {
+    id: &'static str,
+    kind: &'static str,
+    env: Option<&'static str>,
+    endpoint: Option<&'static str>,
+    description: &'static str,
+}
+
+const PROVIDER_PRESETS: &[ProviderPreset] = &[
+    ProviderPreset {
+        id: "openai",
+        kind: "openai",
+        env: Some("OPENAI_API_KEY"),
+        endpoint: None,
+        description: "OpenAI",
+    },
+    ProviderPreset {
+        id: "anthropic",
+        kind: "anthropic",
+        env: Some("ANTHROPIC_API_KEY"),
+        endpoint: None,
+        description: "Anthropic Claude",
+    },
+    ProviderPreset {
+        id: "google",
+        kind: "google",
+        env: Some("GOOGLE_API_KEY"),
+        endpoint: None,
+        description: "Google Gemini",
+    },
+    ProviderPreset {
+        id: "minimax",
+        kind: "openai",
+        env: Some("MINIMAX_API_KEY"),
+        endpoint: Some("https://api.minimaxi.com/v1"),
+        description: "MiniMax OpenAI-compatible endpoint",
+    },
+    ProviderPreset {
+        id: "deepseek",
+        kind: "openai",
+        env: Some("DEEPSEEK_API_KEY"),
+        endpoint: Some("https://api.deepseek.com/v1"),
+        description: "DeepSeek OpenAI-compatible endpoint",
+    },
+    ProviderPreset {
+        id: "openrouter",
+        kind: "openai",
+        env: Some("OPENROUTER_API_KEY"),
+        endpoint: Some("https://openrouter.ai/api/v1"),
+        description: "OpenRouter OpenAI-compatible endpoint",
+    },
+    ProviderPreset {
+        id: "moonshot",
+        kind: "openai",
+        env: Some("MOONSHOT_API_KEY"),
+        endpoint: Some("https://api.moonshot.ai/v1"),
+        description: "Moonshot/Kimi OpenAI-compatible endpoint",
+    },
+    ProviderPreset {
+        id: "mistral",
+        kind: "openai",
+        env: Some("MISTRAL_API_KEY"),
+        endpoint: Some("https://api.mistral.ai/v1"),
+        description: "Mistral OpenAI-compatible endpoint",
+    },
+    ProviderPreset {
+        id: "ollama",
+        kind: "ollama",
+        env: None,
+        endpoint: Some("http://localhost:11434"),
+        description: "Ollama local runtime",
+    },
+    ProviderPreset {
+        id: "custom",
+        kind: "openai",
+        env: Some("CUSTOM_API_KEY"),
+        endpoint: None,
+        description: "Custom OpenAI-compatible endpoint",
+    },
+];
+
+fn provider_preset(name: &str) -> Option<ProviderPreset> {
+    let normalized = name.to_ascii_lowercase();
+    PROVIDER_PRESETS
+        .iter()
+        .copied()
+        .find(|preset| preset.id == normalized)
+}
+
+fn provider_kind(name: &str) -> &'static str {
+    match name.to_ascii_lowercase().as_str() {
+        "anthropic" => "anthropic",
+        "openai" => "openai",
+        "google" => "google",
+        "deepseek" => "openai",   // OpenAI-compatible
+        "minimax" => "openai",    // OpenAI-compatible
+        "openrouter" => "openai", // OpenAI-compatible
+        "moonshot" => "openai",   // OpenAI-compatible
+        "mistral" => "openai",    // OpenAI-compatible
+        "cohere" => "openai",     // OpenAI-compatible
+        "ollama" => "ollama",
+        "custom" => "openai", // OpenAI-compatible custom endpoint
+        _ => "openai",
+    }
+}
+
+fn set_provider_key(
+    config_path: &Path,
+    provider: &str,
+    kind: Option<&str>,
+    key: Option<&str>,
+) -> Result<()> {
+    let key_value = match key {
+        Some(k) => k.to_string(),
+        None => {
+            use std::io::{self, Write};
+            print!("API key for {}: ", provider);
+            io::stdout().flush()?;
+            let mut s = String::new();
+            io::stdin().read_line(&mut s)?;
+            s.trim().to_string()
+        }
+    };
+    Config::write_provider_key_to_config_file(
+        config_path,
+        provider,
+        kind.unwrap_or_else(|| provider_kind(provider)),
+        &key_value,
+    )?;
+    println!("✓ {} api_key set", provider);
+    Ok(())
+}
+
+fn set_provider_endpoint(
+    config_path: &Path,
+    provider: &str,
+    kind: Option<&str>,
+    url: &str,
+) -> Result<()> {
+    Config::write_provider_endpoint_to_config_file(
+        config_path,
+        provider,
+        kind.unwrap_or_else(|| provider_kind(provider)),
+        url,
+    )?;
+    println!("✓ {} endpoint set to {}", provider, url);
+    Ok(())
+}
+
+fn list_provider_presets() -> Result<()> {
+    println!("Built-in provider presets:");
+    for preset in PROVIDER_PRESETS {
+        println!(
+            "  {:<11} type={:<9} env={:<18} endpoint={:<31} {}",
+            preset.id,
+            preset.kind,
+            preset.env.unwrap_or("-"),
+            preset.endpoint.unwrap_or("-"),
+            preset.description
+        );
+    }
+    println!();
+    println!("Example:");
+    println!("  ./scripts/tiffany-dev config provider setup minimax");
+    println!("  ./scripts/tiffany-dev config provider delete minimax");
+    println!("  ./scripts/tiffany-dev config provider setup custom --env CUSTOM_API_KEY --endpoint https://llm.example.com/v1");
+    Ok(())
+}
+
+fn list_providers(config_path: &Path) -> Result<()> {
+    let path = crate::config::expand_home(config_path);
+    if !path.exists() {
+        println!("No orchestrator config found at {}", path.display());
+        println!("Create one with:");
+        println!("  ./scripts/tiffany-dev config provider setup minimax");
+        return Ok(());
+    }
+
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading config at {}", path.display()))?;
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&raw)
+        .with_context(|| format!("parsing config at {}", path.display()))?;
+    let Some(providers) = yaml
+        .get("providers")
+        .and_then(serde_yaml::Value::as_mapping)
+    else {
+        println!("No providers configured in {}", path.display());
+        return Ok(());
+    };
+
+    if providers.is_empty() {
+        println!("No providers configured in {}", path.display());
+        return Ok(());
+    }
+
+    println!("Providers ({})", path.display());
+    println!(
+        "  {:<12} {:<10} {:<24} endpoint",
+        "provider", "type", "api_key"
+    );
+
+    let mut rows = providers.iter().collect::<Vec<_>>();
+    rows.sort_by_key(|(key, _)| key.as_str().unwrap_or_default().to_string());
+    for (provider, value) in rows {
+        let provider = provider.as_str().unwrap_or("<invalid>");
+        let kind = value
+            .get("type")
+            .and_then(serde_yaml::Value::as_str)
+            .unwrap_or("-");
+        let api_key = value
+            .get("api_key")
+            .and_then(serde_yaml::Value::as_str)
+            .map(redact_provider_key)
+            .unwrap_or_else(|| "-".to_string());
+        let endpoint = value
+            .get("base_url")
+            .and_then(serde_yaml::Value::as_str)
+            .unwrap_or("-");
+        println!(
+            "  {:<12} {:<10} {:<24} {}",
+            provider, kind, api_key, endpoint
+        );
+    }
+    Ok(())
+}
+
+struct SelectOption {
+    label: String,
+    hint: String,
+}
+
+impl SelectOption {
+    fn new(label: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            hint: hint.into(),
+        }
+    }
+}
+
+fn run_provider_setup_ui(config_path: &Path, dry_run: bool, check_env: bool) -> Result<()> {
+    println!(
+        "\n{} {}",
+        c(ansi::BOLD, "tiffany-loop provider config"),
+        c(ansi::DIM, "(OpenClaw-style guided config)")
+    );
+    println!(
+        "{}",
+        c(
+            ansi::DIM,
+            "Use Up/Down to choose, Enter to apply, Esc to cancel."
+        )
+    );
+
+    let action_options = vec![
+        SelectOption::new("setup provider", "create or update provider credentials"),
+        SelectOption::new("delete provider", "remove one provider from config"),
+        SelectOption::new("list providers", "show configured providers"),
+        SelectOption::new("cancel", "leave config unchanged"),
+    ];
+    let action_idx = select_option("Action", &action_options, 0)?
+        .ok_or_else(|| anyhow::anyhow!("provider config cancelled"))?;
+    match action_idx {
+        0 => run_provider_setup_flow(config_path, dry_run, check_env),
+        1 => run_provider_delete_ui(config_path, dry_run),
+        2 => list_providers(config_path),
+        _ => {
+            println!("cancelled");
+            Ok(())
+        }
+    }
+}
+
+fn run_provider_setup_flow(config_path: &Path, dry_run: bool, check_env: bool) -> Result<()> {
+    let provider_options = PROVIDER_PRESETS
+        .iter()
+        .map(|preset| {
+            SelectOption::new(
+                preset.id,
+                format!(
+                    "{} · env={} · endpoint={}",
+                    preset.description,
+                    preset.env.unwrap_or("-"),
+                    preset.endpoint.unwrap_or("provider default")
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    let provider_idx = select_option("Provider", &provider_options, 0)?
+        .ok_or_else(|| anyhow::anyhow!("provider setup cancelled"))?;
+    let provider = PROVIDER_PRESETS[provider_idx].id;
+    let preset = provider_preset(provider);
+
+    let kind_options = vec![
+        SelectOption::new("openai", "OpenAI-compatible Chat Completions style"),
+        SelectOption::new("anthropic", "Claude API style"),
+        SelectOption::new("google", "Gemini API style"),
+        SelectOption::new("ollama", "local Ollama runtime"),
+    ];
+    let default_kind = preset
+        .map(|preset| preset.kind)
+        .unwrap_or_else(|| provider_kind(provider));
+    let kind_default_idx = kind_options
+        .iter()
+        .position(|option| option.label == default_kind)
+        .unwrap_or(0);
+    let kind_idx = select_option("Provider type", &kind_options, kind_default_idx)?
+        .ok_or_else(|| anyhow::anyhow!("provider setup cancelled"))?;
+    let kind = kind_options[kind_idx].label.clone();
+
+    let mut auth_options = Vec::new();
+    if let Some(env) = preset.and_then(|preset| preset.env) {
+        auth_options.push(SelectOption::new(
+            "env",
+            format!("store ${{{env}}} reference ({})", env_status(env)),
+        ));
+    } else {
+        auth_options.push(SelectOption::new("env", "choose an env var reference"));
+    }
+    auth_options.push(SelectOption::new(
+        "literal key",
+        "stores a redacted API key value in config",
+    ));
+    auth_options.push(SelectOption::new(
+        "no key",
+        "local provider or credential supplied elsewhere",
+    ));
+    let auth_default_idx = if provider.eq_ignore_ascii_case("ollama") {
+        2
+    } else {
+        0
+    };
+    let auth_idx = select_option("Auth source", &auth_options, auth_default_idx)?
+        .ok_or_else(|| anyhow::anyhow!("provider setup cancelled"))?;
+
+    let mut selected_env: Option<String> = None;
+    let mut selected_key: Option<String> = None;
+    match auth_idx {
+        0 => {
+            let env = select_env_name(preset.and_then(|preset| preset.env))?;
+            selected_env = Some(env);
+        }
+        1 => {
+            println!(
+                "{}",
+                c(
+                    ansi::YELLOW,
+                    "Literal key will be written to config. Env refs are safer for shared configs."
+                )
+            );
+            let key = prompt_secret("API key")?;
+            if key.trim().is_empty() {
+                anyhow::bail!("api key cannot be empty");
+            }
+            selected_key = Some(key);
+        }
+        _ => {}
+    }
+
+    let endpoint_options = endpoint_options_for_preset(preset);
+    let endpoint_idx = select_option("Endpoint", &endpoint_options, 0)?
+        .ok_or_else(|| anyhow::anyhow!("provider setup cancelled"))?;
+    let selected_endpoint = match endpoint_options[endpoint_idx].label.as_str() {
+        "custom" => {
+            let default = preset.and_then(|preset| preset.endpoint).unwrap_or("");
+            let value = prompt_line("Endpoint URL", default)?;
+            if value.trim().is_empty() {
+                Some("none".to_string())
+            } else {
+                Some(value)
+            }
+        }
+        "none" => Some("none".to_string()),
+        _ => preset
+            .and_then(|preset| preset.endpoint)
+            .map(str::to_string)
+            .or_else(|| Some("none".to_string())),
+    };
+
+    println!();
+    println!("{}", c(ansi::BOLD, "Review"));
+    println!("  provider: {}", c(ansi::CYAN, provider));
+    println!("  type:     {}", kind);
+    println!(
+        "  auth:     {}",
+        provider_auth_preview(selected_env.as_deref(), selected_key.as_deref())
+    );
+    println!(
+        "  endpoint: {}",
+        selected_endpoint.as_deref().unwrap_or("provider default")
+    );
+    println!(
+        "  writes:   {}",
+        provider_setup_command_preview(
+            provider,
+            &kind,
+            selected_env.as_deref(),
+            selected_key.as_deref(),
+            selected_endpoint.as_deref(),
+        )
+    );
+
+    let confirm_options = vec![
+        SelectOption::new("write config", "save to ~/.orchestrator/config.yaml"),
+        SelectOption::new("cancel", "leave config unchanged"),
+    ];
+    let confirm_idx = select_option("Confirm", &confirm_options, 0)?
+        .ok_or_else(|| anyhow::anyhow!("provider setup cancelled"))?;
+    if confirm_idx != 0 {
+        println!("cancelled");
+        return Ok(());
+    }
+
+    setup_provider(
+        config_path,
+        provider,
+        Some(&kind),
+        selected_key.as_deref(),
+        selected_env.as_deref(),
+        selected_endpoint.as_deref(),
+        dry_run,
+        check_env,
+    )
+}
+
+fn run_provider_delete_ui(config_path: &Path, dry_run: bool) -> Result<()> {
+    let providers = configured_provider_names(config_path)?;
+    if providers.is_empty() {
+        println!("No configured providers to delete.");
+        return Ok(());
+    }
+
+    let options = providers
+        .iter()
+        .map(|provider| SelectOption::new(provider, "remove from providers"))
+        .collect::<Vec<_>>();
+    let provider_idx = select_option("Delete provider", &options, 0)?
+        .ok_or_else(|| anyhow::anyhow!("provider delete cancelled"))?;
+    let provider = &providers[provider_idx];
+
+    println!();
+    println!("{}", c(ansi::BOLD, "Review"));
+    println!("  delete: {}", c(ansi::YELLOW, provider));
+    println!("  writes: config provider delete {provider}");
+    println!(
+        "{}",
+        c(
+            ansi::DIM,
+            "Only providers.<name> is removed. Models/roles are left unchanged."
+        )
+    );
+
+    let confirm_options = vec![
+        SelectOption::new(
+            "delete provider",
+            "remove it from ~/.orchestrator/config.yaml",
+        ),
+        SelectOption::new("cancel", "leave config unchanged"),
+    ];
+    let confirm_idx = select_option("Confirm delete", &confirm_options, 1)?
+        .ok_or_else(|| anyhow::anyhow!("provider delete cancelled"))?;
+    if confirm_idx != 0 {
+        println!("cancelled");
+        return Ok(());
+    }
+
+    delete_provider(config_path, provider, dry_run)
+}
+
+fn configured_provider_names(config_path: &Path) -> Result<Vec<String>> {
+    let path = crate::config::expand_home(config_path);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading config at {}", path.display()))?;
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&raw)
+        .with_context(|| format!("parsing config at {}", path.display()))?;
+    let Some(providers) = yaml
+        .get("providers")
+        .and_then(serde_yaml::Value::as_mapping)
+    else {
+        return Ok(Vec::new());
+    };
+    let mut names = providers
+        .keys()
+        .filter_map(serde_yaml::Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    names.sort();
+    Ok(names)
+}
+
+fn select_env_name(default_env: Option<&str>) -> Result<String> {
+    let mut envs = Vec::<&str>::new();
+    if let Some(default_env) = default_env {
+        envs.push(default_env);
+    }
+    for env in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "MINIMAX_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OPENROUTER_API_KEY",
+        "MOONSHOT_API_KEY",
+        "MISTRAL_API_KEY",
+        "CUSTOM_API_KEY",
+    ] {
+        if !envs.contains(&env) {
+            envs.push(env);
+        }
+    }
+
+    let mut options = envs
+        .iter()
+        .map(|env| SelectOption::new(*env, format!("env ref · {}", env_status(env))))
+        .collect::<Vec<_>>();
+    options.push(SelectOption::new("custom", "type another env var name"));
+    let selected = select_option("API key env var", &options, 0)?
+        .ok_or_else(|| anyhow::anyhow!("provider setup cancelled"))?;
+    let value = if options[selected].label == "custom" {
+        prompt_line("Env var name", default_env.unwrap_or("CUSTOM_API_KEY"))?
+    } else {
+        options[selected].label.clone()
+    };
+    let value = value.trim().trim_start_matches('$').to_string();
+    validate_env_name(&value)?;
+    Ok(value)
+}
+
+fn endpoint_options_for_preset(preset: Option<ProviderPreset>) -> Vec<SelectOption> {
+    let mut options = Vec::new();
+    if let Some(endpoint) = preset.and_then(|preset| preset.endpoint) {
+        options.push(SelectOption::new(
+            "preset",
+            format!("use preset endpoint {endpoint}"),
+        ));
+    } else {
+        options.push(SelectOption::new(
+            "provider default",
+            "do not write a base_url",
+        ));
+    }
+    options.push(SelectOption::new("custom", "type a base_url"));
+    options.push(SelectOption::new("none", "remove endpoint from this write"));
+    options
+}
+
+fn provider_auth_preview(env: Option<&str>, key: Option<&str>) -> String {
+    if let Some(env) = env {
+        return format!("${{{}}} ({})", env, env_status(env));
+    }
+    if key.map(str::trim).is_some_and(|value| !value.is_empty()) {
+        return "literal key (<redacted>)".to_string();
+    }
+    "none".to_string()
+}
+
+fn provider_setup_command_preview(
+    provider: &str,
+    kind: &str,
+    env: Option<&str>,
+    key: Option<&str>,
+    endpoint: Option<&str>,
+) -> String {
+    let mut parts = vec![
+        "config".to_string(),
+        "provider".to_string(),
+        "setup".to_string(),
+        provider.to_string(),
+        "--type".to_string(),
+        kind.to_string(),
+    ];
+    if let Some(env) = env.map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push("--env".to_string());
+        parts.push(env.trim_start_matches('$').to_string());
+    }
+    if key.map(str::trim).is_some_and(|value| !value.is_empty()) {
+        parts.push("--key".to_string());
+        parts.push("<redacted>".to_string());
+    }
+    if let Some(endpoint) = endpoint.map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push("--endpoint".to_string());
+        parts.push(endpoint.to_string());
+    }
+    parts.join(" ")
+}
+
+fn env_status(env: &str) -> &'static str {
+    if std::env::var(env).unwrap_or_default().is_empty() {
+        "unset"
+    } else {
+        "set"
+    }
+}
+
+fn select_option(
+    title: &str,
+    options: &[SelectOption],
+    default_idx: usize,
+) -> Result<Option<usize>> {
+    use std::io::IsTerminal;
+
+    if options.is_empty() {
+        anyhow::bail!("no options available for {title}");
+    }
+    let default_idx = default_idx.min(options.len().saturating_sub(1));
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return select_option_from_prompt(title, options, default_idx);
+    }
+    select_option_from_keys(title, options, default_idx)
+}
+
+fn select_option_from_prompt(
+    title: &str,
+    options: &[SelectOption],
+    default_idx: usize,
+) -> Result<Option<usize>> {
+    use std::io::{self, Write};
+
+    println!();
+    println!("{}", c(ansi::BOLD, title));
+    for (idx, option) in options.iter().enumerate() {
+        println!(
+            "  {}. {:<16} {}",
+            idx + 1,
+            option.label,
+            c(ansi::DIM, &option.hint)
+        );
+    }
+    print!(
+        "{}",
+        c(
+            ansi::YELLOW,
+            &format!("Choose [{}], q to cancel: ", default_idx + 1)
+        )
+    );
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+    if input.eq_ignore_ascii_case("q") || input.eq_ignore_ascii_case("esc") {
+        return Ok(None);
+    }
+    if input.is_empty() {
+        return Ok(Some(default_idx));
+    }
+    let idx = input
+        .parse::<usize>()
+        .ok()
+        .and_then(|value| value.checked_sub(1))
+        .filter(|idx| *idx < options.len())
+        .ok_or_else(|| anyhow::anyhow!("invalid selection '{input}'"))?;
+    Ok(Some(idx))
+}
+
+fn select_option_from_keys(
+    title: &str,
+    options: &[SelectOption],
+    default_idx: usize,
+) -> Result<Option<usize>> {
+    use crossterm::cursor::{MoveToColumn, MoveUp};
+    use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+    use crossterm::execute;
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
+    use std::io::{self, Write};
+
+    struct RawGuard;
+    impl Drop for RawGuard {
+        fn drop(&mut self) {
+            let _ = disable_raw_mode();
+        }
+    }
+
+    enable_raw_mode()?;
+    let _guard = RawGuard;
+    let mut stdout = io::stdout();
+    let mut selected = default_idx;
+    let mut rendered_lines = 0usize;
+    let visible = 8usize;
+
+    loop {
+        if rendered_lines > 0 {
+            execute!(
+                stdout,
+                MoveUp(rendered_lines as u16),
+                MoveToColumn(0),
+                Clear(ClearType::FromCursorDown)
+            )?;
+        }
+        rendered_lines = render_key_menu(&mut stdout, title, options, selected, visible)?;
+        stdout.flush()?;
+
+        match event::read()? {
+            Event::Key(key) => match key.code {
+                KeyCode::Up => selected = selected.saturating_sub(1),
+                KeyCode::Down => selected = (selected + 1).min(options.len() - 1),
+                KeyCode::Home => selected = 0,
+                KeyCode::End => selected = options.len() - 1,
+                KeyCode::PageUp => selected = selected.saturating_sub(visible),
+                KeyCode::PageDown => selected = (selected + visible).min(options.len() - 1),
+                KeyCode::Char('k') if key.modifiers.is_empty() => {
+                    selected = selected.saturating_sub(1)
+                }
+                KeyCode::Char('j') if key.modifiers.is_empty() => {
+                    selected = (selected + 1).min(options.len() - 1)
+                }
+                KeyCode::Char(ch) if ch.is_ascii_digit() && options.len() <= 9 => {
+                    if let Some(value) = ch.to_digit(10) {
+                        if value > 0 && (value as usize) <= options.len() {
+                            selected = value as usize - 1;
+                        }
+                    }
+                }
+                KeyCode::Enter => {
+                    clear_key_menu(&mut stdout, rendered_lines)?;
+                    return Ok(Some(selected));
+                }
+                KeyCode::Esc => {
+                    clear_key_menu(&mut stdout, rendered_lines)?;
+                    return Ok(None);
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    clear_key_menu(&mut stdout, rendered_lines)?;
+                    return Ok(None);
+                }
+                _ => {}
+            },
+            Event::Resize(_, _) => {}
+            _ => {}
+        }
+    }
+}
+
+fn render_key_menu(
+    stdout: &mut impl std::io::Write,
+    title: &str,
+    options: &[SelectOption],
+    selected: usize,
+    visible: usize,
+) -> Result<usize> {
+    let start = dropdown_window_start(selected, options.len(), visible);
+    let end = (start + visible).min(options.len());
+    let mut lines = 0usize;
+
+    write!(
+        stdout,
+        "\r{} {}\r\n",
+        c(ansi::BOLD, title),
+        c(ansi::DIM, "↑/↓ Enter Esc")
+    )?;
+    lines += 1;
+    for (idx, option) in options.iter().enumerate().take(end).skip(start) {
+        let marker = if idx == selected {
+            c(ansi::CYAN, "›")
+        } else {
+            " ".to_string()
+        };
+        let number = if options.len() <= 9 {
+            format!("{}.", idx + 1)
+        } else {
+            "  ".to_string()
+        };
+        let label = if idx == selected {
+            c(ansi::BOLD, &option.label)
+        } else {
+            option.label.clone()
+        };
+        write!(
+            stdout,
+            "\r{} {} {:<18} {}\r\n",
+            marker,
+            c(ansi::DIM, &number),
+            label,
+            c(ansi::DIM, &option.hint)
+        )?;
+        lines += 1;
+    }
+    if options.len() > visible {
+        write!(
+            stdout,
+            "\r{}\r\n",
+            c(
+                ansi::DIM,
+                &format!("showing {}-{} of {}", start + 1, end, options.len())
+            )
+        )?;
+        lines += 1;
+    }
+    Ok(lines)
+}
+
+fn clear_key_menu(stdout: &mut impl std::io::Write, rendered_lines: usize) -> Result<()> {
+    use crossterm::cursor::{MoveToColumn, MoveUp};
+    use crossterm::execute;
+    use crossterm::terminal::{Clear, ClearType};
+
+    if rendered_lines > 0 {
+        execute!(
+            stdout,
+            MoveUp(rendered_lines as u16),
+            MoveToColumn(0),
+            Clear(ClearType::FromCursorDown)
+        )?;
+    }
+    Ok(())
+}
+
+fn dropdown_window_start(selected: usize, len: usize, visible: usize) -> usize {
+    if len <= visible {
+        0
+    } else if selected >= visible {
+        selected + 1 - visible
+    } else {
+        0
+    }
+}
+
+fn prompt_line(label: &str, default: &str) -> Result<String> {
+    use std::io::{self, Write};
+
+    if default.is_empty() {
+        print!("{}: ", c(ansi::YELLOW, label));
+    } else {
+        print!("{} [{}]: ", c(ansi::YELLOW, label), default);
+    }
+    io::stdout().flush()?;
+    let mut value = String::new();
+    io::stdin().read_line(&mut value)?;
+    let value = value.trim();
+    if value.is_empty() {
+        Ok(default.to_string())
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+fn prompt_secret(label: &str) -> Result<String> {
+    use crossterm::cursor::{MoveLeft, MoveToColumn};
+    use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+    use crossterm::execute;
+    use crossterm::style::Print;
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+    use std::io::{self, IsTerminal, Write};
+
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return prompt_line(label, "");
+    }
+
+    struct RawGuard;
+    impl Drop for RawGuard {
+        fn drop(&mut self) {
+            let _ = disable_raw_mode();
+        }
+    }
+
+    print!("{}: ", c(ansi::YELLOW, label));
+    io::stdout().flush()?;
+    enable_raw_mode()?;
+    let _guard = RawGuard;
+    let mut stdout = io::stdout();
+    let mut value = String::new();
+    loop {
+        match event::read()? {
+            Event::Key(key) => match key.code {
+                KeyCode::Enter => {
+                    write!(stdout, "\r\n")?;
+                    stdout.flush()?;
+                    return Ok(value);
+                }
+                KeyCode::Esc => {
+                    write!(stdout, "\r\n")?;
+                    stdout.flush()?;
+                    anyhow::bail!("provider setup cancelled");
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    write!(stdout, "\r\n")?;
+                    stdout.flush()?;
+                    anyhow::bail!("provider setup cancelled");
+                }
+                KeyCode::Backspace => {
+                    if value.pop().is_some() {
+                        execute!(stdout, MoveLeft(1), Print(" "), MoveLeft(1))?;
+                        stdout.flush()?;
+                    }
+                }
+                KeyCode::Char(ch)
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    value.push(ch);
+                    execute!(stdout, Print("*"))?;
+                    stdout.flush()?;
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    value.clear();
+                    execute!(
+                        stdout,
+                        MoveToColumn(0),
+                        Print(format!("{}: ", c(ansi::YELLOW, label)))
+                    )?;
+                    stdout.flush()?;
+                }
+                _ => {}
+            },
+            Event::Resize(_, _) => {}
+            _ => {}
+        }
+    }
+}
+
+fn delete_provider(config_path: &Path, provider: &str, dry_run: bool) -> Result<()> {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        anyhow::bail!("provider is required");
+    }
+    let configured = configured_provider_names(config_path)?;
+    let exists = configured.iter().any(|name| name == provider);
+    if dry_run {
+        println!("Provider delete dry-run");
+        println!(
+            "  config:   {}",
+            crate::config::expand_home(config_path).display()
+        );
+        println!("  provider: {}", provider);
+        println!(
+            "  status:   {}",
+            if exists { "configured" } else { "not found" }
+        );
+        println!("  command:  config provider delete {}", provider);
+        return Ok(());
+    }
+
+    if Config::delete_provider_from_config_file(config_path, provider)? {
+        println!("✓ {} provider deleted", provider);
+    } else {
+        println!("No provider named '{}' was configured", provider);
+    }
+    Ok(())
+}
+
+fn setup_provider(
+    config_path: &Path,
+    provider: &str,
+    kind: Option<&str>,
+    key: Option<&str>,
+    env: Option<&str>,
+    endpoint: Option<&str>,
+    dry_run: bool,
+    check_env: bool,
+) -> Result<()> {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        anyhow::bail!("provider is required");
+    }
+    if key.is_some() && env.is_some() {
+        anyhow::bail!("use either --key or --env, not both");
+    }
+
+    let preset = provider_preset(provider);
+    let kind = kind
+        .filter(|value| !value.trim().is_empty())
+        .map(str::trim)
+        .or_else(|| preset.map(|preset| preset.kind))
+        .unwrap_or_else(|| provider_kind(provider));
+
+    let key_value = provider_setup_key_value(provider, key, env, preset)?;
+    if check_env {
+        if let Some(env_name) = key_value.as_deref().and_then(secret_ref_env_name) {
+            if std::env::var(env_name).unwrap_or_default().is_empty() {
+                anyhow::bail!("env var {env_name} is not set");
+            }
+        }
+    }
+    let endpoint_value = provider_setup_endpoint(endpoint, preset);
+
+    if key_value.is_none() && endpoint_value.is_none() {
+        anyhow::bail!(
+            "nothing to write for provider '{}'; pass --env, --key, or --endpoint",
+            provider
+        );
+    }
+
+    if dry_run {
+        println!("Provider setup dry-run");
+        println!(
+            "  config:   {}",
+            crate::config::expand_home(config_path).display()
+        );
+        println!("  provider: {}", provider);
+        println!("  type:     {}", kind);
+        println!(
+            "  api_key:  {}",
+            key_value
+                .as_deref()
+                .map(redact_provider_key)
+                .unwrap_or_else(|| "-".to_string())
+        );
+        println!("  endpoint: {}", endpoint_value.as_deref().unwrap_or("-"));
+        return Ok(());
+    }
+
+    if let Some(key_value) = key_value {
+        Config::write_provider_key_to_config_file(config_path, provider, kind, &key_value)?;
+        println!("✓ {} api_key set", provider);
+    }
+    if let Some(endpoint_value) = endpoint_value {
+        Config::write_provider_endpoint_to_config_file(
+            config_path,
+            provider,
+            kind,
+            &endpoint_value,
+        )?;
+        println!("✓ {} endpoint set to {}", provider, endpoint_value);
+    }
+    Ok(())
+}
+
+fn provider_setup_key_value(
+    provider: &str,
+    key: Option<&str>,
+    env: Option<&str>,
+    preset: Option<ProviderPreset>,
+) -> Result<Option<String>> {
+    if let Some(key) = key.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(Some(key.to_string()));
+    }
+    if let Some(env) = env.map(str::trim).filter(|value| !value.is_empty()) {
+        if matches!(env, "none" | "off" | "-") {
+            return Ok(None);
+        }
+        let env = env.trim_start_matches('$');
+        validate_env_name(env)?;
+        return Ok(Some(format!("${{{env}}}")));
+    }
+    if let Some(env) = preset.and_then(|preset| preset.env) {
+        return Ok(Some(format!("${{{env}}}")));
+    }
+    if provider.eq_ignore_ascii_case("ollama") {
+        return Ok(None);
+    }
+    Ok(None)
+}
+
+fn provider_setup_endpoint(
+    endpoint: Option<&str>,
+    preset: Option<ProviderPreset>,
+) -> Option<String> {
+    let Some(endpoint) = endpoint.map(str::trim) else {
+        return preset
+            .and_then(|preset| preset.endpoint)
+            .map(str::to_string);
+    };
+    if endpoint.is_empty() || matches!(endpoint, "none" | "off" | "-") {
+        None
+    } else if endpoint == "default" {
+        preset
+            .and_then(|preset| preset.endpoint)
+            .map(str::to_string)
+    } else {
+        Some(endpoint.to_string())
+    }
+}
+
+fn validate_env_name(env: &str) -> Result<()> {
+    if env.is_empty() {
+        anyhow::bail!("env var name cannot be empty");
+    }
+    if !env
+        .chars()
+        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+    {
+        anyhow::bail!("env var name '{env}' must use A-Z, 0-9, or _");
+    }
+    Ok(())
+}
+
+fn secret_ref_env_name(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if let Some(rest) = value.strip_prefix("${") {
+        return rest.strip_suffix('}');
+    }
+    value.strip_prefix('$')
+}
+
+fn redact_provider_key(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return "-".to_string();
+    }
+    if let Some(env) = secret_ref_env_name(value) {
+        let status = if std::env::var(env).unwrap_or_default().is_empty() {
+            "unset"
+        } else {
+            "set"
+        };
+        return format!("${{{env}}} ({status})");
+    }
+    let len = value.chars().count();
+    if len <= 8 {
+        "***".to_string()
+    } else {
+        let head = value.chars().take(4).collect::<String>();
+        let tail = value
+            .chars()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<String>();
+        format!("{head}...{tail}")
+    }
+}
+
+fn apply_expensive_orchestrators(
+    config_path: &Path,
+    orchestrator_model: &str,
+    reviewer_model: &str,
+    worker_model: Option<&str>,
+) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    let default_worker = worker_model.unwrap_or_else(|| {
+        for cheap in &[
+            "MiniMax-M3",
+            "gpt-4o-mini",
+            "haiku",
+            "deepseek-chat",
+            "llama3",
+            "gpt4o-mini",
+        ] {
+            if cfg.models.iter().any(|m| m.id == *cheap) {
+                return *cheap;
+            }
+        }
+        cfg.models.first().map(|m| m.id.as_str()).unwrap_or("haiku")
+    });
+
+    let assignments = vec![
+        ("planner", orchestrator_model),
+        ("critic", orchestrator_model),
+        ("reviewer", reviewer_model),
+        ("worker-cc", default_worker),
+        ("worker-codex", default_worker),
+    ];
+    apply_role_models(config_path, &assignments)?;
+    println!("\n✓ Routing preset applied:");
+    println!(
+        "  Orchestrators (planner/critic): {}",
+        c(ansi::BOLD, orchestrator_model)
+    );
+    println!(
+        "  Reviewer:                       {}",
+        c(ansi::BOLD, reviewer_model)
+    );
+    println!(
+        "  Workers:                         {}",
+        c(ansi::BOLD, default_worker)
+    );
+    Ok(())
+}
+
+/// Apply a named roleset preset.
+fn apply_roleset(config_path: &Path, name: &str) -> Result<()> {
+    match name {
+        "codex" | "codex-heavy" | "gpt" => {
+            // Use whatever's available (MiniMax-M3 via anthropic, or gpt4o)
+            let cfg = Config::load(config_path)?;
+            let cheap_model = pick_cheap_model(&cfg, "gpt4o");
+            let reviewer_model = pick_cheap_model(&cfg, "haiku");
+            let cheap = cheap_model.as_str();
+            let rev = reviewer_model.as_str();
+            apply_role_models(
+                config_path,
+                &[
+                    ("planner", cheap),
+                    ("critic", cheap),
+                    ("worker-cc", cheap),
+                    ("worker-codex", cheap),
+                    ("reviewer", rev),
+                ],
+            )?;
+            // Favor worker-codex in tag overrides
+            let mut cfg = Config::load(config_path)?;
+            cfg.overrides = vec![
+                crate::config::OverrideConfig {
+                    tag: "refactor".into(),
+                    role: "worker-codex".into(),
+                },
+                crate::config::OverrideConfig {
+                    tag: "boilerplate".into(),
+                    role: "worker-codex".into(),
+                },
+                crate::config::OverrideConfig {
+                    tag: "test".into(),
+                    role: "worker-codex".into(),
+                },
+                crate::config::OverrideConfig {
+                    tag: "docs".into(),
+                    role: "worker-codex".into(),
+                },
+            ];
+            write_config(&cfg, config_path)?;
+            println!("\n{} Codex-heavy roleset applied:", c(ansi::GREEN, "✓"));
+            println!(
+                "  Models: {} (all roles), reviewer={}",
+                c(ansi::BOLD, &cheap_model),
+                c(ansi::BOLD, &reviewer_model)
+            );
+            println!("  Default worker: codex CLI (needs OPENAI_API_KEY or custom config)");
+            println!("  Tags route to worker-codex");
+        }
+        "claude" | "claude-heavy" | "cc" => {
+            apply_role_models(
+                config_path,
+                &[
+                    ("planner", "sonnet"),
+                    ("critic", "opus"),
+                    ("worker-cc", "sonnet"),
+                    ("worker-codex", "sonnet"),
+                    ("reviewer", "haiku"),
+                ],
+            )?;
+            let mut cfg = Config::load(config_path)?;
+            cfg.overrides = vec![
+                crate::config::OverrideConfig {
+                    tag: "refactor".into(),
+                    role: "worker-cc".into(),
+                },
+                crate::config::OverrideConfig {
+                    tag: "architecture".into(),
+                    role: "worker-cc".into(),
+                },
+                crate::config::OverrideConfig {
+                    tag: "boilerplate".into(),
+                    role: "worker-cc".into(),
+                },
+                crate::config::OverrideConfig {
+                    tag: "test".into(),
+                    role: "worker-cc".into(),
+                },
+            ];
+            write_config(&cfg, config_path)?;
+            println!("\n{} Claude-heavy roleset applied:", c(ansi::GREEN, "✓"));
+            println!("  planner/reviewer → sonnet/haiku");
+            println!("  critic → opus (adversarial)");
+            println!("  workers → sonnet");
+            println!("  Tags route to worker-cc");
+        }
+        "economy" | "cheap" => {
+            apply_expensive_orchestrators(config_path, "haiku", "haiku", Some("haiku"))?;
+            println!("\n{} Economy roleset (all haiku):", c(ansi::GREEN, "✓"));
+        }
+        "quality" | "best" => {
+            apply_expensive_orchestrators(config_path, "opus", "sonnet", Some("sonnet"))?;
+            println!(
+                "\n{} Quality roleset (opus everywhere):",
+                c(ansi::GREEN, "✓")
+            );
+        }
+        _ => {
+            anyhow::bail!(
+                "unknown roleset '{}'. Available: codex, claude, economy, quality",
+                name
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Pick the cheapest model that's available in the config.
+fn pick_cheap_model(cfg: &Config, default: &str) -> String {
+    for cheap in &[
+        "MiniMax-M3",
+        "gpt-4o-mini",
+        "haiku",
+        "deepseek-chat",
+        "llama3",
+        "gpt4o-mini",
+    ] {
+        if cfg.models.iter().any(|m| m.id == *cheap) {
+            return cheap.to_string();
+        }
+    }
+    if cfg.models.iter().any(|m| m.id == default) {
+        return default.to_string();
+    }
+    cfg.models
+        .first()
+        .map(|m| m.id.clone())
+        .unwrap_or_else(|| "haiku".to_string())
+}
+
+fn resolve_role_model(
+    cfg: &Config,
+    role: &str,
+    override_model: Option<&str>,
+    fallback: &str,
+) -> Result<String> {
+    if let Some(model) = override_model {
+        if let Some(m) = cfg.models.iter().find(|m| m.id == model || m.name == model) {
+            return Ok(m.name.clone());
+        }
+        anyhow::bail!(
+            "unknown {} model override '{}'. Available models: {}",
+            role,
+            model,
+            cfg.models
+                .iter()
+                .map(|m| format!("{} ({})", m.id, m.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    Ok(cfg
+        .roles
+        .get(role)
+        .and_then(|r| cfg.models.iter().find(|m| m.id == r.model))
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| fallback.to_string()))
+}
+
+fn resolve_role_model_entry<'a>(
+    cfg: &'a Config,
+    role: &str,
+    override_model: Option<&str>,
+) -> Result<Option<&'a crate::config::ModelConfig>> {
+    if let Some(model) = override_model {
+        if let Some(m) = cfg.models.iter().find(|m| m.id == model || m.name == model) {
+            return Ok(Some(m));
+        }
+        anyhow::bail!(
+            "unknown {} model override '{}'. Available models: {}",
+            role,
+            model,
+            cfg.models
+                .iter()
+                .map(|m| format!("{} ({})", m.id, m.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    Ok(cfg
+        .roles
+        .get(role)
+        .and_then(|r| cfg.models.iter().find(|m| m.id == r.model)))
+}
+
+fn resolve_role_cli_spec(
+    cfg: &Config,
+    role: &str,
+    override_model: Option<&str>,
+    fallback_model: &str,
+    fallback_runtime: &str,
+) -> Result<roles::cli_subprocess::RoleCliSpec> {
+    let model_entry = resolve_role_model_entry(cfg, role, override_model)?;
+    let model = model_entry
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| fallback_model.to_string());
+    let runtime_id = cfg
+        .roles
+        .get(role)
+        .map(|r| r.runtime.as_str())
+        .unwrap_or(fallback_runtime);
+    let runtime =
+        roles::cli_subprocess::RoleCliRuntime::from_runtime_id(runtime_id).ok_or_else(|| {
+            anyhow::anyhow!("role '{}' uses unsupported runtime '{}'", role, runtime_id)
+        })?;
+    let binary = cfg
+        .runtime_config(runtime_id)
+        .and_then(|rt| rt.binary.clone())
+        .unwrap_or_else(|| default_binary_for_role_runtime(runtime));
+    let mut spec = roles::cli_subprocess::RoleCliSpec::new(runtime, binary, model)
+        .with_bypass_permissions(
+            runtime == roles::cli_subprocess::RoleCliRuntime::ClaudeCode
+                && cfg.behavior.cc_bypass_permissions,
+        );
+    if let Some(model_entry) = model_entry {
+        match runtime {
+            roles::cli_subprocess::RoleCliRuntime::ClaudeCode => {
+                spec = apply_claude_provider_env(spec, cfg, model_entry);
+            }
+            roles::cli_subprocess::RoleCliRuntime::Codex => {
+                spec = apply_codex_provider_config(spec, cfg, model_entry);
+            }
+        }
+    }
+    Ok(spec)
+}
+
+fn apply_claude_provider_env(
+    mut spec: roles::cli_subprocess::RoleCliSpec,
+    cfg: &Config,
+    model_entry: &crate::config::ModelConfig,
+) -> roles::cli_subprocess::RoleCliSpec {
+    let Some(provider) = cfg.providers.get(&model_entry.provider) else {
+        return spec;
+    };
+    let base_url = claude_base_url_for_provider(&model_entry.provider, provider);
+    if !provider.kind.eq_ignore_ascii_case("anthropic") && base_url.is_none() {
+        return spec;
+    }
+    if let Some(api_key) = provider
+        .api_key
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        spec = spec
+            .with_env("ANTHROPIC_AUTH_TOKEN", api_key)
+            .with_env("ANTHROPIC_API_KEY", api_key);
+    }
+    if let Some(base_url) = base_url {
+        spec = spec.with_env("ANTHROPIC_BASE_URL", base_url);
+    }
+    spec = spec
+        .with_env("ANTHROPIC_MODEL", &model_entry.name)
+        .with_env("ANTHROPIC_DEFAULT_SONNET_MODEL", &model_entry.name)
+        .with_env("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", &model_entry.name)
+        .with_env("ANTHROPIC_DEFAULT_OPUS_MODEL", &model_entry.name)
+        .with_env("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", &model_entry.name)
+        .with_env("ANTHROPIC_DEFAULT_HAIKU_MODEL", &model_entry.name);
+    spec = spec.with_env("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", &model_entry.name);
+    spec
+}
+
+fn claude_base_url_for_provider(
+    provider_id: &str,
+    provider: &crate::config::ProviderConfig,
+) -> Option<String> {
+    let base_url = provider.base_url.as_deref()?.trim().trim_end_matches('/');
+    if base_url.is_empty() {
+        return None;
+    }
+    if provider.kind.eq_ignore_ascii_case("anthropic") {
+        return Some(base_url.to_string());
+    }
+    if provider_id.eq_ignore_ascii_case("minimax") {
+        let root = base_url.strip_suffix("/v1").unwrap_or(base_url);
+        return Some(format!("{}/anthropic", root.trim_end_matches('/')));
+    }
+    None
+}
+
+fn apply_codex_provider_config(
+    mut spec: roles::cli_subprocess::RoleCliSpec,
+    cfg: &Config,
+    model_entry: &crate::config::ModelConfig,
+) -> roles::cli_subprocess::RoleCliSpec {
+    let Some(provider) = cfg.providers.get(&model_entry.provider) else {
+        return spec;
+    };
+    let provider_kind = provider.kind.to_ascii_lowercase();
+    if provider_kind != "openai" && provider_kind != "ollama" {
+        return spec;
+    }
+
+    let provider_id = model_entry.provider.as_str();
+    spec = spec.with_config_override("model_provider", provider_id);
+
+    if provider_id == "openai" {
+        if let Some(base_url) = provider
+            .base_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            spec = spec.with_config_override("openai_base_url", base_url);
+        }
+    } else {
+        let prefix = format!("model_providers.{provider_id}");
+        spec = spec
+            .with_config_override(format!("{prefix}.name"), provider_id)
+            .with_config_override(format!("{prefix}.wire_api"), "responses");
+        if let Some(base_url) = provider
+            .base_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            spec = spec.with_config_override(format!("{prefix}.base_url"), base_url);
+        }
+    }
+
+    if let Some(api_key) = provider
+        .api_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        if provider_id == "openai" {
+            if let Some(env) = provider_secret_env_name(api_key) {
+                if let Ok(value) = std::env::var(env) {
+                    spec = spec.with_env("OPENAI_API_KEY", value);
+                }
+            } else {
+                spec = spec.with_env("OPENAI_API_KEY", api_key.trim());
+            }
+            return spec;
+        }
+
+        let (env_key, env_value) = codex_provider_env_key(provider_id, api_key);
+        if let Some(value) = env_value {
+            spec = spec.with_env(&env_key, value);
+        }
+        spec = spec.with_config_override(format!("model_providers.{provider_id}.env_key"), env_key);
+    }
+
+    spec
+}
+
+fn codex_provider_env_key(provider_id: &str, api_key: &str) -> (String, Option<String>) {
+    let api_key = api_key.trim();
+    if let Some(env) = provider_secret_env_name(api_key) {
+        return (env.to_string(), None);
+    }
+    let normalized = provider_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    (
+        format!("TIFFANY_{normalized}_API_KEY"),
+        Some(api_key.to_string()),
+    )
+}
+
+fn provider_secret_env_name(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if let Some(rest) = value.strip_prefix("${") {
+        return rest.strip_suffix('}');
+    }
+    value.strip_prefix('$')
+}
+
+fn default_binary_for_role_runtime(runtime: roles::cli_subprocess::RoleCliRuntime) -> String {
+    match runtime {
+        roles::cli_subprocess::RoleCliRuntime::ClaudeCode => which::which("claude")
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "claude".to_string()),
+        roles::cli_subprocess::RoleCliRuntime::Codex => which::which("codex")
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "codex".to_string()),
+    }
+}
+
+pub async fn build_orchestrator(
+    cfg: &Config,
+    no_critic: bool,
+    no_reviewer: bool,
+    planner_override: Option<&str>,
+    critic_override: Option<&str>,
+    reviewer_override: Option<&str>,
+) -> Result<Orchestrator> {
+    // Load Claude Code's existing config (CLAUDE.md, settings, agents, MCP, ...)
+    let cc_config = Arc::new(cc_config::CCConfig::load());
+    tracing::info!(
+        "loaded CC config: {} chars system prompt, {} agents, {} MCP servers, {} prior sessions",
+        cc_config.system_prompt.len(),
+        cc_config.agents.len(),
+        cc_config.mcp_servers.len(),
+        cc_config.prior_session_ids.len(),
+    );
+
+    // Build worktree pool + session store
+    let worktree_pool = Arc::new(storage::worktree::WorktreePool::new(
+        &cfg.behavior.worktree_base,
+    ));
+    let session_store = Arc::new(crate::core::session_store::SessionStore::open(
+        &cfg.behavior.session_log_dir,
+        &cfg.behavior.db_path,
+    )?);
+
+    // Build adapters
+    let mut adapters: std::collections::HashMap<
+        String,
+        Arc<dyn crate::core::worker::WorkerAdapter>,
+    > = std::collections::HashMap::new();
+    let provider_configs = Arc::new(cfg.providers.clone());
+
+    for (name, rt) in &cfg.runtimes {
+        let runtime = roles::cli_subprocess::RoleCliRuntime::from_runtime_id(name);
+        match (rt.kind.as_str(), runtime) {
+            ("subprocess", Some(roles::cli_subprocess::RoleCliRuntime::ClaudeCode)) => {
+                let binary = rt.binary.clone().unwrap_or_else(|| "claude".to_string());
+                let model = cfg
+                    .models
+                    .iter()
+                    .find(|m| m.id == "sonnet")
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+                let adapter = Arc::new(adapters::claude_code::ClaudeCodeAdapter::new(
+                    binary,
+                    model,
+                    rt.supports_agent_teams,
+                    cfg.behavior.cc_bypass_permissions,
+                    worktree_pool.clone(),
+                    session_store.clone(),
+                    cc_config.clone(),
+                    provider_configs.clone(),
+                ));
+                adapters.insert(name.clone(), adapter);
+            }
+            ("subprocess", Some(roles::cli_subprocess::RoleCliRuntime::Codex)) => {
+                let binary = rt.binary.clone().unwrap_or_else(|| "codex".to_string());
+                let model = cfg
+                    .models
+                    .iter()
+                    .find(|m| m.id == "gpt4o")
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| "gpt-4o".to_string());
+                let adapter = Arc::new(adapters::codex_cli::CodexCLIAdapter::new(
+                    binary,
+                    model,
+                    worktree_pool.clone(),
+                    session_store.clone(),
+                    provider_configs.clone(),
+                ));
+                adapters.insert(name.clone(), adapter);
+            }
+            _ => {}
+        }
+    }
+
+    // Build router
+    let router = Arc::new(roles::router::CapabilityRouter::new_with_models(
+        &cfg.roles,
+        &cfg.overrides,
+        &cfg.models,
+    ));
+
+    // Build planner / critic / reviewer from role runtime config.
+    // Each role can run through Claude Code or Codex CLI while still sharing
+    // the same structured planner/critic/reviewer prompts.
+    let planner_spec =
+        resolve_role_cli_spec(cfg, "planner", planner_override, "gpt-4o-mini", "codex")?;
+    let critic_spec = resolve_role_cli_spec(
+        cfg,
+        "critic",
+        critic_override,
+        "claude-haiku-4-5",
+        "claude-code",
+    )?;
+    let reviewer_spec =
+        resolve_role_cli_spec(cfg, "reviewer", reviewer_override, "gpt-4o-mini", "codex")?;
+    tracing::info!(
+        "role CLI specs: planner={:?}, critic={:?}, reviewer={:?}",
+        planner_spec,
+        critic_spec,
+        reviewer_spec
+    );
+
+    let planner: Arc<dyn roles::planner::Planner> = Arc::new(
+        roles::cli_subprocess::ClaudeCodePlanner::from_spec(planner_spec),
+    );
+    let critic: Arc<dyn roles::critic::Critic> = Arc::new(
+        roles::cli_subprocess::ClaudeCodeCritic::from_spec(critic_spec),
+    );
+    let reviewer: Arc<dyn roles::reviewer::Reviewer> = Arc::new(
+        roles::cli_subprocess::ClaudeCodeReviewer::from_spec(reviewer_spec),
+    );
+
+    Ok(Orchestrator::new(
+        planner,
+        critic,
+        reviewer,
+        router,
+        adapters,
+        session_store,
+        cfg.behavior.max_replan,
+        cfg.behavior.enable_critic && !no_critic,
+        cfg.behavior.enable_reviewer && !no_reviewer,
+    ))
+}
+
+/// Build a `ModelProvider` for the given model by looking it up in config.
+/// If the API key is missing, returns a `FailingProvider` that errors at
+/// call time; this lets terminal chat start even without keys configured.
+fn build_provider(role: &str, model_name: &str, cfg: &Config) -> Arc<dyn ModelProvider> {
+    use crate::core::provider::FailingProvider;
+    use crate::providers;
+    // Find the model in cfg.models
+    let model_cfg = cfg.models.iter().find(|m| m.name == model_name);
+    let provider_kind = model_cfg
+        .and_then(|m| cfg.providers.get(&m.provider))
+        .map(|p| p.kind.as_str())
+        .unwrap_or("");
+
+    // Get the provider entry (if any)
+    let provider_entry = model_cfg.and_then(|m| cfg.providers.get(&m.provider));
+
+    let missing_key_msg = |key_name: &str| -> Arc<dyn ModelProvider> {
+        let msg = format!(
+            "missing API key for {} (role: {}, model: {}).\n\
+             \n\
+             Set the env var before running:\n\
+             \n\
+             \x20\x20\x20\x20export {}=...\n\
+             \n\
+             Or edit ~/.orchestrator/config.yaml to use a different model.",
+            key_name, role, model_name, key_name
+        );
+        tracing::warn!("{}", msg);
+        Arc::new(FailingProvider::new(msg)) as Arc<dyn crate::core::provider::ModelProvider>
+    };
+
+    match provider_kind {
+        "anthropic" => {
+            let api_key = provider_entry.and_then(|p| p.api_key.clone());
+            let base_url = provider_entry.and_then(|p| p.base_url.clone());
+            match api_key {
+                Some(k) if !k.is_empty() => {
+                    let mut prov = providers::anthropic::AnthropicProvider::new(k);
+                    if let Some(url) = base_url {
+                        prov = prov.with_base_url(url);
+                    }
+                    Arc::new(prov) as Arc<dyn crate::core::provider::ModelProvider>
+                }
+                _ => missing_key_msg("ANTHROPIC_API_KEY"),
+            }
+        }
+        "openai" => {
+            let api_key = provider_entry.and_then(|p| p.api_key.clone());
+            let base_url = provider_entry.and_then(|p| p.base_url.clone());
+            match api_key {
+                Some(k) if !k.is_empty() => {
+                    let mut prov = providers::openai::OpenAIProvider::new(k);
+                    if let Some(url) = base_url {
+                        prov = prov.with_base_url(url);
+                    }
+                    Arc::new(prov) as Arc<dyn crate::core::provider::ModelProvider>
+                }
+                _ => missing_key_msg("OPENAI_API_KEY"),
+            }
+        }
+        "google" => {
+            let api_key = provider_entry.and_then(|p| p.api_key.clone());
+            match api_key {
+                Some(k) if !k.is_empty() => Arc::new(providers::google::GoogleProvider::new(k))
+                    as Arc<dyn crate::core::provider::ModelProvider>,
+                _ => missing_key_msg("GOOGLE_API_KEY"),
+            }
+        }
+        "ollama" => {
+            let base_url = provider_entry
+                .and_then(|p| p.base_url.clone())
+                .unwrap_or_else(|| "http://localhost:11434".to_string());
+            Arc::new(providers::ollama::OllamaProvider::new(base_url))
+                as Arc<dyn crate::core::provider::ModelProvider>
+        }
+        _ => {
+            // Unknown provider — try inferring from model name
+            if model_name.starts_with("claude") {
+                missing_key_msg("ANTHROPIC_API_KEY")
+            } else if model_name.starts_with("gpt") {
+                missing_key_msg("OPENAI_API_KEY")
+            } else if model_name.starts_with("gemini") {
+                missing_key_msg("GOOGLE_API_KEY")
+            } else {
+                Arc::new(FailingProvider::new(format!(
+                    "could not determine provider for model '{}' (role {})",
+                    model_name, role
+                )))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ModelConfig, RoleConfig};
+
+    fn config_with_models() -> Config {
+        let mut cfg = Config::default();
+        cfg.models = vec![
+            ModelConfig {
+                id: "sonnet".to_string(),
+                provider: "anthropic".to_string(),
+                name: "claude-sonnet-4-6".to_string(),
+            },
+            ModelConfig {
+                id: "gpt4o".to_string(),
+                provider: "openai".to_string(),
+                name: "gpt-4o".to_string(),
+            },
+        ];
+        cfg.roles.insert(
+            "planner".to_string(),
+            RoleConfig {
+                model: "sonnet".to_string(),
+                runtime: "claude-code".to_string(),
+                agent_teams: false,
+            },
+        );
+        cfg.runtimes.insert(
+            "claude-code".to_string(),
+            crate::config::RuntimeConfig {
+                kind: "subprocess".to_string(),
+                binary: Some("claude-test".to_string()),
+                supports_mcp: true,
+                supports_agent_teams: true,
+            },
+        );
+        cfg.runtimes.insert(
+            "codex".to_string(),
+            crate::config::RuntimeConfig {
+                kind: "subprocess".to_string(),
+                binary: Some("codex-test".to_string()),
+                supports_mcp: false,
+                supports_agent_teams: false,
+            },
+        );
+        cfg
+    }
+
+    #[test]
+    fn role_model_override_accepts_model_id() {
+        let cfg = config_with_models();
+        let model = resolve_role_model(&cfg, "planner", Some("gpt4o"), "fallback").unwrap();
+        assert_eq!(model, "gpt-4o");
+    }
+
+    #[test]
+    fn role_model_override_accepts_model_name() {
+        let cfg = config_with_models();
+        let model =
+            resolve_role_model(&cfg, "planner", Some("claude-sonnet-4-6"), "fallback").unwrap();
+        assert_eq!(model, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn role_model_uses_configured_role_without_override() {
+        let cfg = config_with_models();
+        let model = resolve_role_model(&cfg, "planner", None, "fallback").unwrap();
+        assert_eq!(model, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn role_model_rejects_unknown_override() {
+        let cfg = config_with_models();
+        let err = resolve_role_model(&cfg, "planner", Some("missing"), "fallback").unwrap_err();
+        assert!(format!("{:#}", err).contains("unknown planner model override"));
+    }
+
+    #[test]
+    fn role_cli_spec_uses_configured_runtime_binary_and_model_name() {
+        let mut cfg = config_with_models();
+        cfg.roles.insert(
+            "planner".to_string(),
+            RoleConfig {
+                model: "gpt4o".to_string(),
+                runtime: "codex".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        let spec = resolve_role_cli_spec(&cfg, "planner", None, "fallback", "claude-code").unwrap();
+
+        assert_eq!(
+            spec.runtime,
+            crate::roles::cli_subprocess::RoleCliRuntime::Codex
+        );
+        assert_eq!(spec.binary, "codex-test");
+        assert_eq!(spec.model, "gpt-4o");
+    }
+
+    #[test]
+    fn role_cli_spec_injects_anthropic_provider_env_for_claude_runtime() {
+        let mut cfg = config_with_models();
+        cfg.providers.insert(
+            "anthropic".to_string(),
+            crate::config::ProviderConfig {
+                kind: "anthropic".to_string(),
+                api_key: Some("sk-test-secret".to_string()),
+                base_url: Some("https://api.minimaxi.com/anthropic".to_string()),
+            },
+        );
+
+        let spec = resolve_role_cli_spec(&cfg, "planner", None, "fallback", "claude-code").unwrap();
+
+        assert_eq!(
+            spec.runtime,
+            crate::roles::cli_subprocess::RoleCliRuntime::ClaudeCode
+        );
+        assert_eq!(spec.model, "claude-sonnet-4-6");
+        assert!(spec.bypass_permissions);
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_BASE_URL".to_string(),
+            "https://api.minimaxi.com/anthropic".to_string()
+        )));
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_AUTH_TOKEN".to_string(),
+            "sk-test-secret".to_string()
+        )));
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_API_KEY".to_string(),
+            "sk-test-secret".to_string()
+        )));
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_MODEL".to_string(),
+            "claude-sonnet-4-6".to_string()
+        )));
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
+            "claude-sonnet-4-6".to_string()
+        )));
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME".to_string(),
+            "claude-sonnet-4-6".to_string()
+        )));
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(),
+            "claude-sonnet-4-6".to_string()
+        )));
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME".to_string(),
+            "claude-sonnet-4-6".to_string()
+        )));
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
+            "claude-sonnet-4-6".to_string()
+        )));
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME".to_string(),
+            "claude-sonnet-4-6".to_string()
+        )));
+        assert!(!format!("{spec:?}").contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn role_cli_spec_maps_minimax_openai_provider_for_claude_runtime() {
+        let mut cfg = config_with_models();
+        cfg.providers.insert(
+            "minimax".to_string(),
+            crate::config::ProviderConfig {
+                kind: "openai".to_string(),
+                api_key: Some("sk-test-secret".to_string()),
+                base_url: Some("https://api.minimaxi.com/v1".to_string()),
+            },
+        );
+        cfg.models.push(ModelConfig {
+            id: "minimax-m3-claude".to_string(),
+            provider: "minimax".to_string(),
+            name: "MiniMax-M3".to_string(),
+        });
+        cfg.roles.insert(
+            "planner".to_string(),
+            RoleConfig {
+                model: "minimax-m3-claude".to_string(),
+                runtime: "claude-code".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        let spec = resolve_role_cli_spec(&cfg, "planner", None, "fallback", "codex").unwrap();
+
+        assert_eq!(
+            spec.runtime,
+            crate::roles::cli_subprocess::RoleCliRuntime::ClaudeCode
+        );
+        assert_eq!(spec.model, "MiniMax-M3");
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_BASE_URL".to_string(),
+            "https://api.minimaxi.com/anthropic".to_string()
+        )));
+        assert!(spec
+            .env
+            .contains(&("ANTHROPIC_MODEL".to_string(), "MiniMax-M3".to_string())));
+        assert!(spec.env.contains(&(
+            "ANTHROPIC_API_KEY".to_string(),
+            "sk-test-secret".to_string()
+        )));
+        assert!(!format!("{spec:?}").contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn role_cli_spec_respects_disabled_claude_permission_bypass() {
+        let mut cfg = config_with_models();
+        cfg.behavior.cc_bypass_permissions = false;
+
+        let spec = resolve_role_cli_spec(&cfg, "planner", None, "fallback", "claude-code").unwrap();
+
+        assert_eq!(
+            spec.runtime,
+            crate::roles::cli_subprocess::RoleCliRuntime::ClaudeCode
+        );
+        assert!(!spec.bypass_permissions);
+    }
+
+    #[test]
+    fn role_cli_spec_injects_openai_compatible_provider_for_codex_runtime() {
+        let mut cfg = config_with_models();
+        cfg.providers.insert(
+            "minimax".to_string(),
+            crate::config::ProviderConfig {
+                kind: "openai".to_string(),
+                api_key: Some("sk-test-secret".to_string()),
+                base_url: Some("https://api.minimaxi.com/v1".to_string()),
+            },
+        );
+        cfg.models.push(ModelConfig {
+            id: "minimax-m3-codex".to_string(),
+            provider: "minimax".to_string(),
+            name: "MiniMax-M3".to_string(),
+        });
+        cfg.roles.insert(
+            "worker-codex".to_string(),
+            RoleConfig {
+                model: "minimax-m3-codex".to_string(),
+                runtime: "codex".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        let spec = resolve_role_cli_spec(&cfg, "worker-codex", None, "fallback", "codex").unwrap();
+
+        assert_eq!(
+            spec.runtime,
+            crate::roles::cli_subprocess::RoleCliRuntime::Codex
+        );
+        assert_eq!(spec.model, "MiniMax-M3");
+        assert!(spec.env.contains(&(
+            "TIFFANY_MINIMAX_API_KEY".to_string(),
+            "sk-test-secret".to_string()
+        )));
+        assert!(spec
+            .config_overrides
+            .contains(&("model_provider".to_string(), "minimax".to_string())));
+        assert!(spec.config_overrides.contains(&(
+            "model_providers.minimax.base_url".to_string(),
+            "https://api.minimaxi.com/v1".to_string()
+        )));
+        assert!(spec.config_overrides.contains(&(
+            "model_providers.minimax.wire_api".to_string(),
+            "responses".to_string()
+        )));
+        assert!(spec.config_overrides.contains(&(
+            "model_providers.minimax.env_key".to_string(),
+            "TIFFANY_MINIMAX_API_KEY".to_string()
+        )));
+        assert!(!format!("{spec:?}").contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn provider_setup_uses_minimax_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+
+        setup_provider(&path, "minimax", None, None, None, None, false, false).unwrap();
+
+        let body = std::fs::read_to_string(path).unwrap();
+        assert!(body.contains("minimax:"));
+        assert!(body.contains("type: openai"));
+        assert!(body.contains("api_key: ${MINIMAX_API_KEY}"));
+        assert!(body.contains("base_url: https://api.minimaxi.com/v1"));
+    }
+
+    #[test]
+    fn provider_setup_rejects_key_and_env_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+
+        let err = setup_provider(
+            &path,
+            "openai",
+            None,
+            Some("sk-test"),
+            Some("OPENAI_API_KEY"),
+            None,
+            false,
+            false,
+        )
+        .unwrap_err();
+
+        assert!(format!("{:#}", err).contains("use either --key or --env"));
+    }
+
+    #[test]
+    fn provider_setup_dry_run_does_not_write_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+
+        setup_provider(&path, "deepseek", None, None, None, None, true, false).unwrap();
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn provider_delete_removes_configured_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+
+        setup_provider(&path, "minimax", None, None, None, None, false, false).unwrap();
+        delete_provider(&path, "minimax", false).unwrap();
+
+        let body = std::fs::read_to_string(path).unwrap();
+        assert!(!body.contains("minimax:"));
+    }
+
+    #[test]
+    fn provider_setup_selector_preview_redacts_literal_key() {
+        let preview = provider_setup_command_preview(
+            "custom",
+            "openai",
+            None,
+            Some("sk-test-secret"),
+            Some("https://llm.example.com/v1"),
+        );
+
+        assert_eq!(
+            preview,
+            "config provider setup custom --type openai --key <redacted> --endpoint https://llm.example.com/v1"
+        );
+        assert!(!preview.contains("sk-test-secret"));
+    }
+}

@@ -1,0 +1,211 @@
+use crate::pipeline::orchestrator::RunProgress;
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct TiffanyProgressEvent {
+    pub role: &'static str,
+    pub status: &'static str,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issues: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+}
+
+impl From<RunProgress> for TiffanyProgressEvent {
+    fn from(event: RunProgress) -> Self {
+        match event {
+            RunProgress::Planning => Self {
+                role: "planner",
+                status: "running",
+                message: "planning".to_string(),
+                task_id: None,
+                agent: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+            },
+            RunProgress::Planned { sub_task_count } => Self {
+                role: "planner",
+                status: "done",
+                message: format!("plan ready - {sub_task_count} sub-task(s)"),
+                task_id: None,
+                agent: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: Some(sub_task_count),
+            },
+            RunProgress::Critiquing { round } => Self {
+                role: "critic",
+                status: "running",
+                message: format!("checking plan - round {round}"),
+                task_id: None,
+                agent: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+            },
+            RunProgress::CritiqueResult { approved, issues } => Self {
+                role: "critic",
+                status: if approved { "done" } else { "warning" },
+                message: if approved {
+                    "plan approved".to_string()
+                } else {
+                    format!("plan needs fixes - {issues} issue(s)")
+                },
+                task_id: None,
+                agent: None,
+                content: None,
+                approved: Some(approved),
+                issues: Some(issues),
+                count: None,
+            },
+            RunProgress::Replanning { attempt } => Self {
+                role: "planner",
+                status: "running",
+                message: format!("replanning - attempt {attempt}"),
+                task_id: None,
+                agent: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+            },
+            RunProgress::Executing { sub_task_count } => Self {
+                role: "worker",
+                status: "running",
+                message: format!("running {sub_task_count} sub-task(s)"),
+                task_id: None,
+                agent: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: Some(sub_task_count),
+            },
+            RunProgress::WorkerStarted { task_id, agent } => Self {
+                role: "worker",
+                status: "running",
+                message: format!("{agent} started"),
+                task_id: Some(task_id.to_string()),
+                agent: Some(agent),
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+            },
+            RunProgress::WorkerOutput {
+                task_id,
+                agent,
+                content,
+            } => Self {
+                role: "worker",
+                status: "output",
+                message: format!("{agent} output"),
+                task_id: Some(task_id.to_string()),
+                agent: Some(agent),
+                content: Some(content),
+                approved: None,
+                issues: None,
+                count: None,
+            },
+            RunProgress::RoleOutput { role, content } => {
+                let role = match role.as_str() {
+                    "planner" => "planner",
+                    "critic" => "critic",
+                    "reviewer" => "reviewer",
+                    "worker" => "worker",
+                    _ => "orchestrator",
+                };
+                Self {
+                    role,
+                    status: "output",
+                    message: format!("{role} output"),
+                    task_id: None,
+                    agent: None,
+                    content: Some(content),
+                    approved: None,
+                    issues: None,
+                    count: None,
+                }
+            }
+            RunProgress::WorkerDone { task_id, agent, ok } => Self {
+                role: "worker",
+                status: if ok { "done" } else { "failed" },
+                message: if ok {
+                    "worker done".to_string()
+                } else {
+                    "worker failed".to_string()
+                },
+                task_id: Some(task_id.to_string()),
+                agent: Some(agent),
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+            },
+            RunProgress::Reviewing { task_id } => Self {
+                role: "reviewer",
+                status: "running",
+                message: "reviewing worker output".to_string(),
+                task_id: Some(task_id.to_string()),
+                agent: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+            },
+            RunProgress::ReviewResult {
+                task_id,
+                approved,
+                issues,
+            } => Self {
+                role: "reviewer",
+                status: if approved { "done" } else { "warning" },
+                message: if approved {
+                    "review approved".to_string()
+                } else {
+                    format!("review needs fixes - {issues} issue(s)")
+                },
+                task_id: Some(task_id.to_string()),
+                agent: None,
+                content: None,
+                approved: Some(approved),
+                issues: Some(issues),
+                count: None,
+            },
+            RunProgress::Done { task_count } => Self {
+                role: "orchestrator",
+                status: "done",
+                message: format!("done - {task_count} sub-task(s)"),
+                task_id: None,
+                agent: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: Some(task_count),
+            },
+            RunProgress::Failed(message) => Self {
+                role: "orchestrator",
+                status: "failed",
+                message,
+                task_id: None,
+                agent: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+            },
+        }
+    }
+}

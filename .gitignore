@@ -1,0 +1,45 @@
+# Build artifacts
+/target/
+/tiffany-ui/codex-rs/target/
+**/*.rs.bk
+*.pdb
+
+# Local scratch / generated files
+__pycache__/
+*.py[cod]
+_refactor_tmp.py
+.orchestrator/
+orchestrator-handoff-*.md
+*.log
+
+# Local config & state
+config.yaml
+config.local.yaml
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Session logs (kept locally; can be re-shared via git if desired)
+sessions/
+*.jsonl
+!third_party/**/tests/fixtures/*.jsonl
+!tiffany-ui/**/tests/fixtures/*.jsonl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Env
+.env
+.env.*
+!.env.example

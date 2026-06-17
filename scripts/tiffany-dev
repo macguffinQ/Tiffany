@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+tiffany_home="${TIFFANY_HOME:-${HOME:-}/.tiffany}"
+if [[ "$tiffany_home" == "/.tiffany" ]]; then
+  echo "TIFFANY_HOME is not set and HOME is unavailable" >&2
+  exit 1
+fi
+mkdir -p "$tiffany_home"
+export TIFFANY_HOME="$tiffany_home"
+export TIFFANY_SQLITE_HOME="${TIFFANY_SQLITE_HOME:-$tiffany_home}"
+export CODEX_HOME="$tiffany_home"
+export CODEX_SQLITE_HOME="$TIFFANY_SQLITE_HOME"
+
+cargo_bin="${CARGO:-cargo}"
+if ! command -v "$cargo_bin" >/dev/null 2>&1; then
+  cargo_bin="$HOME/.cargo/bin/cargo"
+fi
+
+usage() {
+  cat <<'EOF'
+tiffany-dev - run tiffany-loop from this source checkout
+
+Usage:
+  ./scripts/tiffany-dev
+      Build ./target/debug/orchestrator when needed, then open the local
+      tiffany-loop TUI in orchestrator mode.
+
+  ./scripts/tiffany-dev orchestrator ["prompt"...]
+      Open the local TUI and route input through the orchestrator runtime.
+
+  ./scripts/tiffany-dev config ...
+  ./scripts/tiffany-dev roles|status|doctor|init|sessions|usage|events|acp ...
+      Run the local orchestrator CLI directly. These commands do not open the
+      TUI and do not require a tiffany-loop UI login.
+
+  ./scripts/tiffany-dev orchestrator --legacy ...
+      Use the legacy orchestrator terminal bridge.
+
+  ./scripts/tiffany-dev -- <raw tiffany args>
+      Pass arguments through to the local tiffany binary.
+
+Environment:
+  TIFFANY_HOME              UI config/state root, default: ~/.tiffany
+  TIFFANY_SQLITE_HOME       UI SQLite root, default: $TIFFANY_HOME
+  TIFFANY_ORCHESTRATOR_BIN  Orchestrator binary used by tiffany orchestrator
+  CARGO                     Cargo executable, default: cargo
+EOF
+}
+
+ensure_orchestrator_bin() {
+  if [[ -n "${TIFFANY_ORCHESTRATOR_BIN:-}" ]]; then
+    orchestrator_bin="$TIFFANY_ORCHESTRATOR_BIN"
+    if [[ ! -x "$orchestrator_bin" ]]; then
+      echo "TIFFANY_ORCHESTRATOR_BIN is not executable: $orchestrator_bin" >&2
+      exit 1
+    fi
+    return
+  fi
+
+  orchestrator_bin="$repo_dir/target/debug/orchestrator"
+  if [[ ! -x "$orchestrator_bin" ]]; then
+    (cd "$repo_dir" && "$cargo_bin" build --bin orchestrator)
+  fi
+}
+
+run_orchestrator_cli() {
+  ensure_orchestrator_bin
+  exec "$orchestrator_bin" "$@"
+}
+
+if [[ "$#" == "0" ]]; then
+  ensure_orchestrator_bin
+  cd "$repo_dir/tiffany-ui/codex-rs"
+  exec "$cargo_bin" run -p codex-cli --bin tiffany -- orchestrator --bin "$orchestrator_bin"
+fi
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
+  usage
+  exit 0
+fi
+
+case "${1:-}" in
+  config|roles|status|doctor|init|sessions|usage|events|acp)
+    run_orchestrator_cli "$@"
+    ;;
+esac
+
+if [[ "${1:-}" == "orchestrator" || "${1:-}" == "orch" || "${1:-}" == "team" ]]; then
+  subcommand="$1"
+  shift
+
+  has_bin_arg=0
+  for arg in "$@"; do
+    if [[ "$arg" == "--bin" || "$arg" == --bin=* ]]; then
+      has_bin_arg=1
+      break
+    fi
+  done
+
+  if [[ "$has_bin_arg" == "0" ]]; then
+    ensure_orchestrator_bin
+
+    cd "$repo_dir/tiffany-ui/codex-rs"
+    if [[ "$#" == "0" ]]; then
+      exec "$cargo_bin" run -p codex-cli --bin tiffany -- "$subcommand" --bin "$orchestrator_bin"
+    fi
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+      exec "$cargo_bin" run -p codex-cli --bin tiffany -- "$subcommand" "$@"
+    fi
+    if [[ "${1:-}" == "--" ]]; then
+      shift
+    fi
+    exec "$cargo_bin" run -p codex-cli --bin tiffany -- "$subcommand" --bin "$orchestrator_bin" "$@"
+  fi
+
+  cd "$repo_dir/tiffany-ui/codex-rs"
+  exec "$cargo_bin" run -p codex-cli --bin tiffany -- "$subcommand" "$@"
+fi
+
+cd "$repo_dir/tiffany-ui/codex-rs"
+exec "$cargo_bin" run -p codex-cli --bin tiffany -- "$@"
