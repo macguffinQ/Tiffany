@@ -209,7 +209,7 @@ tiffany orchestrator
 Inside the TUI, use `/provider` to configure providers and `/role` to register
 planner, critic, worker, and reviewer roles.
 
-Prebuilt binaries are published on the GitHub Releases page after each `v*` tag. Archives include both commands.
+Prebuilt macOS Apple Silicon binaries are published on the GitHub Releases page after each `v*` tag. Archives include both commands. Linux, Windows, and Intel Mac users can install from source while additional prebuilt targets are being staged.
 
 Source checkout for contributors:
 
@@ -237,7 +237,7 @@ chmod +x orchestrator tiffany
 ```
 
 The `tiffany-loop` package installs both `orchestrator` and `tiffany`; the current GitHub repository name remains `Tiffany`.
-The first release publishes Linux, Windows, and macOS Apple Silicon archives; Intel Macs can install from source or via Homebrew's source build path.
+Tag releases prioritize the macOS Apple Silicon archive used by Homebrew; Intel Macs, Linux, and Windows can install from source for now.
 Public Homebrew installs require the `macguffinQ/Tiffany` repository and release assets to be public.
 
 ## Quickstart

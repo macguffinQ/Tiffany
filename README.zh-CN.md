@@ -123,7 +123,7 @@ tiffany orchestrator
 
 进入 TUI 后，用 `/provider` 配置 provider，用 `/role` 注册 planner、critic、worker、reviewer 等角色。
 
-每个 `v*` tag 发布后，GitHub Releases 会提供预编译二进制，压缩包内也包含两个命令。
+每个 `v*` tag 发布后，GitHub Releases 会优先提供 macOS Apple Silicon 预编译二进制，压缩包内也包含两个命令。Linux、Windows 和 Intel Mac 目前可先从源码安装，后续再补更多预编译目标。
 
 贡献者源码运行：
 
@@ -151,7 +151,7 @@ chmod +x orchestrator tiffany
 ```
 
 `tiffany-loop` 安装包会提供 `orchestrator` 和 `tiffany` 两个二进制；当前 GitHub 仓库名仍是 `Tiffany`。
-首版 release 提供 Linux、Windows 和 macOS Apple Silicon 压缩包；Intel Mac 可以从源码安装，或走 Homebrew 的源码构建路径。
+tag release 目前优先提供 Homebrew 使用的 macOS Apple Silicon 压缩包；Intel Mac、Linux 和 Windows 可以先从源码安装。
 公开 Homebrew 安装要求 `macguffinQ/Tiffany` 仓库和 release assets 对外公开。
 
 ## 快速开始
