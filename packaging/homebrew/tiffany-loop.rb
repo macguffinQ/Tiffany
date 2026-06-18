@@ -12,7 +12,7 @@ class TiffanyLoop < Formula
 
   def install
     system "cargo", "install", *std_cargo_args, "--profile", "tiffany-dist"
-    system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/cli"), "--profile", "tiffany-dist"
+    system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/tiffany-cli"), "--profile", "tiffany-dist"
 
     if OS.mac? || OS.linux?
       system "strip", "#{bin}/orchestrator", "#{bin}/tiffany"

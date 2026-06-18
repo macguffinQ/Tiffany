@@ -17,10 +17,10 @@ cargo fmt -- --check
 cargo test --all
 cargo build --locked
 ./scripts/open-source-audit
-(cd tiffany-ui/codex-rs && cargo fmt -p codex-tui -p codex-cli -- --check)
+(cd tiffany-ui/codex-rs && cargo fmt -p codex-tui -p tiffany-cli -- --check)
 (cd tiffany-ui/codex-rs && cargo test -p codex-tui tiffany_orchestrator)
 (cd tiffany-ui/codex-rs && cargo test -p codex-tui slash_commands)
-(cd tiffany-ui/codex-rs && cargo build --locked -p codex-cli --bin tiffany)
+(cd tiffany-ui/codex-rs && cargo build --locked -p tiffany-cli --bin tiffany)
 ./scripts/tiffany-check --smoke
 ./scripts/tiffany-check --dist
 ./scripts/tiffany-clean-targets --sizes

@@ -13284,6 +13284,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tiffany-cli"
+version = "0.1.9"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-arg0",
+ "codex-config",
+ "codex-tui",
+ "supports-color 3.0.2",
+]
+
+[[package]]
 name = "time"
 version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"

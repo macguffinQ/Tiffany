@@ -70,7 +70,7 @@ jobs:
         working-directory: tiffany-ui/codex-rs
         run: |
           set -euo pipefail
-          cargo_args=(--profile tiffany-dist --locked -p codex-cli --bin tiffany)
+          cargo_args=(--profile tiffany-dist --locked -p tiffany-cli --bin tiffany)
           if [[ "${{ matrix.native }}" != "true" ]]; then
             cargo_args+=(--target "${{ matrix.target }}")
           fi
@@ -202,7 +202,7 @@ jobs:
                 bin.install "orchestrator", "tiffany"
               else
                 system "cargo", "install", *std_cargo_args, "--profile", "tiffany-dist"
-                system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/cli"), "--profile", "tiffany-dist"
+                system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/tiffany-cli"), "--profile", "tiffany-dist"
               end
 
               if OS.mac? || OS.linux?

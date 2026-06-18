@@ -97,7 +97,7 @@ cargo test --all
 cd tiffany-ui/codex-rs
 cargo fmt -- --check
 cargo test -p codex-tui tiffany_orchestrator --lib
-cargo build --locked -p codex-cli --bin tiffany
+cargo build --locked -p tiffany-cli --bin tiffany
 ```
 
 ## Target Integration

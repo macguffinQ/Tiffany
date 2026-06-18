@@ -115,6 +115,7 @@ members = [
     "state",
     "terminal-detection",
     "test-binary-support",
+    "tiffany-cli",
     "thread-manager-sample",
     "thread-store",
     "uds",

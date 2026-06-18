@@ -18,9 +18,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     "" \
     "Environment:" \
     "  TIFFANY_CARGO_TARGET_DIR  shared Cargo target dir, default: ./target" \
-    "  TIFFANY_NO_STRIP=1        keep symbols in --fast-release binaries" \
-    "  TIFFANY_CODE_MODE_RUNTIME=1" \
-    "                            include the heavier Codex code-mode/V8 runtime"
+    "  TIFFANY_NO_STRIP=1        keep symbols in --fast-release binaries"
   exit 0
 fi
 
@@ -64,11 +62,6 @@ done
 if [[ "${TIFFANY_QUIET:-0}" == "1" ]]; then
   cargo_flags+=(--quiet)
 fi
-ui_flags=()
-if [[ "${TIFFANY_CODE_MODE_RUNTIME:-0}" == "1" ]]; then
-  ui_flags+=(--features code-mode-runtime)
-fi
-
 run_build() {
   local label="$1"
   local dir="$2"
@@ -91,7 +84,7 @@ run_build() {
 }
 
 run_build "orchestrator" "$repo_dir" --bin orchestrator
-run_build "tiffany-loop UI" "$repo_dir/tiffany-ui/codex-rs" "${ui_flags[@]}" -p codex-cli --bin tiffany
+run_build "tiffany-loop UI" "$repo_dir/tiffany-ui/codex-rs" -p tiffany-cli --bin tiffany
 
 if [[ "$dist_mode" == "1" && "${TIFFANY_NO_STRIP:-0}" != "1" ]]; then
   case "$(uname -s)" in

@@ -83,7 +83,7 @@ run_orchestrator_cli() {
 if [[ "$#" == "0" ]]; then
   ensure_orchestrator_bin
   cd "$repo_dir/tiffany-ui/codex-rs"
-  exec "$cargo_bin" run -p codex-cli --bin tiffany -- orchestrator --bin "$orchestrator_bin"
+  exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- orchestrator --bin "$orchestrator_bin"
 fi
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
@@ -96,6 +96,10 @@ case "${1:-}" in
     run_orchestrator_cli "$@"
     ;;
 esac
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
 
 if [[ "${1:-}" == "orchestrator" || "${1:-}" == "orch" || "${1:-}" == "team" ]]; then
   subcommand="$1"
@@ -114,20 +118,20 @@ if [[ "${1:-}" == "orchestrator" || "${1:-}" == "orch" || "${1:-}" == "team" ]];
 
     cd "$repo_dir/tiffany-ui/codex-rs"
     if [[ "$#" == "0" ]]; then
-      exec "$cargo_bin" run -p codex-cli --bin tiffany -- "$subcommand" --bin "$orchestrator_bin"
+      exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$subcommand" --bin "$orchestrator_bin"
     fi
     if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-      exec "$cargo_bin" run -p codex-cli --bin tiffany -- "$subcommand" "$@"
+      exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$subcommand" "$@"
     fi
     if [[ "${1:-}" == "--" ]]; then
       shift
     fi
-    exec "$cargo_bin" run -p codex-cli --bin tiffany -- "$subcommand" --bin "$orchestrator_bin" "$@"
+    exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$subcommand" --bin "$orchestrator_bin" "$@"
   fi
 
   cd "$repo_dir/tiffany-ui/codex-rs"
-  exec "$cargo_bin" run -p codex-cli --bin tiffany -- "$subcommand" "$@"
+  exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$subcommand" "$@"
 fi
 
 cd "$repo_dir/tiffany-ui/codex-rs"
-exec "$cargo_bin" run -p codex-cli --bin tiffany -- "$@"
+exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$@"
