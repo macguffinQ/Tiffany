@@ -4,9 +4,9 @@ class TiffanyLoop < Formula
 
   # Template only. The release workflow writes the published tap formula with
   # the current tag, archive URL, and checksums.
-  url "https://github.com/macguffinQ/Tiffany/archive/refs/tags/v0.1.8.tar.gz"
+  url "https://github.com/macguffinQ/Tiffany/archive/refs/tags/v0.1.9.tar.gz"
   sha256 "REPLACE_WITH_RELEASE_SOURCE_SHA256"
-  version "0.1.8"
+  version "0.1.9"
 
   depends_on "rust" => :build
 
