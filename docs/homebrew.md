@@ -45,14 +45,17 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 Name: HOMEBREW_TAP_TOKEN
 ```
 
-After that, pushing a tag like `v0.1.7` will:
+After that, pushing a tag like `v0.1.8` will:
 
 1. Build the macOS Apple Silicon release archive used by Homebrew.
 2. Publish the GitHub Release.
 3. Update `macguffinQ/homebrew-tap` with a `tiffany-loop` formula that installs both
    `orchestrator` and `tiffany`.
 
-The generated formula uses the prebuilt macOS Apple Silicon archive on Apple Silicon Macs. Intel Macs, Linuxbrew, and other platforms build from the tagged source archive until additional release archives are wired into the formula.
+The current release matrix publishes a prebuilt `aarch64-apple-darwin` archive.
+The generated formula uses that archive on Apple Silicon Macs. Intel Macs,
+Linuxbrew, and other platforms build from the tagged source archive until
+additional release archives are wired into the workflow and formula.
 
 The workflow computes checksums from authenticated GitHub APIs, so it works while the main repository is private and continues to work after the repository is public.
 
@@ -67,7 +70,7 @@ git ls-remote --heads https://github.com/macguffinQ/homebrew-tap.git main
 Manual tap update fallback:
 
 ```bash
-tag=v0.1.7
+tag=v0.1.8
 version="${tag#v}"
 asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
 
@@ -107,4 +110,4 @@ tar -tzf "/tmp/${asset}" | head
 
 ## Formula template
 
-See `packaging/homebrew/tiffany-loop.rb`. It is a source-build template; the release workflow generates the published formula with real archive URLs and checksums.
+See `packaging/homebrew/tiffany-loop.rb`. It is a source-build template; the release workflow generates the published formula with the current tag, archive URLs, and checksums.

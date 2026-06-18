@@ -23,6 +23,7 @@ cargo build --locked
 (cd tiffany-ui/codex-rs && cargo build --locked -p codex-cli --bin tiffany)
 ./scripts/tiffany-check --smoke
 ./scripts/tiffany-check --dist
+./scripts/tiffany-clean-targets --sizes
 ```
 
 - [ ] Review all files under `~/.orchestrator` before sharing logs or examples.
@@ -51,7 +52,8 @@ find . -path './target' -prune -o -path './tiffany-ui/codex-rs/target' -prune -o
 ```bash
 cargo fmt -- --check
 cargo test --all
-cargo build --release --locked
+./scripts/open-source-audit
+./scripts/tiffany-check --dist
 ./scripts/tiffany-build --release --locked
 cargo package --allow-dirty
 ```

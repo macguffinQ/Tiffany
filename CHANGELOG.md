@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Expanded `./scripts/tiffany-clean-targets` with `--top`, `--top-deep`, and
+  `--incremental` diagnostics/cleanup modes for managing large local target
+  directories.
+
+### Changed
+
+- Redirected direct Cargo commands inside the `tiffany-ui/codex-rs` fork to the
+  shared root `./target` directory, so local development no longer creates a
+  second large fork-local target cache.
+- Reduced debug/test artifact growth with limited debug info and disabled Cargo
+  incremental builds in CI and Tiffany Integration.
+
+## [0.1.8] - 2026-06-19
+
+### Changed
+
+- Made the heavy Codex code-mode/V8 runtime optional and disabled it in the
+  default `tiffany` build; set `TIFFANY_CODE_MODE_RUNTIME=1` to include it.
+- Stripped final distributable binaries after build instead of stripping
+  intermediate proc-macro artifacts.
+- Improved release cache diagnostics and target cleanup commands.
+- Updated the published release and Homebrew tap to `v0.1.8`.
+
+## [0.1.7] - 2026-06-19
+
+### Added
+
+- Added a fast Tiffany smoke check for local and CI verification.
+- Split Tiffany Integration into its own workflow.
+- Added richer doctor diagnostics for local install, toolchain, Homebrew, and
+  worker CLI discovery.
+
+### Changed
+
+- Improved release workflow reliability and build timing diagnostics.
+
 ## [0.1.6] - 2026-06-19
 
 ### Added
@@ -47,7 +85,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Release packaging now publishes Linux, Windows, and macOS Apple Silicon binaries while Intel macOS uses the Homebrew source build path.
+- Release packaging publishes the macOS Apple Silicon archive used by Homebrew.
+  Intel macOS, Linux, and Windows use the source build path until additional
+  prebuilt target archives are added.
 
 ## [0.1.3] - 2026-06-15
 

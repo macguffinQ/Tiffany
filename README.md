@@ -566,15 +566,17 @@ See `docs/architecture.md` for the full layered architecture.
 
 ### Why Rust?
 
-- **Speed**: 18 MB single binary, sub-100ms startup
-- **zellij-grade reliability**: matches the tool's ecosystem
+- **Fast control plane**: `orchestrator` stays small and quick to start, while
+  the heavier `tiffany` TUI carries the full terminal UI stack.
+- **Terminal reliability**: matches the tool's ecosystem
 - **Async-first**: tokio for subprocess management + event streaming
 - **No GC pauses**: stays responsive in terminal chat mode
 - **Mature crates**: `crossterm`, `axum`, `rusqlite`, `git2`, `reqwest`, `tokio` - all battle-tested
 
 ### Why subprocess-based CC integration (not the SDK)?
 
-- The `claude-agent-sdk` is Python/TS only — we'd lose single-binary
+- The `claude-agent-sdk` is Python/TS only; using the CLI keeps runtime
+  integration language-agnostic and easy to package.
 - CC's own session JSONL files (`~/.claude/projects/.../sessions/*.jsonl`) are the source of truth
 - CC's CLI is the most stable API — SDK changes don't affect us
 - We read CC's events from the JSONL stream in real time
