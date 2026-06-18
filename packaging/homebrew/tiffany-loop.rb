@@ -11,8 +11,8 @@ class TiffanyLoop < Formula
   depends_on "rust" => :build
 
   def install
-    system "cargo", "install", *std_cargo_args
-    system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/cli")
+    system "cargo", "install", *std_cargo_args, "--profile", "tiffany-dist"
+    system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/cli"), "--profile", "tiffany-dist"
   end
 
   test do

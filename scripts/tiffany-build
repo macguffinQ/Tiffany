@@ -9,11 +9,15 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     "" \
     "Builds both binaries:" \
     "  - target/*/orchestrator" \
-    "  - tiffany-ui/codex-rs/target/*/tiffany" \
+    "  - target/*/tiffany" \
     "" \
     "Examples:" \
     "  ./scripts/tiffany-build" \
-    "  ./scripts/tiffany-build --release --locked"
+    "  ./scripts/tiffany-build --release --locked" \
+    "  ./scripts/tiffany-build --fast-release --locked" \
+    "" \
+    "Environment:" \
+    "  TIFFANY_CARGO_TARGET_DIR  shared Cargo target dir, default: ./target"
   exit 0
 fi
 
@@ -22,7 +26,24 @@ if ! command -v "$cargo_bin" >/dev/null 2>&1; then
   cargo_bin="$HOME/.cargo/bin/cargo"
 fi
 
-cargo_flags=("$@")
+target_dir="${TIFFANY_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_dir/target}}"
+case "$target_dir" in
+  /*) ;;
+  *) target_dir="$repo_dir/$target_dir" ;;
+esac
+export CARGO_TARGET_DIR="$target_dir"
+
+cargo_flags=()
+for arg in "$@"; do
+  case "$arg" in
+    --fast-release|--dist)
+      cargo_flags+=(--profile tiffany-dist)
+      ;;
+    *)
+      cargo_flags+=("$arg")
+      ;;
+  esac
+done
 if [[ "${TIFFANY_QUIET:-0}" == "1" ]]; then
   cargo_flags+=(--quiet)
 fi

@@ -8,7 +8,14 @@ if ! command -v "$cargo_bin" >/dev/null 2>&1; then
   cargo_bin="$HOME/.cargo/bin/cargo"
 fi
 
-TIFFANY_QUIET=1 "$repo_dir/scripts/tiffany-build"
+target_dir="${TIFFANY_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_dir/target}}"
+case "$target_dir" in
+  /*) ;;
+  *) target_dir="$repo_dir/$target_dir" ;;
+esac
+export CARGO_TARGET_DIR="$target_dir"
+
+TIFFANY_QUIET=1 "$repo_dir/scripts/tiffany-build" --fast-release --locked
 
 echo "checking tiffany-loop fork format..."
 fmt_log="$(mktemp)"
@@ -24,9 +31,11 @@ echo "checking tiffany-loop CLI help..."
 "$repo_dir/scripts/tiffany-dev" --help >/dev/null 2>&1
 
 echo "checking orchestrator bridge..."
-"$repo_dir/scripts/tiffany-dev" orchestrator --legacy status >/dev/null 2>&1
+"$target_dir/tiffany-dist/tiffany" orchestrator \
+  --bin "$target_dir/tiffany-dist/orchestrator" \
+  --legacy status >/dev/null 2>&1
 
 echo "checking orchestrator event stream..."
-"$repo_dir/target/debug/orchestrator" events --help >/dev/null 2>&1
+"$target_dir/tiffany-dist/orchestrator" events --help >/dev/null 2>&1
 
 echo "check passed"

@@ -521,6 +521,14 @@ strip = false
 # Balance parallel release code generation against binary size.
 codegen-units = 4
 
+[profile.tiffany-dist]
+inherits = "release"
+opt-level = 1
+lto = false
+debug = "none"
+split-debuginfo = "off"
+codegen-units = 16
+
 [profile.profiling]
 inherits = "release"
 debug = "full"

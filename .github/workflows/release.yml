@@ -14,10 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-      CARGO_PROFILE_RELEASE_DEBUG: "0"
-      CARGO_PROFILE_RELEASE_LTO: "false"
-      CARGO_PROFILE_RELEASE_STRIP: "symbols"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     strategy:
       fail-fast: false
       matrix:
@@ -37,14 +34,17 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
 
       - name: Build orchestrator
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --profile tiffany-dist --locked --target ${{ matrix.target }} --bin orchestrator
 
       - name: Build tiffany-loop UI
         shell: bash
         working-directory: tiffany-ui/codex-rs
-        run: cargo build --release --locked --target ${{ matrix.target }} -p codex-cli --bin tiffany
+        run: cargo build --profile tiffany-dist --locked --target ${{ matrix.target }} -p codex-cli --bin tiffany
 
       - name: Package
         shell: bash
@@ -56,11 +56,12 @@ jobs:
           mkdir -p "${staging}"
 
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            cp "target/${{ matrix.target }}/release/orchestrator.exe" "${staging}/"
-            cp "tiffany-ui/codex-rs/target/${{ matrix.target }}/release/tiffany.exe" "${staging}/"
+            cp "target/${{ matrix.target }}/tiffany-dist/orchestrator.exe" "${staging}/"
+            cp "target/${{ matrix.target }}/tiffany-dist/tiffany.exe" "${staging}/"
           else
-            cp "target/${{ matrix.target }}/release/orchestrator" "${staging}/"
-            cp "tiffany-ui/codex-rs/target/${{ matrix.target }}/release/tiffany" "${staging}/"
+            cp "target/${{ matrix.target }}/tiffany-dist/orchestrator" "${staging}/"
+            cp "target/${{ matrix.target }}/tiffany-dist/tiffany" "${staging}/"
+            strip "${staging}/orchestrator" "${staging}/tiffany" || true
           fi
 
           cp README.md README.zh-CN.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md "${staging}/"
@@ -163,8 +164,8 @@ jobs:
               if OS.mac? && Hardware::CPU.arm?
                 bin.install "orchestrator", "tiffany"
               else
-                system "cargo", "install", *std_cargo_args
-                system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/cli")
+                system "cargo", "install", *std_cargo_args, "--profile", "tiffany-dist"
+                system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/cli"), "--profile", "tiffany-dist"
               end
             end
 

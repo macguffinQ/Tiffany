@@ -84,11 +84,13 @@ User task
 
 ```bash
 cargo build --release
-./scripts/tiffany-build --release --locked
+./scripts/tiffany-build --fast-release --locked
 ```
 
-The root release binary lands at `target/release/orchestrator`; the primary UI
-binary lands at `tiffany-ui/codex-rs/target/release/tiffany`.
+The build scripts use a shared Cargo target directory. The root release binary
+lands at `target/release/orchestrator` for a normal release build, and the
+primary UI binary lands next to it as `target/release/tiffany`. Fast
+distributable builds use `target/tiffany-dist/`.
 
 ## Terminal chat
 

@@ -19,6 +19,13 @@ if ! command -v "$cargo_bin" >/dev/null 2>&1; then
   cargo_bin="$HOME/.cargo/bin/cargo"
 fi
 
+target_dir="${TIFFANY_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_dir/target}}"
+case "$target_dir" in
+  /*) ;;
+  *) target_dir="$repo_dir/$target_dir" ;;
+esac
+export CARGO_TARGET_DIR="$target_dir"
+
 usage() {
   cat <<'EOF'
 tiffany-dev - run tiffany-loop from this source checkout
@@ -46,6 +53,7 @@ Environment:
   TIFFANY_HOME              UI config/state root, default: ~/.tiffany
   TIFFANY_SQLITE_HOME       UI SQLite root, default: $TIFFANY_HOME
   TIFFANY_ORCHESTRATOR_BIN  Orchestrator binary used by tiffany orchestrator
+  TIFFANY_CARGO_TARGET_DIR  shared Cargo target dir, default: ./target
   CARGO                     Cargo executable, default: cargo
 EOF
 }
@@ -60,7 +68,7 @@ ensure_orchestrator_bin() {
     return
   fi
 
-  orchestrator_bin="$repo_dir/target/debug/orchestrator"
+  orchestrator_bin="$target_dir/debug/orchestrator"
   if [[ ! -x "$orchestrator_bin" ]]; then
     (cd "$repo_dir" && "$cargo_bin" build --bin orchestrator)
   fi

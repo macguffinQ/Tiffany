@@ -27,6 +27,8 @@ land in the fork and keep the upstream terminal architecture intact.
 - `./scripts/tiffany-dev` defaults to `tiffany orchestrator --bin
   target/debug/orchestrator`, building the local debug `orchestrator` binary
   first when needed.
+- Source helper scripts share `./target` between the root orchestrator crate and
+  the tiffany-loop UI fork to avoid duplicate Cargo intermediate artifacts.
 - `./scripts/tiffany-dev orchestrator` is the explicit spelling for the same
   native adapter mode.
 - `orchestrator tui` delegates to an installed adjacent or PATH `tiffany`

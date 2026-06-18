@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./scripts/tiffany-clean-targets
+      Remove the old tiffany-ui/codex-rs/target directory.
+
+  ./scripts/tiffany-clean-targets --all
+      Remove both ./target and tiffany-ui/codex-rs/target.
+
+By default the shared ./target directory is kept, so normal incremental builds
+remain warm.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+legacy_target="$repo_dir/tiffany-ui/codex-rs/target"
+shared_target="$repo_dir/target"
+
+if [[ -d "$legacy_target" ]]; then
+  echo "removing legacy target: $legacy_target"
+  rm -rf "$legacy_target"
+else
+  echo "legacy target already absent: $legacy_target"
+fi
+
+if [[ "${1:-}" == "--all" ]]; then
+  if [[ -d "$shared_target" ]]; then
+    echo "removing shared target: $shared_target"
+    rm -rf "$shared_target"
+  else
+    echo "shared target already absent: $shared_target"
+  fi
+fi

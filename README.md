@@ -67,7 +67,7 @@ Development entrypoints:
 - `./scripts/tiffany-dev orchestrator "..."` - run the orchestrator pipeline immediately with an initial prompt; native mode defaults worker execution to Claude Code (`worker-cc`), and later input-box submissions are routed into the same orchestrator pipeline.
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml` - use a specific orchestrator config while keeping tiffany-loop UI config isolated under `TIFFANY_HOME`.
 - `./scripts/tiffany-dev orchestrator --legacy ...` - compatibility bridge to the old orchestrator CLI.
-- `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI.
+- `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI in the shared `./target` directory. Use `--fast-release` for a faster distributable build.
 - `./scripts/tiffany-check` - build, format-check the fork, and verify the legacy bridge plus event-stream entrypoint.
 
 tiffany-loop keeps fork state separate from upstream UI source. The fork uses `TIFFANY_HOME`, defaulting to `~/.tiffany`, and maps UI-internal config reads to `~/.tiffany/config.toml` instead of the upstream default config directory. SQLite state defaults to the same root through `TIFFANY_SQLITE_HOME`. Override with `TIFFANY_HOME=/path/to/tiffany-home`.
@@ -223,8 +223,8 @@ cd ~/code/orchestrator
 Manual source install, if you want the commands in `PATH` without Homebrew:
 
 ```bash
-cargo install --path .
-cargo install --path tiffany-ui/codex-rs/cli
+cargo install --path . --profile tiffany-dist
+cargo install --path tiffany-ui/codex-rs/cli --profile tiffany-dist
 ```
 
 ```bash
@@ -344,8 +344,9 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 |---|---|
 | `./scripts/tiffany-dev` | Run the tiffany-loop UI |
 | `./scripts/tiffany-dev orchestrator` | Bridge from the tiffany-loop fork into the existing orchestrator runtime |
-| `./scripts/tiffany-build [args]` | Build both orchestrator and the tiffany-loop UI; forwards args such as `--release --locked` |
+| `./scripts/tiffany-build [args]` | Build both binaries in shared `./target`; forwards args such as `--release --locked`, or use `--fast-release --locked` |
 | `./scripts/tiffany-check` | Run the local fork/bridge verification |
+| `./scripts/tiffany-clean-targets` | Remove the old `tiffany-ui/codex-rs/target` build cache |
 | `tiffany orchestrator` | Open the primary tiffany-loop UI after install |
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
 | `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
@@ -570,6 +571,7 @@ cargo build              # debug, ~30s incremental
 cargo build --release    # release, ~5-8min first time
 ./scripts/tiffany-build   # orchestrator + tiffany-loop UI
 ./scripts/tiffany-build --release --locked
+./scripts/tiffany-build --fast-release --locked
 
 # Test
 cargo test               # run unit and integration tests
