@@ -52,6 +52,52 @@ land in the fork and keep the upstream terminal architecture intact.
 - Rebase `tiffany-ui/` from upstream UI source regularly.
 - Preserve Apache-2.0 license and notice files for copied or forked upstream UI code.
 
+## Upstream Sync
+
+Treat `tiffany-ui/` as an upstream fork, not as one-time copied code. Future
+Codex UI fixes should be pulled from `https://github.com/openai/codex` and then
+Tiffany changes should be re-applied only at the adapter boundary.
+
+Recommended sync flow:
+
+```bash
+cd /tmp
+git clone https://github.com/openai/codex codex-upstream
+cd /Users/allendred/code/orchestrator
+git checkout -b sync/codex-$(date +%Y%m%d)
+rsync -a --delete \
+  --exclude .git \
+  --exclude target \
+  --exclude node_modules \
+  /tmp/codex-upstream/ tiffany-ui/
+git diff -- tiffany-ui
+```
+
+After the upstream copy, restore or re-apply Tiffany-owned changes only in these
+areas:
+
+- `tiffany-ui/TIFFANY_FORK.md`
+- `tiffany-ui/codex-rs/cli` command naming and `tiffany orchestrator` entry
+- `tiffany-ui/codex-rs/tui/src/tiffany_orchestrator.rs`
+- small hook points that route native input, pending queue, provider, role, and
+  doctor panels into the orchestrator bridge
+- release packaging paths that install both `orchestrator` and `tiffany`
+
+If a sync requires broad edits to upstream render, resize, history, bottom pane,
+or terminal event code, stop and move the Tiffany behavior back behind the
+adapter. The patch surface is the maintenance budget.
+
+Run this validation before merging an upstream sync:
+
+```bash
+cargo fmt -- --check
+cargo test --all
+cd tiffany-ui/codex-rs
+cargo fmt -- --check
+cargo test -p codex-tui tiffany_orchestrator --lib
+cargo build --locked -p codex-cli --bin tiffany
+```
+
 ## Target Integration
 
 ```text
