@@ -76,7 +76,7 @@ provider 配置、角色路由、事件流和 runtime 执行。`orchestrator tui
 - `./scripts/tiffany-dev orchestrator "..."`：带初始问题立即运行 orchestrator 流程；native mode 默认执行者是 Claude Code（`worker-cc`），进入后输入框继续提交也会走 orchestrator。
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml`：指定 orchestrator 配置文件，同时继续让 tiffany-loop UI 配置隔离在 `TIFFANY_HOME`。
 - `./scripts/tiffany-dev orchestrator --legacy ...`：兼容旧 orchestrator CLI 桥接。
-- `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；需要更快的可分发构建时用 `--fast-release`。
+- `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；需要更快的可分发构建时用 `--fast-release`，最终二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。
 - `./scripts/tiffany-check --smoke`：debug 构建、检查 fork 格式，并验证 legacy bridge 和事件流入口。
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
 - `./scripts/tiffany-clean-targets --sizes|--dist|--debug`：查看构建缓存大小，或只清理 release/debug 构建产物，避免 `target/` 膨胀。
@@ -146,6 +146,7 @@ cd ~/code/orchestrator
 ```bash
 cargo install --path . --profile tiffany-dist
 cargo install --path tiffany-ui/codex-rs/cli --profile tiffany-dist
+strip "$(command -v orchestrator)" "$(command -v tiffany)" 2>/dev/null || true
 ```
 
 ```bash
@@ -260,7 +261,7 @@ behavior:
 | `./scripts/tiffany-dev` | 运行 tiffany-loop UI |
 | `./scripts/tiffany-dev setup` | 从源码运行首次配置向导 |
 | `./scripts/tiffany-dev orchestrator` | 从 tiffany-loop fork 桥接到现有 orchestrator runtime |
-| `./scripts/tiffany-build [args]` | 在共享 `./target` 中同时构建两个二进制；可透传 `--release --locked`，也可用 `--fast-release --locked` |
+| `./scripts/tiffany-build [args]` | 在共享 `./target` 中同时构建两个二进制；可透传 `--release --locked`，也可用默认 strip 的 `--fast-release --locked` |
 | `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge 验证 |
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge 验证 |
 | `./scripts/tiffany-clean-targets --sizes|--dist|--debug` | 查看或精简共享/旧 Cargo 构建缓存 |

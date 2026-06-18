@@ -17,7 +17,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     "  ./scripts/tiffany-build --fast-release --locked" \
     "" \
     "Environment:" \
-    "  TIFFANY_CARGO_TARGET_DIR  shared Cargo target dir, default: ./target"
+    "  TIFFANY_CARGO_TARGET_DIR  shared Cargo target dir, default: ./target" \
+    "  TIFFANY_NO_STRIP=1        keep symbols in --fast-release binaries"
   exit 0
 fi
 
@@ -34,15 +35,29 @@ esac
 export CARGO_TARGET_DIR="$target_dir"
 
 cargo_flags=()
+dist_mode=0
+prev_arg=""
 for arg in "$@"; do
   case "$arg" in
     --fast-release|--dist)
+      dist_mode=1
       cargo_flags+=(--profile tiffany-dist)
+      ;;
+    --profile=tiffany-dist)
+      dist_mode=1
+      cargo_flags+=("$arg")
+      ;;
+    tiffany-dist)
+      if [[ "$prev_arg" == "--profile" ]]; then
+        dist_mode=1
+      fi
+      cargo_flags+=("$arg")
       ;;
     *)
       cargo_flags+=("$arg")
       ;;
   esac
+  prev_arg="$arg"
 done
 if [[ "${TIFFANY_QUIET:-0}" == "1" ]]; then
   cargo_flags+=(--quiet)
@@ -71,5 +86,20 @@ run_build() {
 
 run_build "orchestrator" "$repo_dir" --bin orchestrator
 run_build "tiffany-loop UI" "$repo_dir/tiffany-ui/codex-rs" -p codex-cli --bin tiffany
+
+if [[ "$dist_mode" == "1" && "${TIFFANY_NO_STRIP:-0}" != "1" ]]; then
+  case "$(uname -s)" in
+    Darwin|Linux)
+      if command -v strip >/dev/null 2>&1; then
+        for binary in "$target_dir/tiffany-dist/orchestrator" "$target_dir/tiffany-dist/tiffany"; do
+          if [[ -x "$binary" ]]; then
+            echo "stripping $(basename "$binary")..."
+            strip "$binary" || true
+          fi
+        done
+      fi
+      ;;
+  esac
+fi
 
 echo "done"
