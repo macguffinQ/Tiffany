@@ -2272,7 +2272,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cli"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3963,7 +3963,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "arboard",
