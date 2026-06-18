@@ -17,6 +17,9 @@ doctest = false
 [lints]
 workspace = true
 
+[features]
+code-mode-runtime = ["codex-core/code-mode-runtime"]
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }

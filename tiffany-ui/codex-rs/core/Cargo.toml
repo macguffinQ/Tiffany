@@ -15,6 +15,9 @@ path = "src/bin/config_schema.rs"
 [lints]
 workspace = true
 
+[features]
+code-mode-runtime = ["codex-code-mode/runtime"]
+
 [dependencies]
 anyhow = { workspace = true }
 arc-swap = { workspace = true }

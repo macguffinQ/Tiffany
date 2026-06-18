@@ -68,7 +68,7 @@ Development entrypoints:
 - `./scripts/tiffany-dev orchestrator "..."` - run the orchestrator pipeline immediately with an initial prompt; native mode defaults worker execution to Claude Code (`worker-cc`), and later input-box submissions are routed into the same orchestrator pipeline.
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml` - use a specific orchestrator config while keeping tiffany-loop UI config isolated under `TIFFANY_HOME`.
 - `./scripts/tiffany-dev orchestrator --legacy ...` - compatibility bridge to the old orchestrator CLI.
-- `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI in the shared `./target` directory. Use `--fast-release` for a faster distributable build; final binaries are stripped unless `TIFFANY_NO_STRIP=1`.
+- `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI in the shared `./target` directory. Use `--fast-release` for a faster distributable build; final binaries are stripped unless `TIFFANY_NO_STRIP=1`. The default UI build omits the heavy Codex code-mode/V8 runtime; set `TIFFANY_CODE_MODE_RUNTIME=1` when you need it.
 - `./scripts/tiffany-check --smoke` - debug-build, format-check the fork, and verify the legacy bridge plus event-stream entrypoint.
 - `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
 - `./scripts/tiffany-clean-targets --sizes|--dist|--debug` - inspect build-cache size or remove only release/debug build outputs when `target/` grows too large.
@@ -355,7 +355,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `./scripts/tiffany-dev` | Run the tiffany-loop UI |
 | `./scripts/tiffany-dev setup` | Run the first-run setup wizard from source |
 | `./scripts/tiffany-dev orchestrator` | Bridge from the tiffany-loop fork into the existing orchestrator runtime |
-| `./scripts/tiffany-build [args]` | Build both binaries in shared `./target`; forwards args such as `--release --locked`, or use stripped `--fast-release --locked` |
+| `./scripts/tiffany-build [args]` | Build both binaries in shared `./target`; forwards args such as `--release --locked`, or use stripped `--fast-release --locked`; set `TIFFANY_CODE_MODE_RUNTIME=1` for Codex code-mode/V8 |
 | `./scripts/tiffany-check --smoke` | Run the fast local fork/bridge verification |
 | `./scripts/tiffany-check --dist` | Run the release-profile fork/bridge verification |
 | `./scripts/tiffany-clean-targets --sizes|--dist|--debug` | Inspect or trim shared and legacy Cargo build caches |
