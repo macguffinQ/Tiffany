@@ -49,6 +49,8 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: tiffany-integration-${{ runner.os }}
+          cache-workspace-crates: true
           workspaces: |
             . -> target
             tiffany-ui/codex-rs -> ../../target

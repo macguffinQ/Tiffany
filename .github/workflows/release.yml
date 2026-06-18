@@ -36,6 +36,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: tiffany-release-${{ matrix.target }}
+          cache-workspace-crates: true
           workspaces: |
             . -> target
             tiffany-ui/codex-rs -> ../../target
