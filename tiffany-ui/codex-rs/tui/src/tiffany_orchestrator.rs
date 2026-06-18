@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::process::ExitStatus;
 use std::process::Stdio;
 
 use ratatui::style::Color;
@@ -330,20 +331,7 @@ async fn run_event_bridge(
             });
         }
     } else {
-        let mut rendered = vec![status_line(
-            "✗",
-            Color::Red,
-            "orchestrator",
-            &format!("exited with status {status}"),
-        )];
-        for line in stderr
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .take(8)
-        {
-            rendered.push(body_line(line, true));
-        }
-        emit_lines(&app_event_tx, rendered);
+        emit_lines(&app_event_tx, orchestrator_failure_lines(status, &stderr));
     }
 
     Ok(())
@@ -816,8 +804,79 @@ fn spawn_error_lines(
     lines
 }
 
+fn orchestrator_failure_lines(status: ExitStatus, stderr: &str) -> Vec<Line<'static>> {
+    let mut lines = vec![status_line(
+        "✗",
+        Color::Red,
+        "orchestrator",
+        &format!("exited with status {status}"),
+    )];
+
+    let mut detail_text = stderr.trim().to_string();
+    if detail_text.is_empty() {
+        if let Some(log_tail) = read_orchestrator_tui_log_tail(10) {
+            lines.push(body_line(
+                "stderr was empty; recent ~/.orchestrator/tui.log:",
+                true,
+            ));
+            detail_text = log_tail;
+        } else {
+            lines.push(body_line(
+                "stderr was empty and ~/.orchestrator/tui.log could not be read",
+                true,
+            ));
+        }
+    }
+
+    let mut emitted = false;
+    for line in nonempty_tail_lines(&detail_text, 12) {
+        emitted = true;
+        lines.push(body_line(&line, true));
+    }
+    if !emitted {
+        lines.push(body_line("no error detail captured", true));
+    }
+
+    if let Some(hint) = diagnostic_hint(&detail_text) {
+        lines.push(body_line(hint, true));
+    }
+    lines.push(body_line(
+        "next: run `orchestrator doctor` or open `/doctor` in this TUI",
+        true,
+    ));
+    lines
+}
+
 fn permission_hint(error: &str) -> Option<&'static str> {
+    diagnostic_hint(error)
+}
+
+fn diagnostic_hint(error: &str) -> Option<&'static str> {
     let lower = error.to_ascii_lowercase();
+    if lower.contains("reading config") || lower.contains("config.yaml") {
+        return Some("hint: run `orchestrator init`, then configure providers and roles");
+    }
+    if lower.contains("missing api key") || lower.contains("api key") {
+        return Some(
+            "hint: configure provider auth with `/provider` or `orchestrator config provider`",
+        );
+    }
+    if lower.contains("no default worker role")
+        || lower.contains("role") && (lower.contains("not found") || lower.contains("unknown role"))
+    {
+        return Some(
+            "hint: register/select a worker with `/role`, `/roles`, or `orchestrator roles register`",
+        );
+    }
+    if lower.contains("failed to spawn")
+        || lower.contains("cannot find")
+        || lower.contains("command not found")
+        || lower.contains("no such file or directory")
+    {
+        return Some(
+            "hint: install the selected runtime binary (`claude` or `codex`) or update the role runtime",
+        );
+    }
     if lower.contains("permission denied") || lower.contains("operation not permitted") {
         return Some(
             "hint: check file permissions, executable bit, macOS privacy access, or run /doctor",
@@ -833,6 +892,32 @@ fn permission_hint(error: &str) -> Option<&'static str> {
         );
     }
     None
+}
+
+fn nonempty_tail_lines(text: &str, max_lines: usize) -> Vec<String> {
+    let lines = text
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let start = lines.len().saturating_sub(max_lines);
+    lines.into_iter().skip(start).collect()
+}
+
+fn read_orchestrator_tui_log_tail(max_lines: usize) -> Option<String> {
+    let path = orchestrator_tui_log_path()?;
+    let contents = std::fs::read_to_string(path).ok()?;
+    let tail = nonempty_tail_lines(&contents, max_lines).join("\n");
+    (!tail.trim().is_empty()).then_some(tail)
+}
+
+fn orchestrator_tui_log_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .map(|home| home.join(".orchestrator").join("tui.log"))
 }
 
 fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -1627,6 +1712,23 @@ mod tests {
             "needs changes (2 issue(s))"
         ));
         assert!(!is_redundant_role_output("worker", "plan ready - no"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failure_lines_include_stderr_and_next_step() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let lines = orchestrator_failure_lines(
+            ExitStatus::from_raw(1 << 8),
+            "Error: reading config at /tmp/missing/config.yaml",
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("exited with status"));
+        assert!(text.contains("reading config"));
+        assert!(text.contains("orchestrator init"));
+        assert!(text.contains("orchestrator doctor"));
     }
 
     #[test]

@@ -432,6 +432,9 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!("{:#}", e);
+            if use_file_logging {
+                eprintln!("Error: {:#}", e);
+            }
             ExitCode::FAILURE
         }
     }
