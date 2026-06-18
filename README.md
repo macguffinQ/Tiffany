@@ -429,6 +429,12 @@ Useful commands:
 
 The bottom status line follows tiffany-loop-style run HUD behavior: it keeps one compact line for stage, elapsed time, worker route, context mode, queued message count, detail fold state, process filter, and review/worker issue counters.
 
+Troubleshooting first:
+
+- Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
+- Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and warns when Claude Code workers may pause for manual permission prompts.
+- For model errors, confirm the role's internal model id points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>`.
+
 Input behavior:
 
 - Press `Enter` to send.

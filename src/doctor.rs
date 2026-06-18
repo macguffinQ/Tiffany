@@ -2,6 +2,7 @@
 
 use crate::config::{self, Config, RoleConfig};
 use crate::runtime;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +55,7 @@ impl DoctorReport {
 pub fn run(config_path: &Path) -> DoctorReport {
     let mut builder = DoctorReportBuilder::default();
     let expanded_config_path = config::expand_home(config_path);
+    let raw_hints = RawConfigHints::load(&expanded_config_path);
 
     if expanded_config_path.exists() {
         builder.ok(format!("config found: {}", expanded_config_path.display()));
@@ -79,8 +81,11 @@ pub fn run(config_path: &Path) -> DoctorReport {
     if let Some(cfg) = cfg.as_ref() {
         check_paths(&mut builder, cfg);
         check_runtimes(&mut builder, cfg);
-        check_providers(&mut builder, cfg);
+        check_providers(&mut builder, cfg, raw_hints.as_ref().ok());
+        check_models(&mut builder, cfg);
         check_roles(&mut builder, cfg);
+    } else if let Err(err) = raw_hints {
+        builder.warn(format!("raw config hints unavailable: {err:#}"));
     }
 
     check_tool(
@@ -98,6 +103,98 @@ pub fn run(config_path: &Path) -> DoctorReport {
     check_tool(&mut builder, "tmux", "optional fallback multiplexer", false);
 
     builder.finish()
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RawConfigHints {
+    provider_api_keys: HashMap<String, RawSecret>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RawSecret {
+    Missing,
+    Empty,
+    EnvRefs(Vec<String>),
+    Literal,
+}
+
+impl RawConfigHints {
+    fn load(path: &Path) -> anyhow::Result<Self> {
+        let raw = std::fs::read_to_string(path)?;
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&raw)?;
+        let mut out = Self::default();
+
+        let Some(providers) = yaml
+            .get("providers")
+            .and_then(serde_yaml::Value::as_mapping)
+        else {
+            return Ok(out);
+        };
+
+        for (key, value) in providers {
+            let Some(provider) = key.as_str() else {
+                continue;
+            };
+            let raw_secret = value
+                .as_mapping()
+                .and_then(|mapping| mapping.get(serde_yaml::Value::String("api_key".into())))
+                .map(classify_raw_secret)
+                .unwrap_or(RawSecret::Missing);
+            out.provider_api_keys
+                .insert(provider.to_string(), raw_secret);
+        }
+
+        Ok(out)
+    }
+}
+
+fn classify_raw_secret(value: &serde_yaml::Value) -> RawSecret {
+    let Some(text) = value.as_str() else {
+        return RawSecret::Literal;
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return RawSecret::Empty;
+    }
+    let refs = env_refs(trimmed);
+    if refs.is_empty() {
+        RawSecret::Literal
+    } else {
+        RawSecret::EnvRefs(refs)
+    }
+}
+
+fn env_refs(text: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    if let Some(name) = text.strip_prefix('$') {
+        let name = name.trim_start_matches('{').trim_end_matches('}');
+        if is_env_name(name) {
+            refs.push(name.to_string());
+        }
+    }
+
+    let mut rest = text;
+    while let Some(start) = rest.find("${") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            break;
+        };
+        let name = &after[..end];
+        if is_env_name(name) && !refs.iter().any(|seen| seen == name) {
+            refs.push(name.to_string());
+        }
+        rest = &after[end + 1..];
+    }
+    refs
+}
+
+fn is_env_name(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 #[derive(Default)]
@@ -191,7 +288,11 @@ fn check_runtimes(builder: &mut DoctorReportBuilder, cfg: &Config) {
     }
 }
 
-fn check_providers(builder: &mut DoctorReportBuilder, cfg: &Config) {
+fn check_providers(
+    builder: &mut DoctorReportBuilder,
+    cfg: &Config,
+    raw_hints: Option<&RawConfigHints>,
+) {
     if cfg.providers.is_empty() {
         builder.warn("no providers configured");
         return;
@@ -209,14 +310,94 @@ fn check_providers(builder: &mut DoctorReportBuilder, cfg: &Config) {
             continue;
         }
 
+        if let Some(raw_secret) = raw_hints.and_then(|hints| hints.provider_api_keys.get(name)) {
+            match raw_secret {
+                RawSecret::EnvRefs(refs) => {
+                    check_provider_env_refs(builder, name, refs);
+                    continue;
+                }
+                RawSecret::Literal => {
+                    if provider
+                        .api_key
+                        .as_deref()
+                        .is_some_and(|key| !key.trim().is_empty())
+                    {
+                        builder.ok(format!("{name}: api key present"));
+                        builder.warn(format!("{name}: api key is stored literally in config"));
+                        builder.hint(format!(
+                            "prefer `orchestrator config provider setup {name} --env ENV_NAME` for shared configs"
+                        ));
+                        continue;
+                    }
+                }
+                RawSecret::Missing | RawSecret::Empty => {}
+            }
+        }
+
         match provider.api_key.as_deref().map(str::trim) {
             Some(key) if !key.is_empty() => builder.ok(format!("{name}: api key present")),
             _ => {
                 builder.fail(format!("{name}: api key missing"));
-                builder.hint(
-                    "set the provider key in config or export the matching environment variable",
-                );
+                builder.hint(format!(
+                    "set it with `/provider`, `orchestrator config provider setup {name}`, or an env var reference"
+                ));
             }
+        }
+    }
+}
+
+fn check_provider_env_refs(builder: &mut DoctorReportBuilder, provider: &str, refs: &[String]) {
+    let missing = refs
+        .iter()
+        .filter(|name| std::env::var(name.as_str()).map_or(true, |value| value.trim().is_empty()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        builder.ok(format!("{provider}: api key env {} set", refs.join(", ")));
+    } else {
+        builder.fail(format!(
+            "{provider}: api key env {} unset",
+            missing.join(", ")
+        ));
+        let exports = missing
+            .iter()
+            .map(|name| format!("export {name}=..."))
+            .collect::<Vec<_>>()
+            .join("; ");
+        builder.hint(exports);
+    }
+}
+
+fn check_models(builder: &mut DoctorReportBuilder, cfg: &Config) {
+    builder.header("Models");
+    if cfg.models.is_empty() {
+        builder.fail("no models configured");
+        builder.hint("configure one with `/role` or `orchestrator roles register ... --provider ... --model-name ...`");
+        return;
+    }
+
+    let mut seen = HashSet::new();
+    let mut models = cfg.models.iter().collect::<Vec<_>>();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    for model in models {
+        if !seen.insert(model.id.as_str()) {
+            builder.fail(format!("model `{}` is defined more than once", model.id));
+            continue;
+        }
+        if cfg.providers.contains_key(&model.provider) {
+            builder.ok(format!(
+                "{}: {} via {}",
+                model.id, model.name, model.provider
+            ));
+        } else {
+            builder.fail(format!(
+                "{}: provider `{}` is not configured",
+                model.id, model.provider
+            ));
+            builder.hint(format!(
+                "configure provider `{}` with `/provider` or `orchestrator config provider setup {}`",
+                model.provider, model.provider
+            ));
         }
     }
 }
@@ -239,6 +420,16 @@ fn check_roles(builder: &mut DoctorReportBuilder, cfg: &Config) {
     for (role_name, role) in roles {
         check_role_binding(builder, cfg, role_name, role);
     }
+
+    if cfg
+        .roles
+        .values()
+        .any(|role| runtime::agent_label(Some(&role.runtime)) == "claude")
+        && !cfg.behavior.cc_bypass_permissions
+    {
+        builder.warn("Claude Code workers may pause for manual permission prompts");
+        builder.hint("set behavior.cc_bypass_permissions: true for unattended tiffany-loop runs");
+    }
 }
 
 fn check_named_role(builder: &mut DoctorReportBuilder, cfg: &Config, role_name: &str) {
@@ -253,12 +444,19 @@ fn check_role_binding(
     role_name: &str,
     role: &RoleConfig,
 ) {
-    let model_ok = cfg.models.iter().any(|model| model.id == role.model);
-    let runtime_ok = cfg.runtimes.contains_key(&role.runtime);
+    let model_cfg = cfg.models.iter().find(|model| model.id == role.model);
+    let model_ok = model_cfg.is_some();
+    let runtime_ok = cfg.runtime_config(&role.runtime).is_some();
     if model_ok && runtime_ok {
+        let model = model_cfg.expect("checked above");
+        let provider_status = if cfg.providers.contains_key(&model.provider) {
+            format!("provider={}", model.provider)
+        } else {
+            format!("provider={} missing", model.provider)
+        };
         builder.ok(format!(
-            "{role_name}: model={} runtime={}",
-            role.model, role.runtime
+            "{role_name}: model={} ({}, {}) runtime={} teams={}",
+            role.model, model.name, provider_status, role.runtime, role.agent_teams
         ));
         return;
     }
@@ -267,12 +465,30 @@ fn check_role_binding(
             "{role_name}: model `{}` is not defined in models",
             role.model
         ));
+        builder.hint(format!(
+            "register it with `orchestrator roles register {role_name} --model {} --provider <provider> --model-name <api-model> --runtime {}`",
+            role.model, role.runtime
+        ));
     }
     if !runtime_ok {
         builder.fail(format!(
             "{role_name}: runtime `{}` is not defined in runtimes",
             role.runtime
         ));
+        builder.hint(format!(
+            "available runtimes: {}",
+            available_runtime_names(cfg)
+        ));
+    }
+}
+
+fn available_runtime_names(cfg: &Config) -> String {
+    let mut names = cfg.runtimes.keys().map(String::as_str).collect::<Vec<_>>();
+    names.sort();
+    if names.is_empty() {
+        "(none)".to_string()
+    } else {
+        names.join(", ")
     }
 }
 
@@ -380,12 +596,144 @@ mod tests {
 
         let mut builder = DoctorReportBuilder::default();
         check_runtimes(&mut builder, &cfg);
-        check_providers(&mut builder, &cfg);
+        check_providers(&mut builder, &cfg, None);
         let report = builder.finish();
         let rendered = report.render_text();
 
         assert!(rendered.contains("local-api: runtime type `direct`"));
         assert!(rendered.contains("openai: api key missing"));
         assert_eq!(report.issue_count, 1);
+    }
+
+    #[test]
+    fn provider_check_reports_unset_env_refs_without_leaking_keys() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "minimax".into(),
+            ProviderConfig {
+                kind: "openai".into(),
+                api_key: Some(String::new()),
+                base_url: Some("https://api.minimax.io/v1".into()),
+            },
+        );
+        let cfg = Config {
+            providers,
+            behavior: BehaviorConfig::default(),
+            ..Config::default()
+        };
+        let mut hints = RawConfigHints::default();
+        hints.provider_api_keys.insert(
+            "minimax".into(),
+            RawSecret::EnvRefs(vec!["TIFFANY_TEST_MISSING_KEY".into()]),
+        );
+
+        let mut builder = DoctorReportBuilder::default();
+        check_providers(&mut builder, &cfg, Some(&hints));
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert!(rendered.contains("minimax: api key env TIFFANY_TEST_MISSING_KEY unset"));
+        assert!(rendered.contains("hint: export TIFFANY_TEST_MISSING_KEY=..."));
+        assert_eq!(report.issue_count, 1);
+    }
+
+    #[test]
+    fn model_check_reports_missing_provider_and_duplicate_ids() {
+        let cfg = Config {
+            providers: HashMap::new(),
+            models: vec![
+                ModelConfig {
+                    id: "glm51".into(),
+                    provider: "openai-compatible".into(),
+                    name: "glm-5.1".into(),
+                },
+                ModelConfig {
+                    id: "glm51".into(),
+                    provider: "openai-compatible".into(),
+                    name: "glm-5.1".into(),
+                },
+            ],
+            behavior: BehaviorConfig::default(),
+            ..Config::default()
+        };
+
+        let mut builder = DoctorReportBuilder::default();
+        check_models(&mut builder, &cfg);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert!(rendered.contains("glm51: provider `openai-compatible` is not configured"));
+        assert!(rendered.contains("model `glm51` is defined more than once"));
+        assert_eq!(report.issue_count, 2);
+    }
+
+    #[test]
+    fn role_check_accepts_runtime_alias_and_warns_about_claude_permissions() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "anthropic".into(),
+            ProviderConfig {
+                kind: "anthropic".into(),
+                api_key: Some("set".into()),
+                base_url: None,
+            },
+        );
+        let mut runtimes = HashMap::new();
+        runtimes.insert(
+            "claude-code".into(),
+            RuntimeConfig {
+                kind: "subprocess".into(),
+                binary: Some("claude".into()),
+                supports_mcp: true,
+                supports_agent_teams: true,
+            },
+        );
+        let mut roles = HashMap::new();
+        roles.insert(
+            "worker-cc".into(),
+            RoleConfig {
+                model: "sonnet".into(),
+                runtime: "claude".into(),
+                agent_teams: true,
+            },
+        );
+        let cfg = Config {
+            providers,
+            runtimes,
+            models: vec![ModelConfig {
+                id: "sonnet".into(),
+                provider: "anthropic".into(),
+                name: "claude-sonnet".into(),
+            }],
+            roles,
+            behavior: BehaviorConfig {
+                cc_bypass_permissions: false,
+                ..BehaviorConfig::default()
+            },
+            ..Config::default()
+        };
+
+        let mut builder = DoctorReportBuilder::default();
+        check_roles(&mut builder, &cfg);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert!(rendered.contains("worker-cc: model=sonnet"));
+        assert!(rendered.contains("runtime=claude"));
+        assert!(rendered.contains("Claude Code workers may pause"));
+        assert!(!rendered.contains("worker-cc: runtime `claude` is not defined"));
+    }
+
+    #[test]
+    fn raw_secret_classification_detects_env_refs() {
+        assert_eq!(
+            env_refs("${OPENAI_API_KEY}"),
+            vec!["OPENAI_API_KEY".to_string()]
+        );
+        assert_eq!(
+            env_refs("$MINIMAX_API_KEY"),
+            vec!["MINIMAX_API_KEY".to_string()]
+        );
+        assert!(env_refs("sk-literal").is_empty());
     }
 }
