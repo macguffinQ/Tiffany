@@ -39,6 +39,7 @@ Usage:
       Open the local TUI and route input through the orchestrator runtime.
 
   ./scripts/tiffany-dev config ...
+  ./scripts/tiffany-dev setup
   ./scripts/tiffany-dev roles|status|doctor|init|sessions|usage|events|acp ...
       Run the local orchestrator CLI directly. These commands do not open the
       TUI and do not require a tiffany-loop UI login.
@@ -91,7 +92,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
 fi
 
 case "${1:-}" in
-  config|roles|status|doctor|init|sessions|usage|events|acp)
+  config|setup|roles|status|doctor|init|sessions|usage|events|acp)
     run_orchestrator_cli "$@"
     ;;
 esac

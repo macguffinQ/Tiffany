@@ -48,6 +48,9 @@ enum Cmd {
     /// Initialize config in ~/.orchestrator/
     Init,
 
+    /// Guided first-run setup for providers, models, and roles
+    Setup,
+
     /// Run a task through the orchestrator
     Run {
         /// Task prompt
@@ -173,7 +176,7 @@ enum Cmd {
         window: String,
     },
 
-    /// Show loaded Claude Code configuration
+    /// Inspect and edit tiffany-loop orchestrator configuration
     Config {
         #[command(subcommand)]
         action: ConfigCmd,
@@ -257,7 +260,7 @@ enum ConfigCmd {
         action: Option<ProviderConfigCmd>,
     },
 
-    /// Interactive setup wizard (borrowed from openclaw's `onboard`)
+    /// Interactive first-run setup wizard
     Wizard,
 
     /// Set API key for a provider
@@ -489,4 +492,27 @@ fn setup_file_logging(level: &str) {
         .with_target(false)
         .with_ansi(false)
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn top_level_help_points_to_setup_and_tiffany_config() {
+        let help = Cli::command().render_long_help().to_string();
+
+        assert!(help.contains("setup"));
+        assert!(help.contains("Guided first-run setup"));
+        assert!(help.contains("Inspect and edit tiffany-loop orchestrator configuration"));
+        assert!(!help.contains("Show loaded Claude Code configuration"));
+    }
+
+    #[test]
+    fn setup_command_parses() {
+        let cli = Cli::parse_from(["orchestrator", "setup"]);
+
+        assert!(matches!(cli.cmd, Cmd::Setup));
+    }
 }

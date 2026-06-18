@@ -39,7 +39,7 @@ It's designed for software engineering tasks where:
 
 ## Which command should I use?
 
-For normal interactive use, run `tiffany orchestrator` after install, or `./scripts/tiffany-dev` from a source checkout.
+For normal interactive use, run `orchestrator setup` once, then start the UI with `tiffany orchestrator`. From a source checkout, use `./scripts/tiffany-dev setup` and `./scripts/tiffany-dev`.
 
 | Name | What it is | Use it for |
 |---|---|---|
@@ -63,6 +63,7 @@ Development entrypoints:
 
 - `./scripts/tiffany-dev` - run the tiffany-loop orchestrator in tiffany-loop orchestration mode, using the local debug binary and waiting for input.
 - `./scripts/tiffany-dev --help` - explain the source-checkout entrypoints without building or launching the UI.
+- `./scripts/tiffany-dev setup` - run the local first-run setup wizard without installing binaries.
 - `./scripts/tiffany-dev config ...` - run the local orchestrator config command directly. It does not launch the TUI or require a UI login; use it for scriptable provider setup before opening the TUI.
 - `./scripts/tiffany-dev orchestrator "..."` - run the orchestrator pipeline immediately with an initial prompt; native mode defaults worker execution to Claude Code (`worker-cc`), and later input-box submissions are routed into the same orchestrator pipeline.
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml` - use a specific orchestrator config while keeping tiffany-loop UI config isolated under `TIFFANY_HOME`.
@@ -191,6 +192,7 @@ Recommended for users:
 ```bash
 brew tap macguffinQ/tap
 brew install tiffany-loop
+orchestrator setup
 tiffany orchestrator
 ```
 
@@ -203,6 +205,8 @@ After install:
 
 ```bash
 orchestrator init
+orchestrator setup
+orchestrator doctor
 tiffany orchestrator
 ```
 
@@ -217,6 +221,7 @@ Source checkout for contributors:
 git clone https://github.com/macguffinQ/Tiffany.git ~/code/orchestrator
 cd ~/code/orchestrator
 ./scripts/tiffany-build
+./scripts/tiffany-dev setup
 ./scripts/tiffany-dev
 ```
 
@@ -232,7 +237,8 @@ cargo install --path tiffany-ui/codex-rs/cli --profile tiffany-dist
 tar -xzf tiffany-loop-v0.1.5-aarch64-apple-darwin.tar.gz
 cd tiffany-loop-v0.1.5-aarch64-apple-darwin
 chmod +x orchestrator tiffany
-./orchestrator status
+./orchestrator setup
+./orchestrator doctor
 ./tiffany orchestrator
 ```
 
@@ -247,39 +253,40 @@ Public Homebrew installs require the `macguffinQ/Tiffany` repository and release
 orchestrator init
 # writes ~/.orchestrator/config.yaml
 
-# 2. Set API keys (one of these is enough)
-export ANTHROPIC_API_KEY=sk-...
-export OPENAI_API_KEY=sk-...
+# 2. Configure providers, models, and roles
+orchestrator setup
+# Or use the TUI forms:
+tiffany orchestrator
+# then run /provider and /role
 
-# 3. Run a task
+# 3. Check the full provider -> model -> role -> runtime wiring
+orchestrator doctor
+
+# 4. Run interactively
 cd ~/your-project
+tiffany orchestrator
+
+# 5. Or run one non-interactive task
 orchestrator run "implement fibonacci in src/fib.rs"
 
-# 4. With tag-based routing
+# 6. With tag-based routing
 orchestrator run "refactor the auth module" --tag refactor
 
-# 5. Override model
+# 7. Override worker route
 orchestrator run "fix typo" --planner opus --worker codex
 
-# 6. A/B dual-run
-orchestrator run "optimize the query" --ab
-
-# 7. Open the tiffany-loop UI from source
+# 8. Source checkout UI
 ./scripts/tiffany-dev
 
-# Or, after install
-tiffany orchestrator
-orchestrator tui
-
-# 8. Browse past sessions
+# 9. Browse past sessions
 orchestrator sessions list
 orchestrator sessions show <id>
 orchestrator sessions grep "rate limit"
 
-# 9. See everything the orchestrator loaded
+# 10. See everything the orchestrator loaded
 orchestrator config
 
-# 10. Import your existing CC sessions
+# 11. Import your existing CC sessions
 cd ~/your-project  # where you used CC before
 orchestrator sessions import-cc
 ```
@@ -343,12 +350,14 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | Command | What it does |
 |---|---|
 | `./scripts/tiffany-dev` | Run the tiffany-loop UI |
+| `./scripts/tiffany-dev setup` | Run the first-run setup wizard from source |
 | `./scripts/tiffany-dev orchestrator` | Bridge from the tiffany-loop fork into the existing orchestrator runtime |
 | `./scripts/tiffany-build [args]` | Build both binaries in shared `./target`; forwards args such as `--release --locked`, or use `--fast-release --locked` |
 | `./scripts/tiffany-check` | Run the local fork/bridge verification |
 | `./scripts/tiffany-clean-targets` | Remove the old `tiffany-ui/codex-rs/target` build cache |
 | `tiffany orchestrator` | Open the primary tiffany-loop UI after install |
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
+| `orchestrator setup` | Guided first-run setup for providers, models, and roles |
 | `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
 | `orchestrator config provider` | Open the guided provider selector |
 | `orchestrator config provider setup <provider>` | Configure a provider from built-in presets |
@@ -365,7 +374,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `orchestrator sessions show <id>` | Show a session's event log |
 | `orchestrator sessions grep <pattern>` | Grep across all session logs |
 | `orchestrator sessions import-cc` | Import your existing CC sessions from `~/.claude/projects/<slug>/sessions/` |
-| `orchestrator config` | Show everything the orchestrator loaded (config + AGENTS.md + CC config) |
+| `orchestrator config` | Inspect and edit orchestrator configuration |
 | `orchestrator status` | Show paths, mux, env |
 | `orchestrator doctor` | Diagnose config, runtime binaries, API keys, role wiring, and local tools |
 

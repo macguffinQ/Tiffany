@@ -17,9 +17,11 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
         crate::Cmd::Init => {
             let target = Config::init_default()?;
             println!("Wrote default config to {}", target.display());
-            println!("Edit it, then run `orchestrator run \"...\"`");
+            println!("Next: run `orchestrator setup` or open `tiffany orchestrator` and use /provider + /role.");
             Ok(())
         }
+
+        crate::Cmd::Setup => run_wizard(config_path),
 
         crate::Cmd::Run {
             prompt,
@@ -941,6 +943,10 @@ fn apply_claude_preset(
 
 fn write_config(cfg: &Config, path: &Path) -> Result<()> {
     let path = crate::config::expand_home(path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
     let yaml = serde_yaml::to_string(cfg)?;
     std::fs::write(&path, yaml).with_context(|| format!("writing config to {}", path.display()))?;
     Ok(())
@@ -963,22 +969,23 @@ fn c(color: &str, s: &str) -> String {
     format!("{}{}{}", color, s, ansi::RESET)
 }
 
-// ── Interactive wizard (borrowed from openclaw's `onboard`) ──
+// ── Interactive setup wizard ─────────────────────────────────
 
 fn run_wizard(config_path: &Path) -> Result<()> {
     use std::io::{self, Write};
 
     println!(
         "\n{}{}",
-        c(ansi::BOLD, "⚡ orchestrator setup wizard"),
-        c(ansi::DIM, " (borrowed from openclaw's `onboard`)")
+        c(ansi::BOLD, "⚡ tiffany-loop setup wizard"),
+        c(ansi::DIM, " (providers, models, roles)")
     );
     println!();
 
-    let mut cfg = if config_path.exists() {
-        Config::load(config_path).unwrap_or_default()
+    let expanded_config_path = crate::config::expand_home(config_path);
+    let mut cfg = if expanded_config_path.exists() {
+        Config::load(config_path).unwrap_or_else(|_| default_setup_config())
     } else {
-        Config::default()
+        default_setup_config()
     };
 
     // ── Step 1: pick providers ─────────────────────────────
@@ -1161,99 +1168,53 @@ fn run_wizard(config_path: &Path) -> Result<()> {
 
     // ── Step 3: define models ──────────────────────────────
     println!("\n{}", c(ansi::BOLD, "Step 3: register models"));
-    let default_models = vec![
-        (
-            "opus",
-            "anthropic",
-            "claude-opus-4-6",
-            "Claude Opus 4.6 (smartest, $$)",
-        ),
-        (
-            "sonnet",
-            "anthropic",
-            "claude-sonnet-4-6",
-            "Claude Sonnet 4.6 (balanced, $)",
-        ),
-        (
-            "haiku",
-            "anthropic",
-            "claude-haiku-4-5",
-            "Claude Haiku 4.5 (cheapest, ¢)",
-        ),
-        ("gpt4o", "openai", "gpt-4o", "GPT-4o (OpenAI flagship)"),
-        ("gpt4o-mini", "openai", "gpt-4o-mini", "GPT-4o mini (cheap)"),
-        ("gemini-pro", "google", "gemini-1.5-pro", "Gemini 1.5 Pro"),
-        (
-            "deepseek-chat",
-            "deepseek",
-            "deepseek-chat",
-            "DeepSeek V3 (cheap)",
-        ),
-        (
-            "mistral-large",
-            "mistral",
-            "mistral-large-latest",
-            "Mistral Large",
-        ),
-        ("llama3", "ollama", "llama3", "Llama 3 (local)"),
-    ];
-    for (id, prov, name, _desc) in &default_models {
-        if !cfg.models.iter().any(|m| m.id == *id) {
-            cfg.models.push(crate::config::ModelConfig {
-                id: id.to_string(),
-                provider: prov.to_string(),
-                name: name.to_string(),
-            });
-        }
-    }
+    register_default_models_for_configured_providers(&mut cfg);
     println!(
-        "  ✓ {} models registered",
+        "  ✓ {} model(s) registered for configured providers",
         c(ansi::GREEN, &cfg.models.len().to_string())
     );
 
     // ── Step 4: assign models to roles ──────────────────────
     println!("\n{}", c(ansi::BOLD, "Step 4: assign models to roles"));
-    let has_anthropic = chosen.iter().any(|(n, _, _, _)| *n == "anthropic");
-    let default_assignments: Vec<(&str, &str)> = if has_anthropic {
-        vec![
-            ("planner", "sonnet"),
-            ("critic", "opus"),
-            ("worker-cc", "sonnet"),
-            ("worker-codex", "gpt4o"),
-            ("reviewer", "haiku"),
-        ]
-    } else {
-        vec![
-            ("planner", "gpt4o"),
-            ("critic", "gpt4o"),
-            ("worker-cc", "gpt4o"),
-            ("worker-codex", "gpt4o"),
-            ("reviewer", "gpt4o-mini"),
-        ]
-    };
-    for (role, default_model) in &default_assignments {
-        print!("  {} {} [{}]: ", c(ansi::YELLOW, "?"), role, default_model);
+    let default_assignments = default_role_assignments(&cfg)?;
+    for role in ["planner", "critic", "reviewer", "worker-cc", "worker-codex"] {
+        cfg.roles.remove(role);
+    }
+    for assignment in &default_assignments {
+        print!(
+            "  {} {} [{} / {}]: ",
+            c(ansi::YELLOW, "?"),
+            assignment.role,
+            assignment.model,
+            assignment.runtime
+        );
         io::stdout().flush()?;
         let mut role_input = String::new();
         io::stdin().read_line(&mut role_input)?;
         let chosen_model = role_input.trim();
         let model_id = if chosen_model.is_empty() {
-            default_model.to_string()
+            assignment.model.to_string()
         } else {
+            if !cfg.models.iter().any(|model| model.id == chosen_model) {
+                anyhow::bail!(
+                    "unknown model id '{}' for role '{}'. Available: {}",
+                    chosen_model,
+                    assignment.role,
+                    cfg.models
+                        .iter()
+                        .map(|model| model.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
             chosen_model.to_string()
         };
-        let runtime = if role.contains("cc") {
-            "claude-code"
-        } else {
-            "codex"
-        }
-        .to_string();
         cfg.roles.insert(
-            role.to_string(),
+            assignment.role.to_string(),
             crate::config::RoleConfig {
                 model: model_id,
-                runtime,
-                agent_teams: *role == "worker-cc",
+                runtime: assignment.runtime.to_string(),
+                agent_teams: assignment.agent_teams,
             },
         );
     }
@@ -1261,11 +1222,7 @@ fn run_wizard(config_path: &Path) -> Result<()> {
     // ── Step 5: tag overrides ──────────────────────────────
     println!("\n{}", c(ansi::BOLD, "Step 5: tag-based routing overrides"));
     println!("(comma-separated tag:role pairs, Enter=accept defaults)\n");
-    let default_overrides = vec![
-        ("refactor", "worker-cc"),
-        ("boilerplate", "worker-codex"),
-        ("test", "worker-codex"),
-    ];
+    let default_overrides = default_tag_overrides(&cfg);
     for (tag, role) in &default_overrides {
         println!("  {} → {}", c(ansi::CYAN, tag), c(ansi::BOLD, role));
     }
@@ -1278,8 +1235,8 @@ fn run_wizard(config_path: &Path) -> Result<()> {
         default_overrides
             .iter()
             .map(|(t, r)| crate::config::OverrideConfig {
-                tag: t.to_string(),
-                role: r.to_string(),
+                tag: (*t).to_string(),
+                role: r.clone(),
             })
             .collect()
     } else {
@@ -1326,8 +1283,8 @@ fn run_wizard(config_path: &Path) -> Result<()> {
         c(ansi::GREEN, "✓ done."),
         c(ansi::BOLD, &config_path.display().to_string())
     );
-    println!("\n  Try: {}", c(ansi::CYAN, "orchestrator status"));
-    println!("  Or:  {}", c(ansi::CYAN, "orchestrator tui"));
+    println!("\n  Check: {}", c(ansi::CYAN, "orchestrator doctor"));
+    println!("  Start: {}", c(ansi::CYAN, "tiffany orchestrator"));
     Ok(())
 }
 
@@ -1343,6 +1300,284 @@ fn prompt_default(label: &str, default: &str) -> Result<String> {
     } else {
         Ok(s.to_string())
     }
+}
+
+#[derive(Clone, Copy)]
+struct DefaultModelTemplate {
+    id: &'static str,
+    provider: &'static str,
+    name: &'static str,
+}
+
+const DEFAULT_MODEL_TEMPLATES: &[DefaultModelTemplate] = &[
+    DefaultModelTemplate {
+        id: "opus",
+        provider: "anthropic",
+        name: "claude-opus-4-6",
+    },
+    DefaultModelTemplate {
+        id: "sonnet",
+        provider: "anthropic",
+        name: "claude-sonnet-4-6",
+    },
+    DefaultModelTemplate {
+        id: "haiku",
+        provider: "anthropic",
+        name: "claude-haiku-4-5",
+    },
+    DefaultModelTemplate {
+        id: "gpt4o",
+        provider: "openai",
+        name: "gpt-4o",
+    },
+    DefaultModelTemplate {
+        id: "gpt4o-mini",
+        provider: "openai",
+        name: "gpt-4o-mini",
+    },
+    DefaultModelTemplate {
+        id: "minimax-m3-claude",
+        provider: "minimax",
+        name: "MiniMax-M3",
+    },
+    DefaultModelTemplate {
+        id: "minimax-m3-codex",
+        provider: "minimax",
+        name: "MiniMax-M3",
+    },
+    DefaultModelTemplate {
+        id: "gemini-pro",
+        provider: "google",
+        name: "gemini-1.5-pro",
+    },
+    DefaultModelTemplate {
+        id: "deepseek-chat",
+        provider: "deepseek",
+        name: "deepseek-chat",
+    },
+    DefaultModelTemplate {
+        id: "mistral-large",
+        provider: "mistral",
+        name: "mistral-large-latest",
+    },
+    DefaultModelTemplate {
+        id: "llama3",
+        provider: "ollama",
+        name: "llama3",
+    },
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DefaultRoleAssignment {
+    role: &'static str,
+    model: String,
+    runtime: &'static str,
+    agent_teams: bool,
+}
+
+fn default_setup_config() -> Config {
+    let mut cfg = serde_yaml::from_str::<Config>(include_str!("../config.example.yaml"))
+        .unwrap_or_else(|_| Config::default());
+    cfg.providers.clear();
+    cfg.models.clear();
+    cfg.roles.clear();
+    cfg.overrides.clear();
+    cfg
+}
+
+fn register_default_models_for_configured_providers(cfg: &mut Config) {
+    cfg.models
+        .retain(|model| cfg.providers.contains_key(&model.provider));
+    for template in DEFAULT_MODEL_TEMPLATES {
+        if cfg.providers.contains_key(template.provider)
+            && !cfg.models.iter().any(|model| model.id == template.id)
+        {
+            cfg.models.push(crate::config::ModelConfig {
+                id: template.id.to_string(),
+                provider: template.provider.to_string(),
+                name: template.name.to_string(),
+            });
+        }
+    }
+}
+
+fn default_role_assignments(cfg: &Config) -> Result<Vec<DefaultRoleAssignment>> {
+    let claude_primary = pick_runtime_model(
+        cfg,
+        RuntimeTarget::Claude,
+        &["sonnet", "minimax-m3-claude", "opus", "haiku"],
+    );
+    let claude_smart = pick_runtime_model(
+        cfg,
+        RuntimeTarget::Claude,
+        &["opus", "sonnet", "minimax-m3-claude", "haiku"],
+    );
+    let claude_cheap = pick_runtime_model(
+        cfg,
+        RuntimeTarget::Claude,
+        &["haiku", "sonnet", "minimax-m3-claude", "opus"],
+    );
+    let codex_primary = pick_runtime_model(
+        cfg,
+        RuntimeTarget::Codex,
+        &[
+            "gpt4o",
+            "minimax-m3-codex",
+            "deepseek-chat",
+            "mistral-large",
+            "llama3",
+            "gpt4o-mini",
+        ],
+    );
+    let codex_cheap = pick_runtime_model(
+        cfg,
+        RuntimeTarget::Codex,
+        &[
+            "gpt4o-mini",
+            "minimax-m3-codex",
+            "deepseek-chat",
+            "llama3",
+            "gpt4o",
+        ],
+    );
+
+    let Some(planner) = codex_primary.clone().or_else(|| claude_primary.clone()) else {
+        anyhow::bail!(
+            "no configured model can drive Claude Code or Codex runtimes; add anthropic/minimax/openai-compatible/ollama provider first"
+        );
+    };
+    let planner_runtime = if codex_primary.as_deref() == Some(planner.as_str()) {
+        "codex"
+    } else {
+        "claude-code"
+    };
+
+    let critic = claude_smart
+        .clone()
+        .or_else(|| codex_primary.clone())
+        .expect("planner availability checked above");
+    let critic_runtime = if claude_smart.as_deref() == Some(critic.as_str()) {
+        "claude-code"
+    } else {
+        "codex"
+    };
+
+    let reviewer = codex_cheap
+        .clone()
+        .or_else(|| claude_cheap.clone())
+        .expect("planner availability checked above");
+    let reviewer_runtime = if codex_cheap.as_deref() == Some(reviewer.as_str()) {
+        "codex"
+    } else {
+        "claude-code"
+    };
+
+    let mut assignments = vec![
+        DefaultRoleAssignment {
+            role: "planner",
+            model: planner,
+            runtime: planner_runtime,
+            agent_teams: false,
+        },
+        DefaultRoleAssignment {
+            role: "critic",
+            model: critic,
+            runtime: critic_runtime,
+            agent_teams: false,
+        },
+        DefaultRoleAssignment {
+            role: "reviewer",
+            model: reviewer,
+            runtime: reviewer_runtime,
+            agent_teams: false,
+        },
+    ];
+    if let Some(model) = claude_primary {
+        assignments.push(DefaultRoleAssignment {
+            role: "worker-cc",
+            model,
+            runtime: "claude-code",
+            agent_teams: true,
+        });
+    }
+    if let Some(model) = codex_primary {
+        assignments.push(DefaultRoleAssignment {
+            role: "worker-codex",
+            model,
+            runtime: "codex",
+            agent_teams: false,
+        });
+    }
+    Ok(assignments)
+}
+
+#[derive(Clone, Copy)]
+enum RuntimeTarget {
+    Claude,
+    Codex,
+}
+
+fn pick_runtime_model(
+    cfg: &Config,
+    runtime: RuntimeTarget,
+    preferred_ids: &[&str],
+) -> Option<String> {
+    for id in preferred_ids {
+        if let Some(model) = cfg
+            .models
+            .iter()
+            .find(|model| model.id == *id && model_supports_runtime(cfg, model, runtime))
+        {
+            return Some(model.id.clone());
+        }
+    }
+    cfg.models
+        .iter()
+        .find(|model| model_supports_runtime(cfg, model, runtime))
+        .map(|model| model.id.clone())
+}
+
+fn model_supports_runtime(
+    cfg: &Config,
+    model: &crate::config::ModelConfig,
+    runtime: RuntimeTarget,
+) -> bool {
+    let Some(provider) = cfg.providers.get(&model.provider) else {
+        return false;
+    };
+    match runtime {
+        RuntimeTarget::Claude => {
+            provider.kind.eq_ignore_ascii_case("anthropic")
+                || model.provider.eq_ignore_ascii_case("minimax")
+        }
+        RuntimeTarget::Codex => {
+            provider.kind.eq_ignore_ascii_case("openai")
+                || provider.kind.eq_ignore_ascii_case("ollama")
+        }
+    }
+}
+
+fn default_tag_overrides(cfg: &Config) -> Vec<(&'static str, String)> {
+    let refactor_role = if cfg.roles.contains_key("worker-cc") {
+        "worker-cc"
+    } else {
+        "worker-codex"
+    };
+    let fast_role = if cfg.roles.contains_key("worker-codex") {
+        "worker-codex"
+    } else {
+        refactor_role
+    };
+
+    [
+        ("refactor", refactor_role),
+        ("boilerplate", fast_role),
+        ("test", fast_role),
+    ]
+    .into_iter()
+    .filter(|(_, role)| cfg.roles.contains_key(*role))
+    .map(|(tag, role)| (tag, role.to_string()))
+    .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -3120,7 +3355,7 @@ fn build_provider(role: &str, model_name: &str, cfg: &Config) -> Arc<dyn ModelPr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ModelConfig, RoleConfig};
+    use crate::config::{ModelConfig, ProviderConfig, RoleConfig};
 
     fn config_with_models() -> Config {
         let mut cfg = Config::default();
@@ -3163,6 +3398,14 @@ mod tests {
             },
         );
         cfg
+    }
+
+    fn provider(kind: &str) -> ProviderConfig {
+        ProviderConfig {
+            kind: kind.to_string(),
+            api_key: Some("test-key".to_string()),
+            base_url: None,
+        }
     }
 
     #[test]
@@ -3391,6 +3634,93 @@ mod tests {
             "TIFFANY_MINIMAX_API_KEY".to_string()
         )));
         assert!(!format!("{spec:?}").contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn setup_default_config_keeps_runtimes_without_preloading_providers() {
+        let cfg = default_setup_config();
+
+        assert!(cfg.providers.is_empty());
+        assert!(cfg.models.is_empty());
+        assert!(cfg.roles.is_empty());
+        assert!(cfg.runtimes.contains_key("claude-code"));
+        assert!(cfg.runtimes.contains_key("codex"));
+    }
+
+    #[test]
+    fn setup_models_follow_configured_providers_only() {
+        let mut cfg = default_setup_config();
+        cfg.providers
+            .insert("anthropic".to_string(), provider("anthropic"));
+        cfg.providers
+            .insert("openai".to_string(), provider("openai"));
+        cfg.models.push(ModelConfig {
+            id: "stale".to_string(),
+            provider: "missing".to_string(),
+            name: "stale-model".to_string(),
+        });
+
+        register_default_models_for_configured_providers(&mut cfg);
+
+        assert!(cfg.models.iter().any(|model| model.id == "sonnet"));
+        assert!(cfg.models.iter().any(|model| model.id == "gpt4o"));
+        assert!(!cfg.models.iter().any(|model| model.id == "gemini-pro"));
+        assert!(!cfg.models.iter().any(|model| model.id == "stale"));
+        assert!(cfg
+            .models
+            .iter()
+            .all(|model| cfg.providers.contains_key(&model.provider)));
+    }
+
+    #[test]
+    fn setup_role_defaults_do_not_create_codex_worker_for_anthropic_only() {
+        let mut cfg = default_setup_config();
+        cfg.providers
+            .insert("anthropic".to_string(), provider("anthropic"));
+        register_default_models_for_configured_providers(&mut cfg);
+
+        let assignments = default_role_assignments(&cfg).unwrap();
+
+        assert!(assignments.iter().any(|item| item.role == "worker-cc"));
+        assert!(!assignments.iter().any(|item| item.role == "worker-codex"));
+        assert!(assignments.iter().all(|item| item.runtime == "claude-code"));
+    }
+
+    #[test]
+    fn setup_role_defaults_use_codex_worker_for_openai_only() {
+        let mut cfg = default_setup_config();
+        cfg.providers
+            .insert("openai".to_string(), provider("openai"));
+        register_default_models_for_configured_providers(&mut cfg);
+
+        let assignments = default_role_assignments(&cfg).unwrap();
+
+        assert!(assignments.iter().any(|item| item.role == "worker-codex"));
+        assert!(!assignments.iter().any(|item| item.role == "worker-cc"));
+        assert!(assignments.iter().all(|item| item.runtime == "codex"));
+        assert_eq!(
+            default_tag_overrides(&Config {
+                roles: assignments
+                    .iter()
+                    .map(|item| {
+                        (
+                            item.role.to_string(),
+                            RoleConfig {
+                                model: item.model.clone(),
+                                runtime: item.runtime.to_string(),
+                                agent_teams: item.agent_teams,
+                            },
+                        )
+                    })
+                    .collect(),
+                ..Config::default()
+            }),
+            vec![
+                ("refactor", "worker-codex".to_string()),
+                ("boilerplate", "worker-codex".to_string()),
+                ("test", "worker-codex".to_string())
+            ]
+        );
     }
 
     #[test]
