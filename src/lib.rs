@@ -2,6 +2,7 @@
 //!
 //! Public re-exports for embedding orchestrator as a library.
 
+pub mod acp;
 pub mod adapters;
 pub mod agent_events;
 pub mod agent_md;

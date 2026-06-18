@@ -1,13 +1,12 @@
 //! CLI dispatch.
 
-use crate::config::Config;
-use crate::core::provider::ModelProvider;
-use crate::core::types::Task;
-use crate::pipeline::orchestrator::Orchestrator;
-use crate::tiffany_events::TiffanyProgressEvent;
-use crate::tiffany_install;
-use crate::{adapters, cc_config, mux, roles, runtime, storage};
 use anyhow::{Context, Result};
+use orchestrator::config::Config;
+use orchestrator::core::types::Task;
+use orchestrator::pipeline::orchestrator::Orchestrator;
+use orchestrator::tiffany_events::TiffanyProgressEvent;
+use orchestrator::tiffany_install;
+use orchestrator::{adapters, cc_config, mux, roles, runtime, storage};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -133,13 +132,13 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                 return mux::fallback::detach_tui();
             }
             let cfg = Config::load(config_path)?;
-            let store = Arc::new(crate::core::session_store::SessionStore::open(
+            let store = Arc::new(orchestrator::core::session_store::SessionStore::open(
                 &cfg.behavior.session_log_dir,
                 &cfg.behavior.db_path,
             )?);
             let orch = build_orchestrator(&cfg, false, false, None, None, None).await?;
             if ratatui {
-                crate::tui::terminal::run_with_mode_notice(
+                orchestrator::tui::terminal::run_with_mode_notice(
                     store,
                     Arc::new(orch),
                     Arc::new(cfg),
@@ -148,7 +147,8 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                 )
                 .await
             } else {
-                crate::tui::terminal::run(store, Arc::new(orch), Arc::new(cfg), config_path).await
+                orchestrator::tui::terminal::run(store, Arc::new(orch), Arc::new(cfg), config_path)
+                    .await
             }
         }
 
@@ -159,12 +159,12 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
         } => {
             let cfg = Config::load(config_path)?;
             let orch = build_orchestrator(&cfg, no_critic, no_reviewer, None, None, None).await?;
-            crate::acp::serve_stdio(Arc::new(orch), agent, cfg.roles.clone()).await
+            orchestrator::acp::serve_stdio(Arc::new(orch), agent, cfg.roles.clone()).await
         }
 
         crate::Cmd::Sessions { action } => {
             let cfg = Config::load(config_path)?;
-            let store = crate::core::session_store::SessionStore::open(
+            let store = orchestrator::core::session_store::SessionStore::open(
                 &cfg.behavior.session_log_dir,
                 &cfg.behavior.db_path,
             )?;
@@ -213,7 +213,7 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                     }
                 }
                 crate::SessionsCmd::ImportCc { project } => {
-                    use crate::cc_session_import;
+                    use orchestrator::cc_session_import;
                     let cwd = match project {
                         Some(p) => std::path::PathBuf::from(p),
                         None => std::env::current_dir()?,
@@ -252,24 +252,24 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
         }
 
         crate::Cmd::Doctor => {
-            println!("{}", crate::doctor::run(config_path).render_text());
+            println!("{}", orchestrator::doctor::run(config_path).render_text());
             Ok(())
         }
 
         crate::Cmd::Usage { window } => {
             let cfg = Config::load(config_path)?;
-            let store = crate::core::session_store::SessionStore::open(
+            let store = orchestrator::core::session_store::SessionStore::open(
                 &cfg.behavior.session_log_dir,
                 &cfg.behavior.db_path,
             )?;
             let win = match window.as_str() {
-                "today" | "day" => crate::usage::UsageWindow::Today,
-                "month" => crate::usage::UsageWindow::ThisMonth,
-                "week" => crate::usage::UsageWindow::LastDays(7),
-                "all" => crate::usage::UsageWindow::All,
-                _ => crate::usage::UsageWindow::Today,
+                "today" | "day" => orchestrator::usage::UsageWindow::Today,
+                "month" => orchestrator::usage::UsageWindow::ThisMonth,
+                "week" => orchestrator::usage::UsageWindow::LastDays(7),
+                "all" => orchestrator::usage::UsageWindow::All,
+                _ => orchestrator::usage::UsageWindow::Today,
             };
-            let u = crate::usage::compute_for_window(&store, win)?;
+            let u = orchestrator::usage::compute_for_window(&store, win)?;
             println!("=== Token usage ({}) ===\n", window);
             println!(
                 "Total: {} tokens in · {} tokens out · ${:.4}",
@@ -476,7 +476,7 @@ fn print_status(config_path: &Path) -> Result<()> {
         println!("tiffany home: unknown; set TIFFANY_HOME");
     }
 
-    let expanded_config = crate::config::expand_home(config_path);
+    let expanded_config = orchestrator::config::expand_home(config_path);
     println!("orch config:  {}", expanded_config.display());
     println!(
         "bridge:       {}",
@@ -569,7 +569,7 @@ fn show_config(config_path: &Path) -> Result<()> {
         }
     }
 
-    let am = crate::agent_md::AgentMd::load();
+    let am = orchestrator::agent_md::AgentMd::load();
     println!("\n─── AGENTS.md (orchestrator's own instructions) ───\n");
     if am.content.is_empty() {
         println!("  (none found)");
@@ -685,7 +685,7 @@ fn set_role_model(config_path: &Path, role: &str, model_id: &str) -> Result<()> 
                 "codex"
             }
             .to_string();
-            v.insert(crate::config::RoleConfig {
+            v.insert(orchestrator::config::RoleConfig {
                 model: model_id.to_string(),
                 runtime,
                 agent_teams: false,
@@ -816,7 +816,7 @@ fn register_role(
                     available_providers_for_cli(&cfg)
                 );
             }
-            Some(crate::config::ModelConfig {
+            Some(orchestrator::config::ModelConfig {
                 id: model.to_string(),
                 provider: provider.to_string(),
                 name: model_name.unwrap_or(existing.name.as_str()).to_string(),
@@ -838,7 +838,7 @@ fn register_role(
                     available_providers_for_cli(&cfg)
                 );
             }
-            Some(crate::config::ModelConfig {
+            Some(orchestrator::config::ModelConfig {
                 id: model.to_string(),
                 provider: provider.to_string(),
                 name: model_name.unwrap_or(model).to_string(),
@@ -861,7 +861,7 @@ fn register_role(
     } else {
         default_agent_teams(role, runtime, runtime_cfg)
     };
-    let role_cfg = crate::config::RoleConfig {
+    let role_cfg = orchestrator::config::RoleConfig {
         model: model.to_string(),
         runtime: runtime.to_string(),
         agent_teams: teams,
@@ -891,14 +891,18 @@ fn register_role(
 fn default_agent_teams(
     role: &str,
     runtime_id: &str,
-    runtime_cfg: &crate::config::RuntimeConfig,
+    runtime_cfg: &orchestrator::config::RuntimeConfig,
 ) -> bool {
     runtime_cfg.supports_agent_teams
         && matches!(runtime_id, "claude-code" | "claude")
         && (role.contains("worker") || role.contains("executor") || role == "worker-cc")
 }
 
-fn role_detail_for_cli(cfg: &Config, role: &str, role_cfg: &crate::config::RoleConfig) -> String {
+fn role_detail_for_cli(
+    cfg: &Config,
+    role: &str,
+    role_cfg: &orchestrator::config::RoleConfig,
+) -> String {
     let model = cfg
         .models
         .iter()
@@ -974,7 +978,7 @@ fn apply_claude_preset(
 }
 
 fn write_config(cfg: &Config, path: &Path) -> Result<()> {
-    let path = crate::config::expand_home(path);
+    let path = orchestrator::config::expand_home(path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
@@ -993,8 +997,6 @@ mod ansi {
     pub const CYAN: &str = "\x1b[36m";
     pub const GREEN: &str = "\x1b[32m";
     pub const YELLOW: &str = "\x1b[33m";
-    pub const BLUE: &str = "\x1b[34m";
-    pub const MAGENTA: &str = "\x1b[35m";
 }
 
 fn c(color: &str, s: &str) -> String {
@@ -1013,7 +1015,7 @@ fn run_wizard(config_path: &Path) -> Result<()> {
     );
     println!();
 
-    let expanded_config_path = crate::config::expand_home(config_path);
+    let expanded_config_path = orchestrator::config::expand_home(config_path);
     let mut cfg = if expanded_config_path.exists() {
         Config::load(config_path).unwrap_or_else(|_| default_setup_config())
     } else {
@@ -1127,14 +1129,13 @@ fn run_wizard(config_path: &Path) -> Result<()> {
                 c(ansi::DIM, &env_val),
                 env_var
             );
-            let entry =
-                cfg.providers
-                    .entry(name.to_string())
-                    .or_insert(crate::config::ProviderConfig {
-                        kind: provider_kind(name).to_string(),
-                        api_key: None,
-                        base_url: None,
-                    });
+            let entry = cfg.providers.entry(name.to_string()).or_insert(
+                orchestrator::config::ProviderConfig {
+                    kind: provider_kind(name).to_string(),
+                    api_key: None,
+                    base_url: None,
+                },
+            );
             entry.kind = provider_kind(name).to_string();
             if entry.api_key.is_none() {
                 entry.api_key = Some(format!("${{{}}}", env_var));
@@ -1153,14 +1154,13 @@ fn run_wizard(config_path: &Path) -> Result<()> {
             let mut key_input = String::new();
             io::stdin().read_line(&mut key_input)?;
             let key_input = key_input.trim();
-            let entry =
-                cfg.providers
-                    .entry(name.to_string())
-                    .or_insert(crate::config::ProviderConfig {
-                        kind: provider_kind(name).to_string(),
-                        api_key: None,
-                        base_url: None,
-                    });
+            let entry = cfg.providers.entry(name.to_string()).or_insert(
+                orchestrator::config::ProviderConfig {
+                    kind: provider_kind(name).to_string(),
+                    api_key: None,
+                    base_url: None,
+                },
+            );
             entry.kind = provider_kind(name).to_string();
             if !key_input.is_empty() {
                 if key_input.starts_with('$') {
@@ -1243,7 +1243,7 @@ fn run_wizard(config_path: &Path) -> Result<()> {
         };
         cfg.roles.insert(
             assignment.role.to_string(),
-            crate::config::RoleConfig {
+            orchestrator::config::RoleConfig {
                 model: model_id,
                 runtime: assignment.runtime.to_string(),
                 agent_teams: assignment.agent_teams,
@@ -1266,7 +1266,7 @@ fn run_wizard(config_path: &Path) -> Result<()> {
     cfg.overrides = if ov_input.is_empty() {
         default_overrides
             .iter()
-            .map(|(t, r)| crate::config::OverrideConfig {
+            .map(|(t, r)| orchestrator::config::OverrideConfig {
                 tag: (*t).to_string(),
                 role: r.clone(),
             })
@@ -1278,7 +1278,7 @@ fn run_wizard(config_path: &Path) -> Result<()> {
                 let mut parts = pair.split(':');
                 let tag = parts.next()?.trim().to_string();
                 let role = parts.next()?.trim().to_string();
-                Some(crate::config::OverrideConfig { tag, role })
+                Some(orchestrator::config::OverrideConfig { tag, role })
             })
             .collect()
     };
@@ -1303,9 +1303,9 @@ fn run_wizard(config_path: &Path) -> Result<()> {
     let mut mux_input = String::new();
     io::stdin().read_line(&mut mux_input)?;
     cfg.behavior.mux = if mux_input.trim().to_lowercase().starts_with('n') {
-        crate::config::MuxKind::None
+        orchestrator::config::MuxKind::None
     } else {
-        crate::config::MuxKind::Zellij
+        orchestrator::config::MuxKind::Zellij
     };
 
     // ── Save ────────────────────────────────────────────────
@@ -1424,7 +1424,7 @@ fn register_default_models_for_configured_providers(cfg: &mut Config) {
         if cfg.providers.contains_key(template.provider)
             && !cfg.models.iter().any(|model| model.id == template.id)
         {
-            cfg.models.push(crate::config::ModelConfig {
+            cfg.models.push(orchestrator::config::ModelConfig {
                 id: template.id.to_string(),
                 provider: template.provider.to_string(),
                 name: template.name.to_string(),
@@ -1571,7 +1571,7 @@ fn pick_runtime_model(
 
 fn model_supports_runtime(
     cfg: &Config,
-    model: &crate::config::ModelConfig,
+    model: &orchestrator::config::ModelConfig,
     runtime: RuntimeTarget,
 ) -> bool {
     let Some(provider) = cfg.providers.get(&model.provider) else {
@@ -1783,7 +1783,7 @@ fn list_provider_presets() -> Result<()> {
 }
 
 fn list_providers(config_path: &Path) -> Result<()> {
-    let path = crate::config::expand_home(config_path);
+    let path = orchestrator::config::expand_home(config_path);
     if !path.exists() {
         println!("No orchestrator config found at {}", path.display());
         println!("Create one with:");
@@ -2083,7 +2083,7 @@ fn run_provider_delete_ui(config_path: &Path, dry_run: bool) -> Result<()> {
 }
 
 fn configured_provider_names(config_path: &Path) -> Result<Vec<String>> {
-    let path = crate::config::expand_home(config_path);
+    let path = orchestrator::config::expand_home(config_path);
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -2535,7 +2535,7 @@ fn delete_provider(config_path: &Path, provider: &str, dry_run: bool) -> Result<
         println!("Provider delete dry-run");
         println!(
             "  config:   {}",
-            crate::config::expand_home(config_path).display()
+            orchestrator::config::expand_home(config_path).display()
         );
         println!("  provider: {}", provider);
         println!(
@@ -2600,7 +2600,7 @@ fn setup_provider(
         println!("Provider setup dry-run");
         println!(
             "  config:   {}",
-            crate::config::expand_home(config_path).display()
+            orchestrator::config::expand_home(config_path).display()
         );
         println!("  provider: {}", provider);
         println!("  type:     {}", kind);
@@ -2798,19 +2798,19 @@ fn apply_roleset(config_path: &Path, name: &str) -> Result<()> {
             // Favor worker-codex in tag overrides
             let mut cfg = Config::load(config_path)?;
             cfg.overrides = vec![
-                crate::config::OverrideConfig {
+                orchestrator::config::OverrideConfig {
                     tag: "refactor".into(),
                     role: "worker-codex".into(),
                 },
-                crate::config::OverrideConfig {
+                orchestrator::config::OverrideConfig {
                     tag: "boilerplate".into(),
                     role: "worker-codex".into(),
                 },
-                crate::config::OverrideConfig {
+                orchestrator::config::OverrideConfig {
                     tag: "test".into(),
                     role: "worker-codex".into(),
                 },
-                crate::config::OverrideConfig {
+                orchestrator::config::OverrideConfig {
                     tag: "docs".into(),
                     role: "worker-codex".into(),
                 },
@@ -2838,19 +2838,19 @@ fn apply_roleset(config_path: &Path, name: &str) -> Result<()> {
             )?;
             let mut cfg = Config::load(config_path)?;
             cfg.overrides = vec![
-                crate::config::OverrideConfig {
+                orchestrator::config::OverrideConfig {
                     tag: "refactor".into(),
                     role: "worker-cc".into(),
                 },
-                crate::config::OverrideConfig {
+                orchestrator::config::OverrideConfig {
                     tag: "architecture".into(),
                     role: "worker-cc".into(),
                 },
-                crate::config::OverrideConfig {
+                orchestrator::config::OverrideConfig {
                     tag: "boilerplate".into(),
                     role: "worker-cc".into(),
                 },
-                crate::config::OverrideConfig {
+                orchestrator::config::OverrideConfig {
                     tag: "test".into(),
                     role: "worker-cc".into(),
                 },
@@ -2906,6 +2906,7 @@ fn pick_cheap_model(cfg: &Config, default: &str) -> String {
         .unwrap_or_else(|| "haiku".to_string())
 }
 
+#[cfg(test)]
 fn resolve_role_model(
     cfg: &Config,
     role: &str,
@@ -2940,7 +2941,7 @@ fn resolve_role_model_entry<'a>(
     cfg: &'a Config,
     role: &str,
     override_model: Option<&str>,
-) -> Result<Option<&'a crate::config::ModelConfig>> {
+) -> Result<Option<&'a orchestrator::config::ModelConfig>> {
     if let Some(model) = override_model {
         if let Some(m) = cfg.models.iter().find(|m| m.id == model || m.name == model) {
             return Ok(Some(m));
@@ -3008,7 +3009,7 @@ fn resolve_role_cli_spec(
 fn apply_claude_provider_env(
     mut spec: roles::cli_subprocess::RoleCliSpec,
     cfg: &Config,
-    model_entry: &crate::config::ModelConfig,
+    model_entry: &orchestrator::config::ModelConfig,
 ) -> roles::cli_subprocess::RoleCliSpec {
     let Some(provider) = cfg.providers.get(&model_entry.provider) else {
         return spec;
@@ -3042,7 +3043,7 @@ fn apply_claude_provider_env(
 
 fn claude_base_url_for_provider(
     provider_id: &str,
-    provider: &crate::config::ProviderConfig,
+    provider: &orchestrator::config::ProviderConfig,
 ) -> Option<String> {
     let base_url = provider.base_url.as_deref()?.trim().trim_end_matches('/');
     if base_url.is_empty() {
@@ -3061,7 +3062,7 @@ fn claude_base_url_for_provider(
 fn apply_codex_provider_config(
     mut spec: roles::cli_subprocess::RoleCliSpec,
     cfg: &Config,
-    model_entry: &crate::config::ModelConfig,
+    model_entry: &orchestrator::config::ModelConfig,
 ) -> roles::cli_subprocess::RoleCliSpec {
     let Some(provider) = cfg.providers.get(&model_entry.provider) else {
         return spec;
@@ -3184,7 +3185,7 @@ pub async fn build_orchestrator(
     let worktree_pool = Arc::new(storage::worktree::WorktreePool::new(
         &cfg.behavior.worktree_base,
     ));
-    let session_store = Arc::new(crate::core::session_store::SessionStore::open(
+    let session_store = Arc::new(orchestrator::core::session_store::SessionStore::open(
         &cfg.behavior.session_log_dir,
         &cfg.behavior.db_path,
     )?);
@@ -3192,7 +3193,7 @@ pub async fn build_orchestrator(
     // Build adapters
     let mut adapters: std::collections::HashMap<
         String,
-        Arc<dyn crate::core::worker::WorkerAdapter>,
+        Arc<dyn orchestrator::core::worker::WorkerAdapter>,
     > = std::collections::HashMap::new();
     let provider_configs = Arc::new(cfg.providers.clone());
 
@@ -3291,103 +3292,10 @@ pub async fn build_orchestrator(
     ))
 }
 
-/// Build a `ModelProvider` for the given model by looking it up in config.
-/// If the API key is missing, returns a `FailingProvider` that errors at
-/// call time; this lets terminal chat start even without keys configured.
-fn build_provider(role: &str, model_name: &str, cfg: &Config) -> Arc<dyn ModelProvider> {
-    use crate::core::provider::FailingProvider;
-    use crate::providers;
-    // Find the model in cfg.models
-    let model_cfg = cfg.models.iter().find(|m| m.name == model_name);
-    let provider_kind = model_cfg
-        .and_then(|m| cfg.providers.get(&m.provider))
-        .map(|p| p.kind.as_str())
-        .unwrap_or("");
-
-    // Get the provider entry (if any)
-    let provider_entry = model_cfg.and_then(|m| cfg.providers.get(&m.provider));
-
-    let missing_key_msg = |key_name: &str| -> Arc<dyn ModelProvider> {
-        let msg = format!(
-            "missing API key for {} (role: {}, model: {}).\n\
-             \n\
-             Set the env var before running:\n\
-             \n\
-             \x20\x20\x20\x20export {}=...\n\
-             \n\
-             Or edit ~/.orchestrator/config.yaml to use a different model.",
-            key_name, role, model_name, key_name
-        );
-        tracing::warn!("{}", msg);
-        Arc::new(FailingProvider::new(msg)) as Arc<dyn crate::core::provider::ModelProvider>
-    };
-
-    match provider_kind {
-        "anthropic" => {
-            let api_key = provider_entry.and_then(|p| p.api_key.clone());
-            let base_url = provider_entry.and_then(|p| p.base_url.clone());
-            match api_key {
-                Some(k) if !k.is_empty() => {
-                    let mut prov = providers::anthropic::AnthropicProvider::new(k);
-                    if let Some(url) = base_url {
-                        prov = prov.with_base_url(url);
-                    }
-                    Arc::new(prov) as Arc<dyn crate::core::provider::ModelProvider>
-                }
-                _ => missing_key_msg("ANTHROPIC_API_KEY"),
-            }
-        }
-        "openai" => {
-            let api_key = provider_entry.and_then(|p| p.api_key.clone());
-            let base_url = provider_entry.and_then(|p| p.base_url.clone());
-            match api_key {
-                Some(k) if !k.is_empty() => {
-                    let mut prov = providers::openai::OpenAIProvider::new(k);
-                    if let Some(url) = base_url {
-                        prov = prov.with_base_url(url);
-                    }
-                    Arc::new(prov) as Arc<dyn crate::core::provider::ModelProvider>
-                }
-                _ => missing_key_msg("OPENAI_API_KEY"),
-            }
-        }
-        "google" => {
-            let api_key = provider_entry.and_then(|p| p.api_key.clone());
-            match api_key {
-                Some(k) if !k.is_empty() => Arc::new(providers::google::GoogleProvider::new(k))
-                    as Arc<dyn crate::core::provider::ModelProvider>,
-                _ => missing_key_msg("GOOGLE_API_KEY"),
-            }
-        }
-        "ollama" => {
-            let base_url = provider_entry
-                .and_then(|p| p.base_url.clone())
-                .unwrap_or_else(|| "http://localhost:11434".to_string());
-            Arc::new(providers::ollama::OllamaProvider::new(base_url))
-                as Arc<dyn crate::core::provider::ModelProvider>
-        }
-        _ => {
-            // Unknown provider — try inferring from model name
-            if model_name.starts_with("claude") {
-                missing_key_msg("ANTHROPIC_API_KEY")
-            } else if model_name.starts_with("gpt") {
-                missing_key_msg("OPENAI_API_KEY")
-            } else if model_name.starts_with("gemini") {
-                missing_key_msg("GOOGLE_API_KEY")
-            } else {
-                Arc::new(FailingProvider::new(format!(
-                    "could not determine provider for model '{}' (role {})",
-                    model_name, role
-                )))
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ModelConfig, ProviderConfig, RoleConfig};
+    use orchestrator::config::{ModelConfig, ProviderConfig, RoleConfig};
 
     fn config_with_models() -> Config {
         let mut cfg = Config::default();
@@ -3413,7 +3321,7 @@ mod tests {
         );
         cfg.runtimes.insert(
             "claude-code".to_string(),
-            crate::config::RuntimeConfig {
+            orchestrator::config::RuntimeConfig {
                 kind: "subprocess".to_string(),
                 binary: Some("claude-test".to_string()),
                 supports_mcp: true,
@@ -3422,7 +3330,7 @@ mod tests {
         );
         cfg.runtimes.insert(
             "codex".to_string(),
-            crate::config::RuntimeConfig {
+            orchestrator::config::RuntimeConfig {
                 kind: "subprocess".to_string(),
                 binary: Some("codex-test".to_string()),
                 supports_mcp: false,
@@ -3485,7 +3393,7 @@ mod tests {
 
         assert_eq!(
             spec.runtime,
-            crate::roles::cli_subprocess::RoleCliRuntime::Codex
+            orchestrator::roles::cli_subprocess::RoleCliRuntime::Codex
         );
         assert_eq!(spec.binary, "codex-test");
         assert_eq!(spec.model, "gpt-4o");
@@ -3496,7 +3404,7 @@ mod tests {
         let mut cfg = config_with_models();
         cfg.providers.insert(
             "anthropic".to_string(),
-            crate::config::ProviderConfig {
+            orchestrator::config::ProviderConfig {
                 kind: "anthropic".to_string(),
                 api_key: Some("sk-test-secret".to_string()),
                 base_url: Some("https://api.minimaxi.com/anthropic".to_string()),
@@ -3507,7 +3415,7 @@ mod tests {
 
         assert_eq!(
             spec.runtime,
-            crate::roles::cli_subprocess::RoleCliRuntime::ClaudeCode
+            orchestrator::roles::cli_subprocess::RoleCliRuntime::ClaudeCode
         );
         assert_eq!(spec.model, "claude-sonnet-4-6");
         assert!(spec.bypass_permissions);
@@ -3559,7 +3467,7 @@ mod tests {
         let mut cfg = config_with_models();
         cfg.providers.insert(
             "minimax".to_string(),
-            crate::config::ProviderConfig {
+            orchestrator::config::ProviderConfig {
                 kind: "openai".to_string(),
                 api_key: Some("sk-test-secret".to_string()),
                 base_url: Some("https://api.minimaxi.com/v1".to_string()),
@@ -3583,7 +3491,7 @@ mod tests {
 
         assert_eq!(
             spec.runtime,
-            crate::roles::cli_subprocess::RoleCliRuntime::ClaudeCode
+            orchestrator::roles::cli_subprocess::RoleCliRuntime::ClaudeCode
         );
         assert_eq!(spec.model, "MiniMax-M3");
         assert!(spec.env.contains(&(
@@ -3609,7 +3517,7 @@ mod tests {
 
         assert_eq!(
             spec.runtime,
-            crate::roles::cli_subprocess::RoleCliRuntime::ClaudeCode
+            orchestrator::roles::cli_subprocess::RoleCliRuntime::ClaudeCode
         );
         assert!(!spec.bypass_permissions);
     }
@@ -3619,7 +3527,7 @@ mod tests {
         let mut cfg = config_with_models();
         cfg.providers.insert(
             "minimax".to_string(),
-            crate::config::ProviderConfig {
+            orchestrator::config::ProviderConfig {
                 kind: "openai".to_string(),
                 api_key: Some("sk-test-secret".to_string()),
                 base_url: Some("https://api.minimaxi.com/v1".to_string()),
@@ -3643,7 +3551,7 @@ mod tests {
 
         assert_eq!(
             spec.runtime,
-            crate::roles::cli_subprocess::RoleCliRuntime::Codex
+            orchestrator::roles::cli_subprocess::RoleCliRuntime::Codex
         );
         assert_eq!(spec.model, "MiniMax-M3");
         assert!(spec.env.contains(&(

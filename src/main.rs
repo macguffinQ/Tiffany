@@ -2,28 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-mod acp;
-mod adapters;
-mod agent_events;
-mod agent_md;
-mod cc_config;
-mod cc_session_import;
 mod cli;
-mod config;
-mod core;
-mod doctor;
-mod mux;
-mod pipeline;
-mod providers;
-mod retry;
-mod roles;
-mod runtime;
-mod storage;
-mod tiffany_events;
-mod tiffany_install;
-mod tui;
-mod usage;
-mod webhook;
 
 #[derive(Parser)]
 #[command(
