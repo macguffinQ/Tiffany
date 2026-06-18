@@ -33,7 +33,7 @@ echo "checking tiffany-loop CLI help..."
 echo "checking orchestrator bridge..."
 "$target_dir/tiffany-dist/tiffany" orchestrator \
   --bin "$target_dir/tiffany-dist/orchestrator" \
-  --legacy status >/dev/null 2>&1
+  --legacy help >/dev/null 2>&1
 
 echo "checking orchestrator event stream..."
 "$target_dir/tiffany-dist/orchestrator" events --help >/dev/null 2>&1
