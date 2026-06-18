@@ -359,7 +359,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 
 - 不确定当前用的是哪个 `tiffany` / `orchestrator` binary 或配置根目录时，先运行 `orchestrator status`。
 - worker 提前退出、provider 报 `model not found` / `模型不存在` / `401/403`、或者 API key 看起来没生效时，先运行 `/doctor` 或 `orchestrator doctor`。
-- doctor 会在不打印密钥的前提下检查环境变量 key 引用，验证 `role -> model -> provider -> runtime` 是否连通，提示重复/缺失 model，并提醒 Claude Code worker 是否可能停在手动权限选择。
+- doctor 会在不打印密钥的前提下检查环境变量 key 引用，验证 `role -> model -> provider -> runtime` 是否连通，提示重复/缺失 model，并显示本机安装/构建环境：Homebrew tap/package、Rust/cargo、Xcode/CLT 和 worker CLI 二进制。
 - 模型报错时，重点确认角色里的内部 model id 是否指向正确的 provider API model name：用 `/role <role>`，或 `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>` 修正。
 
 `tiffany orchestrator "..."` 进入后，直接在 tiffany-loop 输入框继续问即可触发下一轮 orchestrator 编排。运行中输入的普通消息会停留在底部队列，当前任务结束后合并为下一批一起执行。底部最多预览 4 条，完整队列可用 `/queue show` 查看。

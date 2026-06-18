@@ -5,6 +5,7 @@ use crate::runtime;
 use crate::tiffany_install;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::process::Command;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DoctorLevel {
@@ -59,6 +60,7 @@ pub fn run(config_path: &Path) -> DoctorReport {
     let raw_hints = RawConfigHints::load(&expanded_config_path);
 
     check_tiffany_ui(&mut builder, config_path);
+    check_host_environment(&mut builder);
 
     if expanded_config_path.exists() {
         builder.ok(format!("config found: {}", expanded_config_path.display()));
@@ -91,19 +93,7 @@ pub fn run(config_path: &Path) -> DoctorReport {
         builder.warn(format!("raw config hints unavailable: {err:#}"));
     }
 
-    check_tool(
-        &mut builder,
-        "git",
-        "required for worktree/diff workflows",
-        true,
-    );
-    check_tool(
-        &mut builder,
-        "zellij",
-        "optional terminal multiplexer",
-        false,
-    );
-    check_tool(&mut builder, "tmux", "optional fallback multiplexer", false);
+    check_local_tools(&mut builder);
 
     builder.finish()
 }
@@ -566,12 +556,223 @@ fn available_runtime_names(cfg: &Config) -> String {
     }
 }
 
+fn check_host_environment(builder: &mut DoctorReportBuilder) {
+    builder.header("Host environment");
+    builder.ok(format!(
+        "platform: {} {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    ));
+
+    check_version_command(builder, "rustc", &["--version"], "source builds", false);
+    check_version_command(builder, "cargo", &["--version"], "source builds", false);
+
+    if cfg!(target_os = "macos") {
+        check_homebrew(builder);
+        check_xcode(builder);
+    }
+}
+
+fn check_homebrew(builder: &mut DoctorReportBuilder) {
+    match command_summary("brew", &["--version"]) {
+        Ok(summary) if summary.success => builder.ok(format!("homebrew: {}", summary.first_line)),
+        Ok(summary) => builder.warn(format!("homebrew: {}", summary.short_failure())),
+        Err(_) => {
+            builder.warn("homebrew: not found (recommended install path)");
+            builder.hint("install Homebrew or use the release archive / cargo install path");
+            return;
+        }
+    }
+
+    match command_summary("brew", &["tap"]) {
+        Ok(summary)
+            if summary
+                .stdout
+                .lines()
+                .any(|line| line.trim().eq_ignore_ascii_case("macguffinQ/tap")) =>
+        {
+            builder.ok("homebrew tap: macguffinQ/tap");
+        }
+        Ok(summary) if summary.success => {
+            builder.warn("homebrew tap: macguffinQ/tap not tapped");
+            builder.hint("run `brew tap macguffinQ/tap && brew install tiffany-loop`");
+        }
+        Ok(summary) => builder.warn(format!(
+            "homebrew tap check failed: {}",
+            summary.short_failure()
+        )),
+        Err(err) => builder.warn(format!("homebrew tap check failed: {err}")),
+    }
+
+    match command_summary("brew", &["list", "--versions", "tiffany-loop"]) {
+        Ok(summary) if summary.success && !summary.stdout.trim().is_empty() => {
+            let installed = summary.stdout.trim();
+            match parse_homebrew_tiffany_version(installed) {
+                Some(version) if version == env!("CARGO_PKG_VERSION") => {
+                    builder.ok(format!("homebrew package: {installed}"));
+                }
+                Some(version) => {
+                    builder.warn(format!(
+                        "homebrew package: tiffany-loop {version} (current source/release is {})",
+                        env!("CARGO_PKG_VERSION")
+                    ));
+                    builder.hint("run `brew update && brew upgrade tiffany-loop`");
+                    builder.hint("if the local tap has divergent history, run `brew untap macguffinQ/tap && brew tap macguffinQ/tap`");
+                }
+                None => builder.ok(format!("homebrew package: {installed}")),
+            }
+        }
+        Ok(summary) if summary.success => {
+            builder.hint("homebrew package not installed: `brew install tiffany-loop`");
+        }
+        Ok(summary) => builder.hint(format!(
+            "homebrew package status unavailable: {}",
+            summary.short_failure()
+        )),
+        Err(err) => builder.hint(format!("homebrew package status unavailable: {err}")),
+    }
+}
+
+fn parse_homebrew_tiffany_version(output: &str) -> Option<&str> {
+    output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("tiffany-loop "))
+        .and_then(|rest| rest.split_whitespace().next())
+}
+
+fn check_xcode(builder: &mut DoctorReportBuilder) {
+    match command_summary("xcode-select", &["-p"]) {
+        Ok(summary) if summary.success => {
+            let developer_dir = summary.stdout.trim();
+            builder.ok(format!("xcode developer dir: {developer_dir}"));
+            if developer_dir.contains("/Applications/Xcode-beta.app/") {
+                builder.hint("using Xcode beta developer dir");
+            } else if Path::new("/Applications/Xcode-beta.app/Contents/Developer").exists() {
+                builder.hint("Xcode beta is installed; select it with `sudo xcode-select -s /Applications/Xcode-beta.app/Contents/Developer` when you intentionally want the beta toolchain");
+            }
+        }
+        Ok(summary) => {
+            builder.warn(format!("xcode-select: {}", summary.short_failure()));
+            builder.hint("run `xcode-select --install`, or select Xcode with `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`");
+        }
+        Err(err) => builder.warn(format!("xcode-select: {err}")),
+    }
+
+    match command_summary("xcrun", &["--find", "clang"]) {
+        Ok(summary) if summary.success => builder.ok(format!("clang: {}", summary.stdout.trim())),
+        Ok(summary) => {
+            builder.warn(format!("clang lookup failed: {}", summary.short_failure()));
+            builder.hint("install/select Xcode Command Line Tools before building from source");
+        }
+        Err(err) => builder.warn(format!("clang lookup failed: {err}")),
+    }
+
+    match command_summary("xcodebuild", &["-version"]) {
+        Ok(summary) if summary.success => builder.ok(format!(
+            "xcodebuild: {}",
+            summary
+                .stdout
+                .lines()
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        Ok(summary) => {
+            builder.warn(format!("xcodebuild: {}", summary.short_failure()));
+            builder.hint(
+                "if Xcode was just updated, open it once or run `sudo xcodebuild -license accept`",
+            );
+        }
+        Err(err) => builder.warn(format!("xcodebuild: {err}")),
+    }
+}
+
+fn check_local_tools(builder: &mut DoctorReportBuilder) {
+    builder.header("Local tools");
+    check_tool(builder, "git", "required for worktree/diff workflows", true);
+    check_tool(builder, "claude", "Claude Code worker binary", false);
+    check_tool(builder, "codex", "Codex worker binary", false);
+    check_tool(builder, "zellij", "optional terminal multiplexer", false);
+    check_tool(builder, "tmux", "optional fallback multiplexer", false);
+
+    check_version_command(builder, "claude", &["--version"], "worker version", false);
+    check_version_command(builder, "codex", &["--version"], "worker version", false);
+}
+
 fn check_tool(builder: &mut DoctorReportBuilder, binary: &str, description: &str, required: bool) {
     match which::which(binary) {
         Ok(path) => builder.ok(format!("{binary}: {} ({description})", path.display())),
         Err(_) if required => builder.fail(format!("{binary}: not found ({description})")),
         Err(_) => builder.warn(format!("{binary}: not found ({description})")),
     }
+}
+
+fn check_version_command(
+    builder: &mut DoctorReportBuilder,
+    binary: &str,
+    args: &[&str],
+    description: &str,
+    required: bool,
+) {
+    match command_summary(binary, args) {
+        Ok(summary) if summary.success => {
+            builder.ok(format!("{binary}: {} ({description})", summary.first_line));
+        }
+        Ok(summary) if required => {
+            builder.fail(format!("{binary}: {}", summary.short_failure()));
+        }
+        Ok(summary) => {
+            builder.warn(format!("{binary}: {}", summary.short_failure()));
+        }
+        Err(_) if required => builder.fail(format!("{binary}: not found ({description})")),
+        Err(_) => builder.warn(format!("{binary}: not found ({description})")),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CommandSummary {
+    success: bool,
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    first_line: String,
+}
+
+impl CommandSummary {
+    fn short_failure(&self) -> String {
+        let detail = self
+            .stderr
+            .lines()
+            .chain(self.stdout.lines())
+            .find(|line| !line.trim().is_empty())
+            .map(str::trim)
+            .unwrap_or("no output");
+        match self.code {
+            Some(code) => format!("exited with code {code}: {detail}"),
+            None => format!("terminated by signal: {detail}"),
+        }
+    }
+}
+
+fn command_summary(binary: &str, args: &[&str]) -> std::io::Result<CommandSummary> {
+    let output = Command::new(binary).args(args).output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let first_line = stdout
+        .lines()
+        .chain(stderr.lines())
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or("no output")
+        .to_string();
+
+    Ok(CommandSummary {
+        success: output.status.success(),
+        code: output.status.code(),
+        stdout,
+        stderr,
+        first_line,
+    })
 }
 
 #[cfg(test)]
@@ -622,6 +823,19 @@ mod tests {
         assert!(rendered.contains("Tiffany UI:"));
         assert!(rendered.contains("orchestrator config:"));
         assert!(rendered.contains("launch bridge:"));
+    }
+
+    #[test]
+    fn parses_homebrew_tiffany_version() {
+        assert_eq!(
+            parse_homebrew_tiffany_version("tiffany-loop 0.1.6\n"),
+            Some("0.1.6")
+        );
+        assert_eq!(
+            parse_homebrew_tiffany_version("other 1.0\ntiffany-loop 0.1.7 0.1.6\n"),
+            Some("0.1.7")
+        );
+        assert_eq!(parse_homebrew_tiffany_version("other 1.0\n"), None);
     }
 
     #[test]

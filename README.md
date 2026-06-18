@@ -444,7 +444,7 @@ Troubleshooting first:
 
 - Run `orchestrator status` when you are unsure which `tiffany` / `orchestrator` binaries or config roots are being used.
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
-- Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and warns when Claude Code workers may pause for manual permission prompts.
+- Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, and worker CLI binaries.
 - For model errors, confirm the role's internal model id points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>`.
 
 Input behavior:
