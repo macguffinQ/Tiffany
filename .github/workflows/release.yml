@@ -35,8 +35,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: tiffany-release-${{ matrix.target }}
-          key: workspace-crates-v1
+          shared-key: tiffany-release-${{ matrix.target }}-workspace-crates-v1
           cache-workspace-crates: true
           workspaces: |
             . -> target
