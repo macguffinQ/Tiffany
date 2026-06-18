@@ -56,6 +56,55 @@ The generated formula uses the prebuilt macOS Apple Silicon archive on Apple Sil
 
 The workflow computes checksums from authenticated GitHub APIs, so it works while the main repository is private and continues to work after the repository is public.
 
+If the secret is missing, the release still succeeds and publishes GitHub assets, but the tap stays on its previous version. Confirm this with:
+
+```bash
+gh run list --repo macguffinQ/Tiffany --workflow Release --limit 5
+gh run view <run-id> --repo macguffinQ/Tiffany --json jobs
+git ls-remote --heads https://github.com/macguffinQ/homebrew-tap.git main
+```
+
+Manual tap update fallback:
+
+```bash
+tag=v0.1.6
+version="${tag#v}"
+asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
+
+arm_sha="$(
+  gh release view "$tag" \
+    --repo macguffinQ/Tiffany \
+    --json assets \
+    --jq ".assets[] | select(.name == \"${asset}\") | .digest" |
+    sed 's/^sha256://'
+)"
+source_sha="$(
+  gh api "repos/macguffinQ/Tiffany/tarball/${tag}" |
+    shasum -a 256 |
+    awk '{print $1}'
+)"
+
+git clone https://github.com/macguffinQ/homebrew-tap.git /tmp/homebrew-tap
+cd /tmp/homebrew-tap
+# Edit Formula/tiffany-loop.rb to use $version, $tag, $arm_sha, and $source_sha.
+ruby -c Formula/tiffany-loop.rb
+git add Formula/tiffany-loop.rb
+git commit -m "Update tiffany-loop to ${tag}"
+git push
+```
+
+After pushing the tap, verify the published archive before telling users to install:
+
+```bash
+gh release download "$tag" \
+  --repo macguffinQ/Tiffany \
+  --pattern "$asset" \
+  --dir /tmp \
+  --clobber
+shasum -a 256 "/tmp/${asset}"
+tar -tzf "/tmp/${asset}" | head
+```
+
 ## Formula template
 
 See `packaging/homebrew/tiffany-loop.rb`. It is a source-build template; the release workflow generates the published formula with real archive URLs and checksums.

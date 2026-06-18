@@ -25,6 +25,7 @@ jobs:
         with:
           workspaces: |
             . -> target
+            tiffany-ui/codex-rs -> ../../target
 
       - name: Format
         run: cargo fmt -- --check

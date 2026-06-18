@@ -23,6 +23,7 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             archive: tar.gz
+            native: true
 
     steps:
       - name: Checkout
@@ -30,22 +31,45 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             . -> target
+            tiffany-ui/codex-rs -> ../../target
+
+      - name: Verify native target
+        if: ${{ matrix.native }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          host="$(rustc -vV | awk '/^host:/ {print $2}')"
+          if [[ "${host}" != "${{ matrix.target }}" ]]; then
+            echo "::error::Runner host ${host} does not match release target ${{ matrix.target }}"
+            exit 1
+          fi
 
       - name: Build orchestrator
-        run: cargo build --profile tiffany-dist --locked --target ${{ matrix.target }} --bin orchestrator
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_args=(--profile tiffany-dist --locked --bin orchestrator)
+          if [[ "${{ matrix.native }}" != "true" ]]; then
+            cargo_args+=(--target "${{ matrix.target }}")
+          fi
+          cargo build "${cargo_args[@]}"
 
       - name: Build tiffany-loop UI
         shell: bash
         working-directory: tiffany-ui/codex-rs
-        run: cargo build --profile tiffany-dist --locked --target ${{ matrix.target }} -p codex-cli --bin tiffany
+        run: |
+          set -euo pipefail
+          cargo_args=(--profile tiffany-dist --locked -p codex-cli --bin tiffany)
+          if [[ "${{ matrix.native }}" != "true" ]]; then
+            cargo_args+=(--target "${{ matrix.target }}")
+          fi
+          cargo build "${cargo_args[@]}"
 
       - name: Package
         shell: bash
@@ -54,14 +78,18 @@ jobs:
 
           name="tiffany-loop-${GITHUB_REF_NAME}-${{ matrix.target }}"
           staging="dist/${name}"
+          binary_dir="target/tiffany-dist"
+          if [[ "${{ matrix.native }}" != "true" ]]; then
+            binary_dir="target/${{ matrix.target }}/tiffany-dist"
+          fi
           mkdir -p "${staging}"
 
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            cp "target/${{ matrix.target }}/tiffany-dist/orchestrator.exe" "${staging}/"
-            cp "target/${{ matrix.target }}/tiffany-dist/tiffany.exe" "${staging}/"
+            cp "${binary_dir}/orchestrator.exe" "${staging}/"
+            cp "${binary_dir}/tiffany.exe" "${staging}/"
           else
-            cp "target/${{ matrix.target }}/tiffany-dist/orchestrator" "${staging}/"
-            cp "target/${{ matrix.target }}/tiffany-dist/tiffany" "${staging}/"
+            cp "${binary_dir}/orchestrator" "${staging}/"
+            cp "${binary_dir}/tiffany" "${staging}/"
             strip "${staging}/orchestrator" "${staging}/tiffany" || true
           fi
 
