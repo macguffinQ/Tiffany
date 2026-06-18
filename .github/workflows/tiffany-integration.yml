@@ -1,12 +1,26 @@
-name: CI
+name: Tiffany Integration
 
 on:
   push:
     branches: [main, master]
+    paths:
+      - ".github/workflows/tiffany-integration.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "scripts/tiffany-*"
+      - "src/**"
+      - "tiffany-ui/**"
   pull_request:
+    paths:
+      - ".github/workflows/tiffany-integration.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "scripts/tiffany-*"
+      - "src/**"
+      - "tiffany-ui/**"
 
 jobs:
-  rust:
+  tiffany:
     runs-on: ubuntu-latest
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -18,7 +32,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -27,14 +41,5 @@ jobs:
             . -> target
             tiffany-ui/codex-rs -> ../../target
 
-      - name: Format
-        run: cargo fmt -- --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features
-
-      - name: Test
-        run: cargo test --all
-
-      - name: Build
-        run: cargo build --all
+      - name: Tiffany integration
+        run: ./scripts/tiffany-check
