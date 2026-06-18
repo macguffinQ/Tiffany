@@ -73,6 +73,8 @@ Development entrypoints:
 - `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
 - `./scripts/tiffany-clean-targets --sizes|--dist|--debug` - inspect build-cache size or remove only release/debug build outputs when `target/` grows too large.
 
+Direct Cargo commands inside `tiffany-ui/codex-rs` are also redirected to the root `./target` through the fork's Cargo config. If an older checkout already has `tiffany-ui/codex-rs/target`, it is a legacy duplicate cache and can be removed with `./scripts/tiffany-clean-targets`.
+
 tiffany-loop keeps fork state separate from upstream UI source. The fork uses `TIFFANY_HOME`, defaulting to `~/.tiffany`, and maps UI-internal config reads to `~/.tiffany/config.toml` instead of the upstream default config directory. SQLite state defaults to the same root through `TIFFANY_SQLITE_HOME`. Override with `TIFFANY_HOME=/path/to/tiffany-home`.
 
 When running the source helper or fork binary directly, set `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator` or pass `tiffany orchestrator --bin /path/to/orchestrator`.
@@ -358,7 +360,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `./scripts/tiffany-build [args]` | Build both binaries in shared `./target`; forwards args such as `--release --locked`, or use stripped `--fast-release --locked`; set `TIFFANY_CODE_MODE_RUNTIME=1` for Codex code-mode/V8 |
 | `./scripts/tiffany-check --smoke` | Run the fast local fork/bridge verification |
 | `./scripts/tiffany-check --dist` | Run the release-profile fork/bridge verification |
-| `./scripts/tiffany-clean-targets --sizes|--dist|--debug` | Inspect or trim shared and legacy Cargo build caches |
+| `./scripts/tiffany-clean-targets --sizes|--dist|--debug` | Inspect or trim shared and legacy Cargo build caches; default removes only the old fork-local target |
 | `tiffany orchestrator` | Open the primary tiffany-loop UI after install |
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | Guided first-run setup for providers, models, and roles |
@@ -592,6 +594,8 @@ cargo build --release    # release, ~5-8min first time
 ./scripts/tiffany-build   # orchestrator + tiffany-loop UI
 ./scripts/tiffany-build --release --locked
 ./scripts/tiffany-build --fast-release --locked
+
+# Direct cargo commands inside tiffany-ui/codex-rs also use ./target.
 
 # Test
 cargo test               # run unit and integration tests

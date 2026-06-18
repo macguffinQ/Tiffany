@@ -7,7 +7,8 @@ usage() {
   cat <<'EOF'
 Usage:
   ./scripts/tiffany-clean-targets
-      Remove the old tiffany-ui/codex-rs/target directory.
+      Remove the old tiffany-ui/codex-rs/target directory. New direct Cargo
+      commands in the fork are redirected to the shared ./target directory.
 
   ./scripts/tiffany-clean-targets --sizes
       Show shared and legacy target directory sizes.
@@ -25,7 +26,7 @@ Usage:
       Print what would be removed without deleting files.
 
 By default the shared ./target directory is kept, so normal incremental builds
-remain warm.
+remain warm. The fork-local target is a legacy duplicate cache.
 EOF
 }
 
