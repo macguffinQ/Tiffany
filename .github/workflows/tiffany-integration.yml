@@ -50,6 +50,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: tiffany-integration-${{ runner.os }}
+          key: workspace-crates-v1
           cache-workspace-crates: true
           workspaces: |
             . -> target
