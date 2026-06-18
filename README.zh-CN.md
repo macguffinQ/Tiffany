@@ -79,7 +79,7 @@ provider 配置、角色路由、事件流和 runtime 执行。`orchestrator tui
 - `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；需要更快的可分发构建时用 `--fast-release`，最终二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。默认 UI 构建不带较重的 Codex code-mode/V8 runtime；需要时设置 `TIFFANY_CODE_MODE_RUNTIME=1`。
 - `./scripts/tiffany-check --smoke`：debug 构建、检查 fork 格式，并验证 legacy bridge 和事件流入口。
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
-- `./scripts/tiffany-clean-targets --sizes|--dist|--debug`：查看构建缓存大小，或只清理 release/debug 构建产物，避免 `target/` 膨胀。
+- `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist|--debug`：查看构建缓存大小、定位大文件，或只清理 incremental/release/debug 构建产物，避免 `target/` 膨胀。
 
 直接进入 `tiffany-ui/codex-rs` 执行 Cargo 命令时，也会通过 fork 的 Cargo 配置重定向到根目录 `./target`。旧 checkout 如果已经有 `tiffany-ui/codex-rs/target`，那是重复缓存，可以用 `./scripts/tiffany-clean-targets` 删除。
 
@@ -266,7 +266,7 @@ behavior:
 | `./scripts/tiffany-build [args]` | 在共享 `./target` 中同时构建两个二进制；可透传 `--release --locked`，也可用默认 strip 的 `--fast-release --locked`；需要 Codex code-mode/V8 时设置 `TIFFANY_CODE_MODE_RUNTIME=1` |
 | `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge 验证 |
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge 验证 |
-| `./scripts/tiffany-clean-targets --sizes|--dist|--debug` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
+| `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist|--debug` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
 | `tiffany orchestrator` | 安装后打开主 tiffany-loop UI |
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | 引导式配置 provider、model、role |
@@ -462,6 +462,9 @@ cargo build --release
 ./scripts/tiffany-build --fast-release --locked
 
 # 直接在 tiffany-ui/codex-rs 中执行 cargo，也会使用根目录 ./target。
+# 用 ./scripts/tiffany-clean-targets --top 定位体积来源；
+# 用 ./scripts/tiffany-clean-targets --top-deep 查看较慢的文件级细节；
+# 用 ./scripts/tiffany-clean-targets --incremental 清理可重建的增量缓存。
 
 # 测试
 cargo test

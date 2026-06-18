@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       TIFFANY_CHECK_MODE: ${{ github.event.inputs.mode || 'smoke' }}
     steps:

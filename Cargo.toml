@@ -73,6 +73,16 @@ unicode-width = "0.2"
 tokio-test = "0.4"
 tempfile = "3"
 
+[profile.dev]
+# Keep line tables/backtraces while avoiding expensive full variable debug info
+# across local dev builds. This mirrors the tiffany-loop UI fork profile.
+debug = "limited"
+
+[profile.test]
+# Test binaries are numerous; limited debug info keeps local and CI target dirs
+# from growing quickly while preserving useful backtraces.
+debug = "limited"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

@@ -13,6 +13,17 @@ Usage:
   ./scripts/tiffany-clean-targets --sizes
       Show shared and legacy target directory sizes.
 
+  ./scripts/tiffany-clean-targets --top [N]
+      Show the largest direct entries under target directories. Defaults to 20
+      entries per directory.
+
+  ./scripts/tiffany-clean-targets --top-deep [N]
+      Also scan debug deps and incremental internals. This is slower but useful
+      when the top-level output is not enough.
+
+  ./scripts/tiffany-clean-targets --incremental
+      Remove Cargo incremental caches while keeping compiled deps and binaries.
+
   ./scripts/tiffany-clean-targets --dist
       Remove tiffany-dist build outputs from shared and legacy target dirs.
 
@@ -34,8 +45,10 @@ legacy_target="$repo_dir/tiffany-ui/codex-rs/target"
 shared_target="$repo_dir/target"
 mode="legacy"
 dry_run=0
+top_limit=20
 
-for arg in "$@"; do
+while [[ "$#" -gt 0 ]]; do
+  arg="$1"
   case "$arg" in
     -h|--help)
       usage
@@ -46,6 +59,39 @@ for arg in "$@"; do
       ;;
     --sizes)
       mode="sizes"
+      ;;
+    --top)
+      mode="top"
+      if [[ "${2:-}" =~ ^[0-9]+$ ]]; then
+        top_limit="$2"
+        shift
+      fi
+      ;;
+    --top=*)
+      mode="top"
+      top_limit="${arg#--top=}"
+      if [[ ! "$top_limit" =~ ^[0-9]+$ ]]; then
+        usage >&2
+        exit 2
+      fi
+      ;;
+    --top-deep)
+      mode="top-deep"
+      if [[ "${2:-}" =~ ^[0-9]+$ ]]; then
+        top_limit="$2"
+        shift
+      fi
+      ;;
+    --top-deep=*)
+      mode="top-deep"
+      top_limit="${arg#--top-deep=}"
+      if [[ ! "$top_limit" =~ ^[0-9]+$ ]]; then
+        usage >&2
+        exit 2
+      fi
+      ;;
+    --incremental)
+      mode="incremental"
       ;;
     --dist)
       mode="dist"
@@ -64,6 +110,7 @@ for arg in "$@"; do
       exit 2
       ;;
   esac
+  shift
 done
 
 size_of() {
@@ -97,19 +144,66 @@ show_sizes() {
   echo "shared target:"
   size_of "$shared_target"
   size_of "$shared_target/debug"
+  size_of "$shared_target/debug/deps"
+  size_of "$shared_target/debug/incremental"
   size_of "$shared_target/tiffany-dist"
   size_of "$shared_target/release"
   echo
   echo "legacy target:"
   size_of "$legacy_target"
   size_of "$legacy_target/debug"
+  size_of "$legacy_target/debug/deps"
+  size_of "$legacy_target/debug/incremental"
   size_of "$legacy_target/tiffany-dist"
   size_of "$legacy_target/release"
+}
+
+show_top_dir() {
+  local label="$1"
+  local dir="$2"
+  if [[ ! -d "$dir" ]]; then
+    return
+  fi
+
+  echo
+  echo "$label:"
+  find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null \
+    | xargs -0 du -sh 2>/dev/null \
+    | sort -h \
+    | tail -n "$top_limit" \
+    || true
+}
+
+show_top() {
+  show_top_dir "shared target top entries" "$shared_target"
+  show_top_dir "shared debug top entries" "$shared_target/debug"
+  show_top_dir "shared tiffany-dist top entries" "$shared_target/tiffany-dist"
+  show_top_dir "legacy target top entries" "$legacy_target"
+}
+
+show_top_deep() {
+  show_top
+  show_top_dir "shared debug deps top entries" "$shared_target/debug/deps"
+  show_top_dir "shared debug incremental top entries" "$shared_target/debug/incremental"
+  show_top_dir "legacy debug deps top entries" "$legacy_target/debug/deps"
+  show_top_dir "legacy debug incremental top entries" "$legacy_target/debug/incremental"
 }
 
 case "$mode" in
   sizes)
     show_sizes
+    ;;
+  top)
+    show_top
+    ;;
+  top-deep)
+    show_top_deep
+    ;;
+  incremental)
+    remove_path "shared debug incremental cache" "$shared_target/debug/incremental"
+    remove_path "shared tiffany-dist incremental cache" "$shared_target/tiffany-dist/incremental"
+    remove_path "legacy debug incremental cache" "$legacy_target/debug/incremental"
+    remove_path "legacy tiffany-dist incremental cache" "$legacy_target/tiffany-dist/incremental"
     ;;
   dist)
     remove_path "shared tiffany-dist target" "$shared_target/tiffany-dist"

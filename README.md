@@ -71,7 +71,7 @@ Development entrypoints:
 - `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI in the shared `./target` directory. Use `--fast-release` for a faster distributable build; final binaries are stripped unless `TIFFANY_NO_STRIP=1`. The default UI build omits the heavy Codex code-mode/V8 runtime; set `TIFFANY_CODE_MODE_RUNTIME=1` when you need it.
 - `./scripts/tiffany-check --smoke` - debug-build, format-check the fork, and verify the legacy bridge plus event-stream entrypoint.
 - `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
-- `./scripts/tiffany-clean-targets --sizes|--dist|--debug` - inspect build-cache size or remove only release/debug build outputs when `target/` grows too large.
+- `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist|--debug` - inspect build-cache size, find large artifacts, or remove only incremental/release/debug build outputs when `target/` grows too large.
 
 Direct Cargo commands inside `tiffany-ui/codex-rs` are also redirected to the root `./target` through the fork's Cargo config. If an older checkout already has `tiffany-ui/codex-rs/target`, it is a legacy duplicate cache and can be removed with `./scripts/tiffany-clean-targets`.
 
@@ -360,7 +360,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `./scripts/tiffany-build [args]` | Build both binaries in shared `./target`; forwards args such as `--release --locked`, or use stripped `--fast-release --locked`; set `TIFFANY_CODE_MODE_RUNTIME=1` for Codex code-mode/V8 |
 | `./scripts/tiffany-check --smoke` | Run the fast local fork/bridge verification |
 | `./scripts/tiffany-check --dist` | Run the release-profile fork/bridge verification |
-| `./scripts/tiffany-clean-targets --sizes|--dist|--debug` | Inspect or trim shared and legacy Cargo build caches; default removes only the old fork-local target |
+| `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist|--debug` | Inspect or trim shared and legacy Cargo build caches; default removes only the old fork-local target |
 | `tiffany orchestrator` | Open the primary tiffany-loop UI after install |
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | Guided first-run setup for providers, models, and roles |
@@ -596,6 +596,9 @@ cargo build --release    # release, ~5-8min first time
 ./scripts/tiffany-build --fast-release --locked
 
 # Direct cargo commands inside tiffany-ui/codex-rs also use ./target.
+# Use ./scripts/tiffany-clean-targets --top to find target bloat,
+# ./scripts/tiffany-clean-targets --top-deep for slower file-level detail, and
+# ./scripts/tiffany-clean-targets --incremental to trim rebuildable caches.
 
 # Test
 cargo test               # run unit and integration tests
