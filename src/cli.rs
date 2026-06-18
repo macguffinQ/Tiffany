@@ -5,9 +5,10 @@ use crate::core::provider::ModelProvider;
 use crate::core::types::Task;
 use crate::pipeline::orchestrator::Orchestrator;
 use crate::tiffany_events::TiffanyProgressEvent;
+use crate::tiffany_install;
 use crate::{adapters, cc_config, mux, roles, runtime, storage};
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -240,15 +241,7 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
         crate::Cmd::Roles { action } => handle_roles(config_path, action),
 
         crate::Cmd::Status => {
-            let cfg = Config::load(config_path)?;
-            println!("config:  {}", config_path.display());
-            println!("db:      {}", cfg.behavior.db_path.display());
-            println!("logs:    {}", cfg.behavior.session_log_dir.display());
-            println!("mux:     {:?}", cfg.behavior.mux);
-            println!(
-                "claude:  bypass_permissions={}",
-                cfg.behavior.cc_bypass_permissions
-            );
+            print_status(config_path)?;
             if mux::zellij::in_zellij() {
                 println!(
                     "zellij:  in session {}",
@@ -414,11 +407,11 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
 }
 
 fn run_tiffany_tui(config_path: &Path) -> Result<Option<std::process::ExitStatus>> {
-    if legacy_tui_forced() {
+    if tiffany_install::legacy_tui_forced() {
         return Ok(None);
     }
 
-    let Some(tiffany_bin) = find_tiffany_binary() else {
+    let Some(tiffany_bin) = tiffany_install::find_tiffany_binary() else {
         return Ok(None);
     };
     let orchestrator_bin =
@@ -439,34 +432,73 @@ fn run_tiffany_tui(config_path: &Path) -> Result<Option<std::process::ExitStatus
     ))
 }
 
-fn legacy_tui_forced() -> bool {
-    std::env::var("ORCHESTRATOR_LEGACY_TUI")
-        .ok()
-        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false)
-}
-
-fn find_tiffany_binary() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("TIFFANY_BIN").filter(|value| !value.is_empty()) {
-        return Some(path.into());
-    }
-
-    let exe_name = if cfg!(windows) {
-        "tiffany.exe"
-    } else {
-        "tiffany"
-    };
-
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(parent) = current_exe.parent() {
-            let adjacent = parent.join(exe_name);
-            if adjacent.exists() {
-                return Some(adjacent);
-            }
+fn print_status(config_path: &Path) -> Result<()> {
+    println!("tiffany-loop {}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "orchestrator: {}",
+        tiffany_install::current_orchestrator_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "(current executable unknown)".to_string())
+    );
+    match tiffany_install::resolve_tiffany_binary() {
+        Some(binary) => {
+            let verified = if binary.verified { "" } else { " (not found)" };
+            println!(
+                "tiffany:     {} ({}){}",
+                binary.path.display(),
+                binary.source_label(),
+                verified
+            );
+        }
+        None => {
+            println!("tiffany:     not found; `orchestrator tui` will use legacy fallback");
         }
     }
+    println!(
+        "ui mode:     {}",
+        if tiffany_install::legacy_tui_forced() {
+            "legacy forced by ORCHESTRATOR_LEGACY_TUI"
+        } else {
+            "tiffany orchestrator when available"
+        }
+    );
 
-    which::which(exe_name).ok()
+    if let Some((home, source)) = tiffany_install::resolved_tiffany_home() {
+        let (sqlite_home, sqlite_source) = tiffany_install::resolved_tiffany_sqlite_home(&home);
+        println!("tiffany home: {} ({})", home.display(), source.label());
+        println!(
+            "tiffany db:   {} ({})",
+            sqlite_home.display(),
+            sqlite_source.label()
+        );
+        println!("tiffany cfg:  {}", home.join("config.toml").display());
+    } else {
+        println!("tiffany home: unknown; set TIFFANY_HOME");
+    }
+
+    let expanded_config = crate::config::expand_home(config_path);
+    println!("orch config:  {}", expanded_config.display());
+    println!(
+        "bridge:       {}",
+        tiffany_install::launch_command_preview(config_path)
+    );
+
+    match Config::load(config_path) {
+        Ok(cfg) => {
+            println!("db:           {}", cfg.behavior.db_path.display());
+            println!("logs:         {}", cfg.behavior.session_log_dir.display());
+            println!("mux:          {:?}", cfg.behavior.mux);
+            println!(
+                "claude:       bypass_permissions={}",
+                cfg.behavior.cc_bypass_permissions
+            );
+        }
+        Err(err) => {
+            println!("config load:  {err:#}");
+            println!("next:         orchestrator setup");
+        }
+    }
+    Ok(())
 }
 
 fn show_config(config_path: &Path) -> Result<()> {

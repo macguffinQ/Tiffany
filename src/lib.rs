@@ -18,6 +18,7 @@ pub mod roles;
 pub mod runtime;
 pub mod storage;
 pub mod tiffany_events;
+pub mod tiffany_install;
 pub mod tui;
 pub mod usage;
 pub mod webhook;

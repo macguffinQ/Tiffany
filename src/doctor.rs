@@ -2,6 +2,7 @@
 
 use crate::config::{self, Config, RoleConfig};
 use crate::runtime;
+use crate::tiffany_install;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -57,6 +58,8 @@ pub fn run(config_path: &Path) -> DoctorReport {
     let expanded_config_path = config::expand_home(config_path);
     let raw_hints = RawConfigHints::load(&expanded_config_path);
 
+    check_tiffany_ui(&mut builder, config_path);
+
     if expanded_config_path.exists() {
         builder.ok(format!("config found: {}", expanded_config_path.display()));
     } else {
@@ -103,6 +106,77 @@ pub fn run(config_path: &Path) -> DoctorReport {
     check_tool(&mut builder, "tmux", "optional fallback multiplexer", false);
 
     builder.finish()
+}
+
+fn check_tiffany_ui(builder: &mut DoctorReportBuilder, config_path: &Path) {
+    builder.header("Tiffany UI");
+    match tiffany_install::current_orchestrator_exe() {
+        Some(path) => builder.ok(format!("orchestrator binary: {}", path.display())),
+        None => builder.warn("orchestrator binary path could not be resolved"),
+    }
+
+    match tiffany_install::resolve_tiffany_binary() {
+        Some(binary) if binary.verified => builder.ok(format!(
+            "tiffany binary: {} ({})",
+            binary.path.display(),
+            binary.source_label()
+        )),
+        Some(binary) => {
+            builder.warn(format!(
+                "tiffany binary from {} is not resolvable: {}",
+                binary.source_label(),
+                binary.path.display()
+            ));
+            builder.hint("unset TIFFANY_BIN or point it at the installed `tiffany` binary");
+        }
+        None => {
+            builder.warn("tiffany binary not found; `orchestrator tui` will use legacy fallback");
+            builder
+                .hint("install tiffany-loop or use `./scripts/tiffany-dev` from a source checkout");
+        }
+    }
+
+    if tiffany_install::legacy_tui_forced() {
+        builder.warn("ORCHESTRATOR_LEGACY_TUI forces the old terminal chat");
+        builder.hint("unset ORCHESTRATOR_LEGACY_TUI to use the tiffany-loop UI");
+    } else {
+        builder.ok("orchestrator tui will prefer `tiffany orchestrator`");
+    }
+
+    if let Some((home, source)) = tiffany_install::resolved_tiffany_home() {
+        builder.ok(format!(
+            "tiffany home: {} ({})",
+            home.display(),
+            source.label()
+        ));
+        let (sqlite_home, sqlite_source) = tiffany_install::resolved_tiffany_sqlite_home(&home);
+        builder.ok(format!(
+            "tiffany sqlite home: {} ({})",
+            sqlite_home.display(),
+            sqlite_source.label()
+        ));
+        let ui_config = home.join("config.toml");
+        if ui_config.exists() {
+            builder.ok(format!("tiffany config: {}", ui_config.display()));
+        } else {
+            builder.hint(format!(
+                "tiffany config will be created at {}",
+                ui_config.display()
+            ));
+        }
+    } else {
+        builder.warn("tiffany home could not be resolved");
+        builder.hint("set TIFFANY_HOME to isolate UI config and history");
+    }
+
+    builder.ok(format!(
+        "orchestrator config: {}",
+        config::expand_home(config_path).display()
+    ));
+    builder.hint(format!(
+        "launch bridge: {}",
+        tiffany_install::launch_command_preview(config_path)
+    ));
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -534,6 +608,20 @@ mod tests {
         assert!(rendered.contains("✗ openai: api key missing"));
         assert!(rendered.contains("hint: export OPENAI_API_KEY"));
         assert!(rendered.contains("1 issue(s) found"));
+    }
+
+    #[test]
+    fn tiffany_ui_check_is_informational() {
+        let mut builder = DoctorReportBuilder::default();
+
+        check_tiffany_ui(&mut builder, Path::new("~/.orchestrator/config.yaml"));
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 0);
+        assert!(rendered.contains("Tiffany UI:"));
+        assert!(rendered.contains("orchestrator config:"));
+        assert!(rendered.contains("launch bridge:"));
     }
 
     #[test]

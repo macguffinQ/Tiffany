@@ -279,8 +279,8 @@ behavior:
 | `orchestrator sessions grep <pattern>` | 搜索会话日志 |
 | `orchestrator sessions import-cc` | 导入 Claude Code 历史会话 |
 | `orchestrator config` | 查看和修改 orchestrator 配置 |
-| `orchestrator status` | 查看路径、mux、环境变量状态 |
-| `orchestrator doctor` | 诊断配置、runtime、API key、角色绑定和本地工具 |
+| `orchestrator status` | 查看两个安装命令、配置根目录、桥接命令、mux 和日志路径 |
+| `orchestrator doctor` | 诊断 tiffany UI 查找、配置、runtime、API key、角色绑定和本地工具 |
 
 ## 终端界面
 
@@ -355,6 +355,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 
 优先排障：
 
+- 不确定当前用的是哪个 `tiffany` / `orchestrator` binary 或配置根目录时，先运行 `orchestrator status`。
 - worker 提前退出、provider 报 `model not found` / `模型不存在` / `401/403`、或者 API key 看起来没生效时，先运行 `/doctor` 或 `orchestrator doctor`。
 - doctor 会在不打印密钥的前提下检查环境变量 key 引用，验证 `role -> model -> provider -> runtime` 是否连通，提示重复/缺失 model，并提醒 Claude Code worker 是否可能停在手动权限选择。
 - 模型报错时，重点确认角色里的内部 model id 是否指向正确的 provider API model name：用 `/role <role>`，或 `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>` 修正。

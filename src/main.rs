@@ -20,6 +20,7 @@ mod roles;
 mod runtime;
 mod storage;
 mod tiffany_events;
+mod tiffany_install;
 mod tui;
 mod usage;
 mod webhook;

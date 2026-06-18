@@ -375,8 +375,8 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `orchestrator sessions grep <pattern>` | Grep across all session logs |
 | `orchestrator sessions import-cc` | Import your existing CC sessions from `~/.claude/projects/<slug>/sessions/` |
 | `orchestrator config` | Inspect and edit orchestrator configuration |
-| `orchestrator status` | Show paths, mux, env |
-| `orchestrator doctor` | Diagnose config, runtime binaries, API keys, role wiring, and local tools |
+| `orchestrator status` | Show the installed command pair, config roots, bridge command, mux, and logs |
+| `orchestrator doctor` | Diagnose tiffany UI discovery, config, runtime binaries, API keys, role wiring, and local tools |
 
 ---
 
@@ -440,6 +440,7 @@ The bottom status line follows tiffany-loop-style run HUD behavior: it keeps one
 
 Troubleshooting first:
 
+- Run `orchestrator status` when you are unsure which `tiffany` / `orchestrator` binaries or config roots are being used.
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
 - Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and warns when Claude Code workers may pause for manual permission prompts.
 - For model errors, confirm the role's internal model id points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>`.
