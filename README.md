@@ -69,7 +69,8 @@ Development entrypoints:
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml` - use a specific orchestrator config while keeping tiffany-loop UI config isolated under `TIFFANY_HOME`.
 - `./scripts/tiffany-dev orchestrator --legacy ...` - compatibility bridge to the old orchestrator CLI.
 - `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI in the shared `./target` directory. Use `--fast-release` for a faster distributable build.
-- `./scripts/tiffany-check` - build, format-check the fork, and verify the legacy bridge plus event-stream entrypoint.
+- `./scripts/tiffany-check --smoke` - debug-build, format-check the fork, and verify the legacy bridge plus event-stream entrypoint.
+- `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
 
 tiffany-loop keeps fork state separate from upstream UI source. The fork uses `TIFFANY_HOME`, defaulting to `~/.tiffany`, and maps UI-internal config reads to `~/.tiffany/config.toml` instead of the upstream default config directory. SQLite state defaults to the same root through `TIFFANY_SQLITE_HOME`. Override with `TIFFANY_HOME=/path/to/tiffany-home`.
 
@@ -353,7 +354,8 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `./scripts/tiffany-dev setup` | Run the first-run setup wizard from source |
 | `./scripts/tiffany-dev orchestrator` | Bridge from the tiffany-loop fork into the existing orchestrator runtime |
 | `./scripts/tiffany-build [args]` | Build both binaries in shared `./target`; forwards args such as `--release --locked`, or use `--fast-release --locked` |
-| `./scripts/tiffany-check` | Run the local fork/bridge verification |
+| `./scripts/tiffany-check --smoke` | Run the fast local fork/bridge verification |
+| `./scripts/tiffany-check --dist` | Run the release-profile fork/bridge verification |
 | `./scripts/tiffany-clean-targets` | Remove the old `tiffany-ui/codex-rs/target` build cache |
 | `tiffany orchestrator` | Open the primary tiffany-loop UI after install |
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |

@@ -3,6 +3,38 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/tiffany-check [--smoke|--dist]
+
+Checks the local tiffany-loop fork and orchestrator bridge.
+
+Modes:
+  --smoke  Debug build plus bridge/event smoke checks. Intended for PR/main CI.
+  --dist   tiffany-dist profile build plus the same checks. Intended before release.
+
+Default: --dist
+EOF
+}
+
+mode="dist"
+case "${1:-}" in
+  ""|--dist|--fast-release)
+    mode="dist"
+    ;;
+  --smoke|--debug)
+    mode="smoke"
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
 cargo_bin="${CARGO:-cargo}"
 if ! command -v "$cargo_bin" >/dev/null 2>&1; then
   cargo_bin="$HOME/.cargo/bin/cargo"
@@ -15,7 +47,18 @@ case "$target_dir" in
 esac
 export CARGO_TARGET_DIR="$target_dir"
 
-TIFFANY_QUIET=1 "$repo_dir/scripts/tiffany-build" --fast-release --locked
+case "$mode" in
+  smoke)
+    build_args=(--locked)
+    binary_dir="$target_dir/debug"
+    ;;
+  dist)
+    build_args=(--fast-release --locked)
+    binary_dir="$target_dir/tiffany-dist"
+    ;;
+esac
+
+TIFFANY_QUIET=1 "$repo_dir/scripts/tiffany-build" "${build_args[@]}"
 
 echo "checking tiffany-loop fork format..."
 fmt_log="$(mktemp)"
@@ -31,11 +74,11 @@ echo "checking tiffany-loop CLI help..."
 "$repo_dir/scripts/tiffany-dev" --help >/dev/null 2>&1
 
 echo "checking orchestrator bridge..."
-"$target_dir/tiffany-dist/tiffany" orchestrator \
-  --bin "$target_dir/tiffany-dist/orchestrator" \
+"$binary_dir/tiffany" orchestrator \
+  --bin "$binary_dir/orchestrator" \
   --legacy help >/dev/null 2>&1
 
 echo "checking orchestrator event stream..."
-"$target_dir/tiffany-dist/orchestrator" events --help >/dev/null 2>&1
+"$binary_dir/orchestrator" events --help >/dev/null 2>&1
 
 echo "check passed"

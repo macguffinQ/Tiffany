@@ -131,13 +131,14 @@ follow-ups, and pending queue drain for plain prompts.
 ## Migration Steps
 
 1. Use `./scripts/tiffany-build` to build both binaries.
-2. Use `./scripts/tiffany-check` as the local fork/bridge smoke test.
-3. Run the native tiffany-loop adapter through `./scripts/tiffany-dev`.
-4. Use `tiffany orchestrator "..."` for an initial prompt in the native tiffany-loop
+2. Use `./scripts/tiffany-check --smoke` as the local fork/bridge smoke test.
+3. Use `./scripts/tiffany-check --dist` before cutting a release archive.
+4. Run the native tiffany-loop adapter through `./scripts/tiffany-dev`.
+5. Use `tiffany orchestrator "..."` for an initial prompt in the native tiffany-loop
    TUI event adapter.
-5. Keep `tiffany orchestrator --legacy ...` only for compatibility checks.
-6. Keep release/Homebrew packaging installing both `orchestrator` and `tiffany`.
-7. Remove legacy partial upstream copies under `src/tui/codex_*` when the fork path
+6. Keep `tiffany orchestrator --legacy ...` only for compatibility checks.
+7. Keep release/Homebrew packaging installing both `orchestrator` and `tiffany`.
+8. Remove legacy partial upstream copies under `src/tui/codex_*` when the fork path
    is stable.
 
 ## Legacy Snapshot

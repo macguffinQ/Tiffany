@@ -77,7 +77,8 @@ provider 配置、角色路由、事件流和 runtime 执行。`orchestrator tui
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml`：指定 orchestrator 配置文件，同时继续让 tiffany-loop UI 配置隔离在 `TIFFANY_HOME`。
 - `./scripts/tiffany-dev orchestrator --legacy ...`：兼容旧 orchestrator CLI 桥接。
 - `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；需要更快的可分发构建时用 `--fast-release`。
-- `./scripts/tiffany-check`：构建、检查 fork 格式，并验证 legacy bridge 和事件流入口。
+- `./scripts/tiffany-check --smoke`：debug 构建、检查 fork 格式，并验证 legacy bridge 和事件流入口。
+- `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
 
 tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.tiffany`，tiffany-loop 内部配置读取会被映射到 `~/.tiffany/config.toml`，不会读写上游默认配置目录。SQLite 状态库默认也通过 `TIFFANY_SQLITE_HOME` 指到同一目录。需要多套配置时可以用 `TIFFANY_HOME=/path/to/tiffany-home` 覆盖。
 
@@ -259,7 +260,8 @@ behavior:
 | `./scripts/tiffany-dev setup` | 从源码运行首次配置向导 |
 | `./scripts/tiffany-dev orchestrator` | 从 tiffany-loop fork 桥接到现有 orchestrator runtime |
 | `./scripts/tiffany-build [args]` | 在共享 `./target` 中同时构建两个二进制；可透传 `--release --locked`，也可用 `--fast-release --locked` |
-| `./scripts/tiffany-check` | 执行本地 fork/bridge 验证 |
+| `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge 验证 |
+| `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge 验证 |
 | `./scripts/tiffany-clean-targets` | 删除旧的 `tiffany-ui/codex-rs/target` 构建缓存 |
 | `tiffany orchestrator` | 安装后打开主 tiffany-loop UI |
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
