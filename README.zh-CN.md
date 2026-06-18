@@ -149,8 +149,8 @@ cargo install --path tiffany-ui/codex-rs/cli --profile tiffany-dist
 
 ```bash
 # 示例：安装下载好的 macOS Apple Silicon 压缩包
-tar -xzf tiffany-loop-v0.1.6-aarch64-apple-darwin.tar.gz
-cd tiffany-loop-v0.1.6-aarch64-apple-darwin
+tar -xzf tiffany-loop-v0.1.7-aarch64-apple-darwin.tar.gz
+cd tiffany-loop-v0.1.7-aarch64-apple-darwin
 chmod +x orchestrator tiffany
 ./orchestrator setup
 ./orchestrator doctor
