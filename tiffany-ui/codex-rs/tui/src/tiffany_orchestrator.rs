@@ -92,6 +92,8 @@ struct TiffanyProgressEvent {
 #[derive(Default)]
 struct BridgeState {
     seen_outputs: HashSet<String>,
+    seen_statuses: HashSet<String>,
+    malformed_stdout: VecDeque<String>,
     final_output: Option<String>,
 }
 
@@ -306,18 +308,7 @@ async fn run_event_bridge(
         }
         match serde_json::from_str::<TiffanyProgressEvent>(trimmed) {
             Ok(event) => state.emit_event(&app_event_tx, event),
-            Err(err) => emit_lines(
-                &app_event_tx,
-                vec![
-                    status_line(
-                        "⚠",
-                        Color::Yellow,
-                        "orchestrator",
-                        &format!("ignored malformed event - {err}"),
-                    ),
-                    body_line(trimmed, true),
-                ],
-            ),
+            Err(_) => state.remember_malformed_stdout(trimmed),
         }
     }
 
@@ -331,7 +322,10 @@ async fn run_event_bridge(
             });
         }
     } else {
-        emit_lines(&app_event_tx, orchestrator_failure_lines(status, &stderr));
+        emit_lines(
+            &app_event_tx,
+            orchestrator_failure_lines(status, &stderr, &state.malformed_stdout_text()),
+        );
     }
 
     Ok(())
@@ -804,7 +798,11 @@ fn spawn_error_lines(
     lines
 }
 
-fn orchestrator_failure_lines(status: ExitStatus, stderr: &str) -> Vec<Line<'static>> {
+fn orchestrator_failure_lines(
+    status: ExitStatus,
+    stderr: &str,
+    malformed_stdout: &str,
+) -> Vec<Line<'static>> {
     let mut lines = vec![status_line(
         "✗",
         Color::Red,
@@ -813,6 +811,12 @@ fn orchestrator_failure_lines(status: ExitStatus, stderr: &str) -> Vec<Line<'sta
     )];
 
     let mut detail_text = stderr.trim().to_string();
+    if !malformed_stdout.trim().is_empty() {
+        if !detail_text.is_empty() {
+            detail_text.push('\n');
+        }
+        detail_text.push_str(malformed_stdout.trim());
+    }
     if detail_text.is_empty() {
         if let Some(log_tail) = read_orchestrator_tui_log_tail(10) {
             lines.push(body_line(
@@ -880,6 +884,16 @@ fn diagnostic_hint(error: &str) -> Option<&'static str> {
     if lower.contains("permission denied") || lower.contains("operation not permitted") {
         return Some(
             "hint: check file permissions, executable bit, macOS privacy access, or run /doctor",
+        );
+    }
+    if lower.contains("model not found")
+        || lower.contains("unknown model")
+        || lower.contains("invalid model")
+        || lower.contains("模型不存在")
+        || lower.contains("1211")
+    {
+        return Some(
+            "hint: check the role model/provider mapping with `/role`, `/roles`, or `/provider`",
         );
     }
     if lower.contains("unauthorized")
@@ -953,6 +967,12 @@ impl BridgeState {
             if event.role == "worker" {
                 remember_better_text(&mut self.final_output, content.to_string());
             }
+        } else {
+            let title = event_title(&event);
+            let key = format!("{}:{}:{title}", event.role, event.status);
+            if !self.seen_statuses.insert(key) {
+                return;
+            }
         }
 
         let captured_result = event.role == "orchestrator"
@@ -965,6 +985,25 @@ impl BridgeState {
         if captured_result {
             emit_lines(app_event_tx, vec![memory_capture_line()]);
         }
+    }
+
+    fn remember_malformed_stdout(&mut self, line: &str) {
+        let line = line.trim();
+        if line.is_empty() || is_ignorable_stdout_noise(line) {
+            return;
+        }
+        self.malformed_stdout.push_back(line.to_string());
+        while self.malformed_stdout.len() > 16 {
+            self.malformed_stdout.pop_front();
+        }
+    }
+
+    fn malformed_stdout_text(&self) -> String {
+        self.malformed_stdout
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -1281,6 +1320,7 @@ fn visible_content(event: &TiffanyProgressEvent) -> Option<String> {
 
 fn is_low_value_output(text: &str) -> bool {
     let lower = text.trim().to_ascii_lowercase();
+    let stderr_like = lower.contains(" stderr:") || lower.ends_with(" stderr");
     lower.is_empty()
         || matches!(
             lower.as_str(),
@@ -1294,8 +1334,7 @@ fn is_low_value_output(text: &str) -> bool {
                 | "codex assistant: thinking"
         )
         || lower.contains(" heartbeat")
-        || lower.contains(" stderr:")
-        || lower.ends_with(" stderr")
+        || (stderr_like && !looks_like_actionable_stderr(&lower))
 }
 
 fn final_output_candidate(content: &str) -> Option<String> {
@@ -1411,6 +1450,9 @@ fn humanize_jsonish(content: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
+    if let Some(summary) = summarize_angle_role_block(trimmed) {
+        return summary;
+    }
     if let Some(inner) = json_code_fence_content(trimmed) {
         return humanize_jsonish(inner);
     }
@@ -1418,6 +1460,21 @@ fn humanize_jsonish(content: &str) -> String {
         && let Ok(value) = serde_json::from_str::<Value>(trimmed)
     {
         return summarize_json_value(&value);
+    }
+    if let Some((prefix, raw)) = trimmed.split_once(": ") {
+        let raw = raw.trim();
+        if looks_like_json_or_fence(raw)
+            && let Ok(value) = serde_json::from_str::<Value>(raw)
+        {
+            let summary = summarize_json_value(&value);
+            return format!("{}: {}", prefix.trim(), summary);
+        }
+    }
+    if let Some(summary) = summarize_jsonish_lines(trimmed) {
+        return summary;
+    }
+    if let Some(summary) = summarize_embedded_json_with_context(trimmed) {
+        return summary;
     }
     trimmed.to_string()
 }
@@ -1432,43 +1489,28 @@ fn json_code_fence_content(content: &str) -> Option<&str> {
 }
 
 fn summarize_json_value(value: &Value) -> String {
+    if let Some(object) = value.as_object() {
+        if let Some(summary) = summarize_error_object(object) {
+            return summary;
+        }
+        if let Some(summary) = summarize_plan_object(object) {
+            return summary;
+        }
+        if let Some(summary) = summarize_review_object(object) {
+            return summary;
+        }
+        if let Some(summary) = summarize_tool_object(object) {
+            return summary;
+        }
+    }
     if let Some(text) = value.get("result").and_then(Value::as_str) {
-        if looks_like_json_or_fence(text) {
-            return humanize_jsonish(text);
-        }
-        return text.trim().to_string();
-    }
-    if let Some(sub_tasks) = value.get("sub_tasks").and_then(Value::as_array) {
-        let mut summary = format!("plan ready - {} sub-task(s)", sub_tasks.len());
-        let previews = sub_tasks
-            .iter()
-            .filter_map(|task| {
-                task.get("prompt")
-                    .and_then(Value::as_str)
-                    .or_else(|| task.get("title").and_then(Value::as_str))
-            })
-            .take(3)
-            .map(|text| truncate_text(text.trim(), 80))
-            .collect::<Vec<_>>();
-        if !previews.is_empty() {
-            summary.push_str(": ");
-            summary.push_str(&previews.join("; "));
-        }
-        return summary;
-    }
-    if let Some(approved) = value.get("approved").and_then(Value::as_bool) {
-        let issues = value
-            .get("issues")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len);
-        return if approved {
-            format!("approved ({issues} issue(s))")
-        } else {
-            format!("needs changes ({issues} issue(s))")
-        };
+        return humanize_jsonish(text);
     }
     if let Some(text) = extract_text(value) {
         return text;
+    }
+    if let Some(array) = value.as_array() {
+        return summarize_json_array(array);
     }
     if let Some(object) = value.as_object() {
         let keys = object
@@ -1482,6 +1524,285 @@ fn summarize_json_value(value: &Value) -> String {
         }
     }
     value.to_string()
+}
+
+fn summarize_error_object(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let error = object.get("error")?;
+    let message = if let Some(text) = error.as_str().filter(|text| !text.trim().is_empty()) {
+        text.trim().to_string()
+    } else if let Some(error_object) = error.as_object() {
+        error_object
+            .get("message")
+            .or_else(|| error_object.get("description"))
+            .or_else(|| error_object.get("detail"))
+            .and_then(value_to_text)
+            .or_else(|| extract_text(error))
+            .unwrap_or_else(|| "request failed".to_string())
+    } else {
+        value_to_text(error).unwrap_or_else(|| "request failed".to_string())
+    };
+
+    let code = error
+        .as_object()
+        .and_then(|error_object| {
+            error_object
+                .get("code")
+                .or_else(|| error_object.get("status"))
+                .or_else(|| error_object.get("type"))
+        })
+        .and_then(value_to_text);
+
+    Some(match code {
+        Some(code) if !message.contains(&code) => format!("error: {message} ({code})"),
+        _ => format!("error: {message}"),
+    })
+}
+
+fn summarize_plan_object(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let sub_tasks = object.get("sub_tasks").and_then(Value::as_array)?;
+    let mut summary = format!("plan ready - {} sub-task(s)", sub_tasks.len());
+
+    for (idx, task) in sub_tasks.iter().take(6).enumerate() {
+        let prompt = task
+            .get("prompt")
+            .or_else(|| task.get("title"))
+            .or_else(|| task.get("name"))
+            .and_then(value_to_text)
+            .unwrap_or_else(|| "task".to_string());
+        summary.push_str(&format!(
+            "\n  {}. {}",
+            idx + 1,
+            truncate_text(prompt.trim(), 140)
+        ));
+
+        if let Some(agent) = task
+            .get("agent_hint")
+            .or_else(|| task.get("agent"))
+            .or_else(|| task.get("role"))
+            .and_then(value_to_text)
+        {
+            summary.push_str(&format!("\n     agent: {}", truncate_text(&agent, 80)));
+        }
+    }
+
+    if sub_tasks.len() > 6 {
+        summary.push_str(&format!("\n  … {} more", sub_tasks.len() - 6));
+    }
+
+    Some(summary)
+}
+
+fn summarize_review_object(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let approved = object.get("approved").and_then(Value::as_bool)?;
+    let issues = value_array_texts(object.get("issues"));
+    let suggestions = value_array_texts(object.get("suggestions"));
+    let mut summary = if approved {
+        format!("approved - {} issue(s)", issues.len())
+    } else {
+        format!("needs changes - {} issue(s)", issues.len())
+    };
+
+    for issue in issues.iter().take(6) {
+        summary.push_str("\n  - ");
+        summary.push_str(&truncate_text(issue.trim(), 220));
+    }
+    if issues.len() > 6 {
+        summary.push_str(&format!("\n  … {} more issue(s)", issues.len() - 6));
+    }
+
+    if !suggestions.is_empty() {
+        summary.push_str("\n  suggestions:");
+        for suggestion in suggestions.iter().take(3) {
+            summary.push_str("\n  - ");
+            summary.push_str(&truncate_text(suggestion.trim(), 220));
+        }
+        if suggestions.len() > 3 {
+            summary.push_str(&format!(
+                "\n  … {} more suggestion(s)",
+                suggestions.len() - 3
+            ));
+        }
+    }
+
+    Some(summary)
+}
+
+fn summarize_tool_object(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let name = object
+        .get("tool_name")
+        .or_else(|| object.get("name"))
+        .or_else(|| object.get("tool"))
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())?;
+    let command = object
+        .get("input")
+        .and_then(|input| input.get("command").or_else(|| input.get("cmd")))
+        .or_else(|| object.get("command"))
+        .or_else(|| object.get("cmd"))
+        .and_then(value_to_text);
+
+    Some(match command {
+        Some(command) => format!("tool {name}: {}", truncate_text(&command, 180)),
+        None => format!("tool {name}"),
+    })
+}
+
+fn summarize_json_array(array: &[Value]) -> String {
+    let parts = array
+        .iter()
+        .filter_map(extract_text)
+        .take(6)
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        format!("{} item(s)", array.len())
+    } else {
+        parts.join(" | ")
+    }
+}
+
+fn value_array_texts(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|item| value_to_text(item).or_else(|| extract_text(item)))
+                .map(|text| truncate_text(text.trim(), 240))
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn value_to_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => (!text.trim().is_empty()).then(|| text.trim().to_string()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+fn summarize_angle_role_block(content: &str) -> Option<String> {
+    let (head, body) = content.split_once('\n')?;
+    let role = head.trim().strip_suffix('>')?.trim();
+    if !matches!(role, "planner" | "critic" | "reviewer" | "worker" | "tool") {
+        return None;
+    }
+    let body = body.trim();
+    if body.is_empty() {
+        return None;
+    }
+    Some(format!("{role}: {}", humanize_jsonish(body)))
+}
+
+fn summarize_jsonish_lines(content: &str) -> Option<String> {
+    let lines = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.len() < 2 {
+        return None;
+    }
+
+    let mut parsed = 0usize;
+    let mut out = Vec::new();
+    for line in lines.iter().take(24) {
+        if let Some(summary) = summarize_jsonish_line(line) {
+            parsed += 1;
+            push_unique_summary_line(&mut out, summary);
+        } else {
+            push_unique_summary_line(&mut out, truncate_text(line, 260));
+        }
+    }
+    if lines.len() > 24 {
+        out.push(format!("… {} more line(s)", lines.len() - 24));
+    }
+
+    (parsed > 0).then(|| out.join("\n"))
+}
+
+fn summarize_jsonish_line(line: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<Value>(line.trim()) {
+        return Some(summarize_json_value(&value));
+    }
+    if let Some((prefix, raw)) = line.split_once(": ") {
+        let raw = raw.trim();
+        if looks_like_json_or_fence(raw)
+            && let Ok(value) = serde_json::from_str::<Value>(raw)
+        {
+            return Some(format!(
+                "{}: {}",
+                prefix.trim(),
+                summarize_json_value(&value)
+            ));
+        }
+    }
+    summarize_embedded_json_with_context(line)
+}
+
+fn push_unique_summary_line(out: &mut Vec<String>, line: String) {
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    if out.last().map(String::as_str) != Some(line) {
+        out.push(line.to_string());
+    }
+}
+
+fn summarize_embedded_json_with_context(content: &str) -> Option<String> {
+    let start = content
+        .char_indices()
+        .find_map(|(idx, ch)| (ch == '{').then_some(idx))?;
+    let mut iter = serde_json::Deserializer::from_str(&content[start..]).into_iter::<Value>();
+    let value = iter.next()?.ok()?;
+    let end = start + iter.byte_offset();
+    let summary = summarize_json_value(&value);
+    let prefix = content[..start].trim();
+    let suffix = content[end..].trim();
+    match (prefix.is_empty(), suffix.is_empty()) {
+        (true, true) => Some(summary),
+        (false, true) => Some(format!("{prefix} {summary}")),
+        (true, false) => Some(format!("{summary} {suffix}")),
+        (false, false) => Some(format!("{prefix} {summary} {suffix}")),
+    }
+}
+
+fn looks_like_actionable_stderr(lower: &str) -> bool {
+    [
+        "error",
+        "failed",
+        "failure",
+        "panic",
+        "unauthorized",
+        "authentication",
+        "not authenticated",
+        "forbidden",
+        "permission",
+        "denied",
+        "rate limit",
+        "api key",
+        "login",
+        "model not found",
+        "unknown model",
+        "invalid model",
+        "not found",
+        "模型不存在",
+        "1211",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn is_ignorable_stdout_noise(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    lower.is_empty()
+        || lower.starts_with("debug ")
+        || lower.starts_with("trace ")
+        || lower.contains("tracing::")
+        || lower.contains("tokio-runtime-worker")
 }
 
 fn extract_text(value: &Value) -> Option<String> {
@@ -1616,7 +1937,51 @@ mod tests {
         };
         assert_eq!(
             visible_content(&event).as_deref(),
-            Some("approved (0 issue(s))")
+            Some("approved - 0 issue(s)")
+        );
+    }
+
+    #[test]
+    fn expands_structured_reviewer_issues() {
+        let event = TiffanyProgressEvent {
+            role: "critic".to_string(),
+            status: "output".to_string(),
+            message: "critic output".to_string(),
+            task_id: None,
+            agent: None,
+            content: Some(
+                r#"{"approved":false,"issues":["worker prompt conflicts with direct answer"],"suggestions":["answer in Chinese"]}"#
+                    .to_string(),
+            ),
+            approved: None,
+            issues: None,
+            count: None,
+        };
+
+        let visible = visible_content(&event).expect("visible critic output");
+
+        assert!(visible.contains("needs changes - 1 issue(s)"));
+        assert!(visible.contains("worker prompt conflicts with direct answer"));
+        assert!(visible.contains("suggestions:"));
+    }
+
+    #[test]
+    fn shows_actionable_stderr_instead_of_hiding_model_errors() {
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            message: "codex output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("worker-codex".to_string()),
+            content: Some("worker-codex stderr: [1211] 模型不存在".to_string()),
+            approved: None,
+            issues: None,
+            count: None,
+        };
+
+        assert_eq!(
+            visible_content(&event).as_deref(),
+            Some("worker-codex stderr: [1211] 模型不存在")
         );
     }
 
@@ -1722,6 +2087,7 @@ mod tests {
         let lines = orchestrator_failure_lines(
             ExitStatus::from_raw(1 << 8),
             "Error: reading config at /tmp/missing/config.yaml",
+            "",
         );
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
@@ -1729,6 +2095,22 @@ mod tests {
         assert!(text.contains("reading config"));
         assert!(text.contains("orchestrator init"));
         assert!(text.contains("orchestrator doctor"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failure_lines_include_cached_malformed_stdout() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let lines = orchestrator_failure_lines(
+            ExitStatus::from_raw(1 << 8),
+            "",
+            "2026-06-17T03:34:28Z ERROR planner returned no sub_tasks",
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("planner returned no sub_tasks"));
+        assert!(!text.contains("ignored malformed event"));
     }
 
     #[test]
