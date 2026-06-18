@@ -45,7 +45,7 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 Name: HOMEBREW_TAP_TOKEN
 ```
 
-After that, pushing a tag like `v0.1.5` will:
+After that, pushing a tag like `v0.1.6` will:
 
 1. Build the macOS Apple Silicon release archive used by Homebrew.
 2. Publish the GitHub Release.

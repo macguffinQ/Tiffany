@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.6] - 2026-06-19
+
+### Added
+
+- Added the full `tiffany` UI fork as the primary terminal experience for orchestrator runs.
+- Added native `tiffany orchestrator` streaming for planner, critic, worker, reviewer, and final result events.
+- Added `/provider`, `/role`, and `/roles` flows for configuring providers and role routing from the TUI.
+- Added top-level `orchestrator setup` and `./scripts/tiffany-dev setup` for first-run provider/model/role setup.
+- Added install diagnostics to `orchestrator status` and `orchestrator doctor`, including binary discovery, config roots, and the exact bridge command.
+
 ### Changed
 
 - Renamed the public product to `tiffany-loop`.
@@ -11,6 +21,16 @@ All notable changes to this project will be documented in this file.
 - Added preview-stage and non-affiliation language for open-source publication.
 - Clarified that `orchestrator` and `tiffany` remain installed command names for compatibility.
 - Updated TUI visible branding, docs, and snapshots to use `tiffany-loop`.
+- Made `tiffany orchestrator` and `orchestrator tui` use the tiffany-loop UI path by default when installed.
+- Switched release and developer builds to shared Cargo target directories to reduce duplicate build artifacts.
+- Reduced `orchestrator` binary build warning noise by removing duplicate module compilation and stale direct-provider code.
+
+### Fixed
+
+- Humanized planner, critic, worker, and reviewer JSON-like output before showing it in terminal history.
+- Reduced duplicate worker/process messages in the TUI event stream.
+- Kept final results as plain selectable text instead of framed output.
+- Improved queue and multi-turn follow-up handling while an orchestrator run is active.
 
 ## [0.1.5] - 2026-06-15
 

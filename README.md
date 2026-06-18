@@ -234,8 +234,8 @@ cargo install --path tiffany-ui/codex-rs/cli --profile tiffany-dist
 
 ```bash
 # Example: install a downloaded archive
-tar -xzf tiffany-loop-v0.1.5-aarch64-apple-darwin.tar.gz
-cd tiffany-loop-v0.1.5-aarch64-apple-darwin
+tar -xzf tiffany-loop-v0.1.6-aarch64-apple-darwin.tar.gz
+cd tiffany-loop-v0.1.6-aarch64-apple-darwin
 chmod +x orchestrator tiffany
 ./orchestrator setup
 ./orchestrator doctor
