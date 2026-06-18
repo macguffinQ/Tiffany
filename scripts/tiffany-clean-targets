@@ -9,34 +9,120 @@ Usage:
   ./scripts/tiffany-clean-targets
       Remove the old tiffany-ui/codex-rs/target directory.
 
+  ./scripts/tiffany-clean-targets --sizes
+      Show shared and legacy target directory sizes.
+
+  ./scripts/tiffany-clean-targets --dist
+      Remove tiffany-dist build outputs from shared and legacy target dirs.
+
+  ./scripts/tiffany-clean-targets --debug
+      Remove debug build outputs from shared and legacy target dirs.
+
   ./scripts/tiffany-clean-targets --all
       Remove both ./target and tiffany-ui/codex-rs/target.
+
+  ./scripts/tiffany-clean-targets --dry-run --dist
+      Print what would be removed without deleting files.
 
 By default the shared ./target directory is kept, so normal incremental builds
 remain warm.
 EOF
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
-
 legacy_target="$repo_dir/tiffany-ui/codex-rs/target"
 shared_target="$repo_dir/target"
+mode="legacy"
+dry_run=0
 
-if [[ -d "$legacy_target" ]]; then
-  echo "removing legacy target: $legacy_target"
-  rm -rf "$legacy_target"
-else
-  echo "legacy target already absent: $legacy_target"
-fi
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --dry-run)
+      dry_run=1
+      ;;
+    --sizes)
+      mode="sizes"
+      ;;
+    --dist)
+      mode="dist"
+      ;;
+    --debug)
+      mode="debug"
+      ;;
+    --legacy)
+      mode="legacy"
+      ;;
+    --all)
+      mode="all"
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
-if [[ "${1:-}" == "--all" ]]; then
-  if [[ -d "$shared_target" ]]; then
-    echo "removing shared target: $shared_target"
-    rm -rf "$shared_target"
+size_of() {
+  local path="$1"
+  if [[ -e "$path" ]]; then
+    du -sh "$path" 2>/dev/null || true
   else
-    echo "shared target already absent: $shared_target"
+    printf '0B\t%s\n' "$path"
   fi
-fi
+}
+
+remove_path() {
+  local label="$1"
+  local path="$2"
+  if [[ ! -e "$path" ]]; then
+    echo "$label already absent: $path"
+    return
+  fi
+
+  if [[ "$dry_run" == "1" ]]; then
+    printf 'would remove %s: ' "$label"
+    size_of "$path"
+    return
+  fi
+
+  echo "removing $label: $path"
+  rm -rf "$path"
+}
+
+show_sizes() {
+  echo "shared target:"
+  size_of "$shared_target"
+  size_of "$shared_target/debug"
+  size_of "$shared_target/tiffany-dist"
+  size_of "$shared_target/release"
+  echo
+  echo "legacy target:"
+  size_of "$legacy_target"
+  size_of "$legacy_target/debug"
+  size_of "$legacy_target/tiffany-dist"
+  size_of "$legacy_target/release"
+}
+
+case "$mode" in
+  sizes)
+    show_sizes
+    ;;
+  dist)
+    remove_path "shared tiffany-dist target" "$shared_target/tiffany-dist"
+    remove_path "legacy tiffany-dist target" "$legacy_target/tiffany-dist"
+    ;;
+  debug)
+    remove_path "shared debug target" "$shared_target/debug"
+    remove_path "legacy debug target" "$legacy_target/debug"
+    ;;
+  legacy)
+    remove_path "legacy target" "$legacy_target"
+    ;;
+  all)
+    remove_path "legacy target" "$legacy_target"
+    remove_path "shared target" "$shared_target"
+    ;;
+esac

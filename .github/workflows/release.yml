@@ -35,6 +35,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: tiffany-release-${{ matrix.target }}
           workspaces: |
             . -> target
             tiffany-ui/codex-rs -> ../../target
@@ -58,7 +59,10 @@ jobs:
           if [[ "${{ matrix.native }}" != "true" ]]; then
             cargo_args+=(--target "${{ matrix.target }}")
           fi
+          started_at="$(date +%s)"
           cargo build "${cargo_args[@]}"
+          finished_at="$(date +%s)"
+          echo "orchestrator build took $((finished_at - started_at))s"
 
       - name: Build tiffany-loop UI
         shell: bash
@@ -69,7 +73,10 @@ jobs:
           if [[ "${{ matrix.native }}" != "true" ]]; then
             cargo_args+=(--target "${{ matrix.target }}")
           fi
+          started_at="$(date +%s)"
           cargo build "${cargo_args[@]}"
+          finished_at="$(date +%s)"
+          echo "tiffany-loop UI build took $((finished_at - started_at))s"
 
       - name: Package
         shell: bash

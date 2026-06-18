@@ -79,6 +79,7 @@ provider 配置、角色路由、事件流和 runtime 执行。`orchestrator tui
 - `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；需要更快的可分发构建时用 `--fast-release`。
 - `./scripts/tiffany-check --smoke`：debug 构建、检查 fork 格式，并验证 legacy bridge 和事件流入口。
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
+- `./scripts/tiffany-clean-targets --sizes|--dist|--debug`：查看构建缓存大小，或只清理 release/debug 构建产物，避免 `target/` 膨胀。
 
 tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.tiffany`，tiffany-loop 内部配置读取会被映射到 `~/.tiffany/config.toml`，不会读写上游默认配置目录。SQLite 状态库默认也通过 `TIFFANY_SQLITE_HOME` 指到同一目录。需要多套配置时可以用 `TIFFANY_HOME=/path/to/tiffany-home` 覆盖。
 
@@ -262,7 +263,7 @@ behavior:
 | `./scripts/tiffany-build [args]` | 在共享 `./target` 中同时构建两个二进制；可透传 `--release --locked`，也可用 `--fast-release --locked` |
 | `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge 验证 |
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge 验证 |
-| `./scripts/tiffany-clean-targets` | 删除旧的 `tiffany-ui/codex-rs/target` 构建缓存 |
+| `./scripts/tiffany-clean-targets --sizes|--dist|--debug` | 查看或精简共享/旧 Cargo 构建缓存 |
 | `tiffany orchestrator` | 安装后打开主 tiffany-loop UI |
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | 引导式配置 provider、model、role |
