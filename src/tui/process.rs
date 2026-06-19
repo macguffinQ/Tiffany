@@ -15,6 +15,7 @@ const TRACE_COMPACT_LIMIT: usize = 8;
 const TRACE_EXPANDED_LIMIT: usize = 24;
 const PROCESS_SUMMARY_LIMIT: usize = 12;
 const PROCESS_FAILURE_CONTEXT_LIMIT: usize = 8;
+const PROCESS_FAILURE_HINT_MAX_CHARS: usize = 320;
 const PROCESS_FINAL_OUTPUT_MAX_CHARS: usize = 240_000;
 
 pub(super) fn record_run_event(input: &mut InputState, event: &str) {
@@ -760,6 +761,7 @@ pub(super) fn format_failure_context(input: &InputState) -> Option<String> {
         return None;
     }
     let events: Vec<&String> = input.run_events.iter().collect();
+    let hints = failure_hints_from_events(&events);
     let important = important_process_events(&events);
     let source = if important.is_empty() {
         events
@@ -771,7 +773,29 @@ pub(super) fn format_failure_context(input: &InputState) -> Option<String> {
     }
 
     let start = source.len().saturating_sub(PROCESS_FAILURE_CONTEXT_LIMIT);
-    let mut out = String::from("Recent process:");
+    let mut out = String::new();
+    if !hints.is_empty() {
+        out.push_str("Likely cause:");
+        for hint in &hints {
+            out.push('\n');
+            out.push_str("  - ");
+            out.push_str(hint.title());
+            out.push_str(": ");
+            out.push_str(&truncate_chars(
+                &hint.evidence,
+                PROCESS_FAILURE_HINT_MAX_CHARS,
+            ));
+        }
+        out.push_str("\n\nNext step:");
+        for hint in &hints {
+            out.push('\n');
+            out.push_str("  - ");
+            out.push_str(hint.action());
+        }
+        out.push_str("\n\n");
+    }
+
+    out.push_str("Recent process:");
     for line in &source[start..] {
         out.push('\n');
         out.push_str("  ");
@@ -782,6 +806,33 @@ pub(super) fn format_failure_context(input: &InputState) -> Option<String> {
         out.push_str(&format!("\nCapture file: {}", path.display()));
     }
     Some(out)
+}
+
+fn failure_hints_from_events(events: &[&String]) -> Vec<agent_events::AgentFailureHint> {
+    let mut hints = Vec::new();
+    for line in events.iter().rev() {
+        let body = line
+            .split_once("  ")
+            .map(|(_, body)| body)
+            .unwrap_or(line)
+            .trim();
+        let Some(hint) = agent_events::agent_failure_hint(body, PROCESS_FAILURE_HINT_MAX_CHARS)
+        else {
+            continue;
+        };
+        if hints
+            .iter()
+            .any(|seen: &agent_events::AgentFailureHint| seen.category == hint.category)
+        {
+            continue;
+        }
+        hints.push(hint);
+        if hints.len() >= 3 {
+            break;
+        }
+    }
+    hints.reverse();
+    hints
 }
 
 fn important_process_events<'a>(events: &[&'a String]) -> Vec<&'a String> {
@@ -1221,6 +1272,42 @@ mod tests {
         assert!(formatted.contains("error  command exited 1"));
         assert!(!formatted.contains("verbose progress"));
         assert!(formatted.contains("/process full"));
+    }
+
+    #[test]
+    fn failure_context_surfaces_model_error_hint() {
+        let mut input = InputState::default();
+        input.run_events = vec![
+            "10:00:00  worker  worker-codex started · codex · openai/glm-5.1 · abcdef12".into(),
+            "10:00:01  worker  stderr · abcdef12 worker-codex: API Error: 400 [1211][模型不存在，请检查模型代码。]".into(),
+            "10:00:02  worker  worker-codex failed · abcdef12 · 120ms".into(),
+            "10:00:03  Failed: command exited 1".into(),
+        ];
+
+        let formatted = format_failure_context(&input).expect("failure context");
+
+        assert!(formatted.contains("Likely cause:"));
+        assert!(formatted.contains("model not found"));
+        assert!(formatted.contains("模型不存在"));
+        assert!(formatted.contains("Next step:"));
+        assert!(formatted.contains("Check the role's provider/model in /role"));
+        assert!(formatted.contains("Recent process:"));
+    }
+
+    #[test]
+    fn failure_context_surfaces_parse_error_hint() {
+        let mut input = InputState::default();
+        input.run_events = vec![
+            "10:00:00  plan  planning work".into(),
+            "10:00:01  critic  plan needs changes · 1 issue(s)".into(),
+            "10:00:02  error  replanning after critique round 1: planner returned no sub_tasks (parse failed)".into(),
+        ];
+
+        let formatted = format_failure_context(&input).expect("failure context");
+
+        assert!(formatted.contains("agent output could not be parsed"));
+        assert!(formatted.contains("planner returned no sub_tasks"));
+        assert!(formatted.contains("Inspect /process full"));
     }
 
     #[test]

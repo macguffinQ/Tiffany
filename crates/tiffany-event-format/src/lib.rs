@@ -38,6 +38,90 @@ pub struct VisibleAgentOutput {
     pub dedupe_key: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentFailureCategory {
+    Model,
+    Auth,
+    Permission,
+    RateLimit,
+    Runtime,
+    Network,
+    Parse,
+}
+
+impl AgentFailureCategory {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Model => "model not found",
+            Self::Auth => "provider authentication failed",
+            Self::Permission => "permission blocked execution",
+            Self::RateLimit => "provider rate limit or quota",
+            Self::Runtime => "worker runtime is not available",
+            Self::Network => "network or endpoint failure",
+            Self::Parse => "agent output could not be parsed",
+        }
+    }
+
+    pub fn action(self) -> &'static str {
+        match self {
+            Self::Model => {
+                "Check the role's provider/model in /role, then run /doctor."
+            }
+            Self::Auth => {
+                "Set the provider key in /provider or the referenced env var, then run /doctor."
+            }
+            Self::Permission => {
+                "For Claude Code workers, enable cc_bypass_permissions or grant the permission manually; verify with /doctor."
+            }
+            Self::RateLimit => {
+                "Retry later or switch the affected role to another provider/model with /role."
+            }
+            Self::Runtime => {
+                "Install the missing worker CLI or update the role runtime in /role; verify with /doctor."
+            }
+            Self::Network => {
+                "Check the provider endpoint, proxy, and network, then retry."
+            }
+            Self::Parse => {
+                "Inspect /process full, then adjust the planner/critic/reviewer role or model."
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentFailureHint {
+    pub category: AgentFailureCategory,
+    pub evidence: String,
+}
+
+impl AgentFailureHint {
+    pub fn title(&self) -> &'static str {
+        self.category.title()
+    }
+
+    pub fn action(&self) -> &'static str {
+        self.category.action()
+    }
+}
+
+pub fn agent_failure_hint(content: &str, max: usize) -> Option<AgentFailureHint> {
+    let display = humanize_jsonish(content, max);
+    let evidence = normalize_output_summary(&display);
+    let evidence = if evidence.trim().is_empty() {
+        sanitize_text(content, max)
+    } else {
+        sanitize_text(evidence.trim(), max)
+    };
+    if evidence.trim().is_empty() {
+        return None;
+    }
+
+    let lower = format!("{content}\n{evidence}").to_ascii_lowercase();
+    let category = classify_failure_category(&lower)?;
+    Some(AgentFailureHint { category, evidence })
+}
+
 pub fn classify_json_line(line: &str) -> String {
     serde_json::from_str::<Value>(line)
         .ok()
@@ -497,6 +581,114 @@ fn looks_like_actionable_lowercase_output(lower: &str) -> bool {
     ]
     .iter()
     .any(|needle| lower.contains(needle))
+}
+
+fn classify_failure_category(lower: &str) -> Option<AgentFailureCategory> {
+    if contains_any(
+        lower,
+        &[
+            "model not found",
+            "unknown model",
+            "invalid model",
+            "model does not exist",
+            "模型不存在",
+            "模型代码",
+            "1211",
+        ],
+    ) {
+        return Some(AgentFailureCategory::Model);
+    }
+    if contains_any(
+        lower,
+        &[
+            "api key",
+            "unauthorized",
+            "authentication",
+            "not authenticated",
+            "invalid auth",
+            "invalid token",
+            "missing token",
+            "401",
+        ],
+    ) {
+        return Some(AgentFailureCategory::Auth);
+    }
+    if contains_any(
+        lower,
+        &[
+            "permission denied",
+            "permission",
+            "forbidden",
+            "not allowed",
+            "approval",
+            "sandbox",
+            "403",
+        ],
+    ) {
+        return Some(AgentFailureCategory::Permission);
+    }
+    if contains_any(
+        lower,
+        &[
+            "rate limit",
+            "quota",
+            "too many requests",
+            "insufficient quota",
+            "429",
+        ],
+    ) {
+        return Some(AgentFailureCategory::RateLimit);
+    }
+    if contains_any(
+        lower,
+        &[
+            "is it installed",
+            "no such file or directory",
+            "command not found",
+            "runtime missing",
+            "runtime-missing",
+            "worker runtime",
+            "failed to spawn",
+            "spawning ",
+        ],
+    ) {
+        return Some(AgentFailureCategory::Runtime);
+    }
+    if contains_any(
+        lower,
+        &[
+            "connection refused",
+            "connection reset",
+            "dns",
+            "timeout",
+            "timed out",
+            "network",
+            "endpoint",
+            "tls",
+            "ssl",
+            "econn",
+        ],
+    ) {
+        return Some(AgentFailureCategory::Network);
+    }
+    if contains_any(
+        lower,
+        &[
+            "parse failed",
+            "malformed",
+            "invalid json",
+            "expected value",
+            "no sub_tasks",
+            "returned no sub_tasks",
+        ],
+    ) {
+        return Some(AgentFailureCategory::Parse);
+    }
+    None
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
 }
 
 pub fn is_redundant_role_output(role: &str, content: &str, max: usize) -> bool {
@@ -1777,6 +1969,43 @@ mod tests {
         assert!(is_low_value_output(
             "codex stderr: debug transport message without actionable details"
         ));
+    }
+
+    #[test]
+    fn classifies_common_agent_failures() {
+        let model = agent_failure_hint(
+            "codex stderr: API Error: 400 [1211][模型不存在，请检查模型代码。]",
+            500,
+        )
+        .expect("model hint");
+        assert_eq!(model.category, AgentFailureCategory::Model);
+        assert_eq!(model.title(), "model not found");
+        assert!(model.evidence.contains("模型不存在"));
+        assert!(model.action().contains("/role"));
+
+        let auth = agent_failure_hint(
+            "claude-code stderr: authentication failed: invalid api key",
+            500,
+        )
+        .expect("auth hint");
+        assert_eq!(auth.category, AgentFailureCategory::Auth);
+        assert!(auth.action().contains("/provider"));
+
+        let runtime = agent_failure_hint(
+            "spawning claude (is it installed? check `which claude`)",
+            500,
+        )
+        .expect("runtime hint");
+        assert_eq!(runtime.category, AgentFailureCategory::Runtime);
+        assert!(runtime.action().contains("Install"));
+
+        let parse = agent_failure_hint(
+            "replanning after critique round 1: planner returned no sub_tasks (parse failed)",
+            500,
+        )
+        .expect("parse hint");
+        assert_eq!(parse.category, AgentFailureCategory::Parse);
+        assert!(parse.action().contains("/process full"));
     }
 
     #[test]
