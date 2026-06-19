@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/tiffany-release-preflight [--quick|--full]
+
+Runs the release preflight checks from this checkout.
+
+Modes:
+  --quick  Format, tests, examples, locked build, and open-source audit.
+  --full   Quick checks plus Tiffany dist/fork-specific checks for release tags.
+
+Default: --quick
+EOF
+}
+
+mode="quick"
+case "${1:-}" in
+  ""|--quick)
+    mode="quick"
+    ;;
+  --full|--dist|--release)
+    mode="full"
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+cargo_bin="${CARGO:-cargo}"
+if ! command -v "$cargo_bin" >/dev/null 2>&1; then
+  cargo_bin="$HOME/.cargo/bin/cargo"
+fi
+
+target_dir="${TIFFANY_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_dir/target}}"
+case "$target_dir" in
+  /*) ;;
+  *) target_dir="$repo_dir/$target_dir" ;;
+esac
+export CARGO_TARGET_DIR="$target_dir"
+
+step() {
+  printf '\n== %s ==\n' "$1"
+}
+
+step "root format"
+(cd "$repo_dir" && "$cargo_bin" fmt -- --check)
+
+step "shared event formatter format"
+"$cargo_bin" fmt --manifest-path "$repo_dir/crates/tiffany-event-format/Cargo.toml" -- --check
+
+step "root tests"
+(cd "$repo_dir" && "$cargo_bin" test --all)
+
+step "shared event formatter tests"
+"$cargo_bin" test --manifest-path "$repo_dir/crates/tiffany-event-format/Cargo.toml"
+
+step "example tests"
+"$repo_dir/scripts/tiffany-check-examples"
+
+step "locked root build"
+(cd "$repo_dir" && "$cargo_bin" build --locked)
+
+step "open-source audit"
+"$repo_dir/scripts/open-source-audit"
+
+if [[ "$mode" == "full" ]]; then
+  step "tiffany fork targeted format"
+  (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" fmt -p codex-tui -p tiffany-cli -- --check)
+
+  step "tiffany orchestrator targeted tests"
+  (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" test -p codex-tui tiffany_orchestrator)
+
+  step "tiffany slash command targeted tests"
+  (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" test -p codex-tui slash_commands)
+
+  step "tiffany dist preflight"
+  "$repo_dir/scripts/tiffany-check" --dist
+fi
+
+step "result"
+echo "release preflight passed ($mode)"

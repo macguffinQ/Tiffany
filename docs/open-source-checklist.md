@@ -13,17 +13,7 @@ Use this before making the repository public.
 - [ ] Run:
 
 ```bash
-cargo fmt -- --check
-cargo test --all
-./scripts/tiffany-check-examples
-cargo build --locked
-./scripts/open-source-audit
-(cd tiffany-ui/codex-rs && cargo fmt -p codex-tui -p tiffany-cli -- --check)
-(cd tiffany-ui/codex-rs && cargo test -p codex-tui tiffany_orchestrator)
-(cd tiffany-ui/codex-rs && cargo test -p codex-tui slash_commands)
-(cd tiffany-ui/codex-rs && cargo build --locked -p tiffany-cli --bin tiffany)
-./scripts/tiffany-check --smoke
-./scripts/tiffany-check --dist
+./scripts/tiffany-release-preflight --full
 ./scripts/tiffany-clean-targets --sizes
 ```
 
@@ -51,13 +41,9 @@ find . -path './target' -prune -o -path './tiffany-ui/codex-rs/target' -prune -o
 ## Release Commands
 
 ```bash
-cargo fmt -- --check
-cargo test --all
-./scripts/tiffany-check-examples
-./scripts/open-source-audit
-./scripts/tiffany-check --dist
-./scripts/tiffany-build --release --locked
-cargo package --allow-dirty
+./scripts/tiffany-release-preflight --full
+./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ```
 
-Use `--allow-dirty` only for local preflight checks. Release from a clean tree.
+Run `cargo package --allow-dirty` only when preparing a crates.io package.
+Release from a clean tree.

@@ -95,6 +95,7 @@ Development entrypoints:
 - `./scripts/tiffany-check --smoke` - debug-build, format-check the fork, verify the legacy bridge plus event-stream entrypoint, and run example smoke tests.
 - `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
 - `./scripts/tiffany-check-examples` - run only the checked-in example project tests.
+- `./scripts/tiffany-release-preflight --quick|--full` - run the consolidated release-readiness checks; use `--full` before tagging.
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist-cache|--dist|--debug` - inspect build-cache size, find large artifacts, keep final dist binaries while removing dist internals, or remove incremental/release/debug build outputs when `target/` grows too large.
 
 Direct Cargo commands inside `tiffany-ui/codex-rs` are also redirected to the root `./target` through the fork's Cargo config. If an older checkout already has `tiffany-ui/codex-rs/target`, it is a legacy duplicate cache and can be removed with `./scripts/tiffany-clean-targets`.
@@ -391,6 +392,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `./scripts/tiffany-check --smoke` | Run the fast local fork/bridge/example verification |
 | `./scripts/tiffany-check --dist` | Run the release-profile fork/bridge/example verification |
 | `./scripts/tiffany-check-examples` | Run only checked-in example tests |
+| `./scripts/tiffany-release-preflight --quick|--full` | Run consolidated local release-readiness checks |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist-cache|--dist|--debug` | Inspect or trim shared and legacy Cargo build caches; default removes only the old fork-local target |
 | `tiffany orchestrator` | Open the primary tiffany-loop UI after install |
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
@@ -628,6 +630,8 @@ cargo build --release    # release, ~5-8min first time
 ./scripts/tiffany-build --release --locked
 ./scripts/tiffany-build --fast-release --locked
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
+./scripts/tiffany-release-preflight --quick
+./scripts/tiffany-release-preflight --full   # before tagging
 
 # Direct cargo commands inside tiffany-ui/codex-rs also use ./target.
 # Use ./scripts/tiffany-clean-targets --top to find target bloat,
