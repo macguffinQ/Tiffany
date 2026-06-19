@@ -728,6 +728,7 @@ pub(super) fn format_process_summary(input: &InputState) -> String {
         return "No captured run process yet.".into();
     }
 
+    let hints = failure_hints_from_events(&events);
     let important = important_process_events(&events);
     let source = if important.is_empty() {
         events
@@ -744,6 +745,50 @@ pub(super) fn format_process_summary(input: &InputState) -> String {
         source.len(),
         input.run_events.len()
     );
+    out.push_str("\n  status: ");
+    out.push_str(&process_status_summary(input));
+    out.push_str("\n  flow: ");
+    out.push_str(&process_flow_summary(&source));
+    out.push_str("\n  route: ");
+    out.push_str(input.agent_hint.as_deref().unwrap_or("auto"));
+    out.push_str("\n  context: ");
+    out.push_str(&process_context_summary(input));
+    if let Some(current) = source.last().map(|line| humanize_trace_event(line)) {
+        out.push_str("\n  current: ");
+        out.push_str(current.icon);
+        out.push(' ');
+        out.push_str(current.kind);
+        out.push_str(" - ");
+        out.push_str(&current.summary);
+    }
+    if let Some(worker_summary) = process_worker_summary(input, &source) {
+        out.push_str("\n  workers: ");
+        out.push_str(&worker_summary);
+    }
+    if !hints.is_empty() {
+        out.push_str("\n  diagnostics: ");
+        out.push_str(
+            &hints
+                .iter()
+                .map(|hint| hint.title())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        out.push_str("\n\nDiagnostics:");
+        for hint in &hints {
+            out.push('\n');
+            out.push_str("  - ");
+            out.push_str(hint.title());
+            out.push_str(": ");
+            out.push_str(&truncate_chars(
+                &hint.evidence,
+                PROCESS_FAILURE_HINT_MAX_CHARS,
+            ));
+            out.push_str("\n    next: ");
+            out.push_str(hint.action());
+        }
+    }
+    out.push_str("\n\nRecent activity:");
     for line in &source[start..] {
         out.push('\n');
         out.push_str("  ");
@@ -754,6 +799,155 @@ pub(super) fn format_process_summary(input: &InputState) -> String {
         out.push_str(&format!("\nCapture file: {}", path.display()));
     }
     out
+}
+
+fn process_status_summary(input: &InputState) -> String {
+    let active = run_is_active(input);
+    let (icon, state) = trace_state(input, !active);
+    let mut out = format!("{icon} {state}");
+    let stage = input.current_stage.trim();
+    let detail = input.current_stage_detail.trim();
+    if !stage.is_empty() {
+        out.push_str(" · ");
+        out.push_str(stage);
+        if !detail.is_empty() {
+            out.push_str(" · ");
+            out.push_str(detail);
+        }
+    }
+    out
+}
+
+fn process_context_summary(input: &InputState) -> String {
+    if input.last_context_messages == 0 {
+        return input.context_mode.as_str().to_string();
+    }
+    format!(
+        "{} · {} message(s), {} chars",
+        input.context_mode.as_str(),
+        input.last_context_messages,
+        input.last_context_chars
+    )
+}
+
+fn process_flow_summary(events: &[&String]) -> String {
+    let mut flow = Vec::new();
+    for stage in ["planner", "critic", "worker", "reviewer"] {
+        if process_events_include_stage(events, stage) {
+            flow.push(stage);
+        }
+    }
+    if flow.is_empty() {
+        "not started".into()
+    } else {
+        flow.join(" -> ")
+    }
+}
+
+fn process_events_include_stage(events: &[&String], stage: &str) -> bool {
+    events.iter().any(|line| {
+        let body = normalized_process_body(line);
+        match stage {
+            "planner" => {
+                body.starts_with("plan  ")
+                    || body.starts_with("Planning:")
+                    || body.starts_with("Planned:")
+                    || body.starts_with("Replanning:")
+            }
+            "critic" => {
+                body.starts_with("critic  ")
+                    || body.starts_with("Critiquing:")
+                    || body.starts_with("Critique:")
+            }
+            "worker" => {
+                body.starts_with("run  ")
+                    || body.starts_with("worker  ")
+                    || body.starts_with("Worker started:")
+                    || body.starts_with("Worker output:")
+                    || body.starts_with("Worker done:")
+                    || body.starts_with("Worker failed:")
+                    || body.starts_with("Executing:")
+            }
+            "reviewer" => {
+                body.starts_with("review  ")
+                    || body.starts_with("Reviewing:")
+                    || body.starts_with("Review approved:")
+                    || body.starts_with("Review rejected:")
+            }
+            _ => false,
+        }
+    })
+}
+
+#[derive(Default)]
+struct ProcessWorkerCounts {
+    started: usize,
+    done: usize,
+    failed: usize,
+    tool_calls: usize,
+    tool_results: usize,
+    stderr: usize,
+    alerts: usize,
+}
+
+fn process_worker_summary(input: &InputState, events: &[&String]) -> Option<String> {
+    let mut counts = ProcessWorkerCounts::default();
+    for line in events {
+        let body = normalized_process_body(line);
+        if !body.starts_with("worker  ") && !body.starts_with("Worker ") {
+            continue;
+        }
+        let body = body.as_str();
+        if body.contains(" started ·") || body.starts_with("Worker started:") {
+            counts.started += 1;
+        }
+        if body.contains(" done ·") || body.starts_with("Worker done:") {
+            counts.done += 1;
+        }
+        if body.contains(" failed ·") || body.starts_with("Worker failed:") {
+            counts.failed += 1;
+        }
+        if body.starts_with("worker  tool call ·") {
+            counts.tool_calls += 1;
+        }
+        if body.starts_with("worker  tool result ·") {
+            counts.tool_results += 1;
+        }
+        if body.starts_with("worker  stderr ·") {
+            counts.stderr += 1;
+        }
+        if body.starts_with("worker  alert ·") {
+            counts.alerts += 1;
+        }
+    }
+    if counts.failed == 0 {
+        counts.failed = input.run_worker_failure_count;
+    }
+
+    let mut parts = Vec::new();
+    push_count(&mut parts, counts.started, "started");
+    push_count(&mut parts, counts.done, "done");
+    push_count(&mut parts, counts.failed, "failed");
+    push_count(&mut parts, counts.tool_calls, "tool call(s)");
+    push_count(&mut parts, counts.tool_results, "tool result(s)");
+    push_count(&mut parts, counts.stderr, "stderr");
+    push_count(&mut parts, counts.alerts, "alert(s)");
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
+fn push_count(parts: &mut Vec<String>, count: usize, label: &str) {
+    if count > 0 {
+        parts.push(format!("{count} {label}"));
+    }
+}
+
+fn normalized_process_body(line: &str) -> String {
+    let body = line
+        .split_once("  ")
+        .map(|(_, body)| body)
+        .unwrap_or(line)
+        .trim();
+    legacy_process_body_to_compact(body).unwrap_or_else(|| body.to_string())
 }
 
 pub(super) fn format_failure_context(input: &InputState) -> Option<String> {
@@ -1228,6 +1422,10 @@ mod tests {
         let full = format_process_capture(&input, 20);
 
         assert!(formatted.contains("Process summary"));
+        assert!(formatted.contains("status:"));
+        assert!(formatted.contains("flow: planner -> worker"));
+        assert!(formatted.contains("route: auto"));
+        assert!(formatted.contains("Recent activity:"));
         assert!(formatted.contains("plan  planning work"));
         assert!(formatted.contains("worker  claude-code (abcdef12)"));
         assert!(formatted.contains("done  1 sub-task(s) completed"));
@@ -1248,10 +1446,44 @@ mod tests {
 
         let formatted = format_process_summary(&input);
 
+        assert!(formatted.contains("workers: 1 done, 1 tool call(s), 1 stderr"));
         assert!(formatted.contains("tool call · abcdef12 claude-code"));
         assert!(formatted.contains("stderr · abcdef12 worker-codex"));
         assert!(formatted.contains("worker  worker-cc done"));
         assert!(!formatted.contains("incremental log line"));
+    }
+
+    #[test]
+    fn process_summary_surfaces_diagnostics_and_context() {
+        let mut input = InputState {
+            current_stage: "Failed".into(),
+            current_stage_detail: "command exited 1".into(),
+            agent_hint: Some("worker-codex".into()),
+            last_context_messages: 2,
+            last_context_chars: 360,
+            ..InputState::default()
+        };
+        input.run_events = vec![
+            "10:00:00  plan  planning work".into(),
+            "10:00:01  critic  plan approved".into(),
+            "10:00:02  run  running 1 sub-task(s)".into(),
+            "10:00:03  worker  worker-codex started · codex · openai/glm-5.1 · abcdef12".into(),
+            "10:00:04  worker  stderr · abcdef12 worker-codex: API Error: 400 [1211][模型不存在，请检查模型代码。]".into(),
+            "10:00:05  worker  worker-codex failed · abcdef12 · 120ms".into(),
+            "10:00:06  error  command exited 1".into(),
+        ];
+
+        let formatted = format_process_summary(&input);
+
+        assert!(formatted.contains("status: ✗ failed · Failed · command exited 1"));
+        assert!(formatted.contains("flow: planner -> critic -> worker"));
+        assert!(formatted.contains("route: worker-codex"));
+        assert!(formatted.contains("context: compact · 2 message(s), 360 chars"));
+        assert!(formatted.contains("workers: 1 started, 1 failed, 1 stderr"));
+        assert!(formatted.contains("diagnostics: model not found"));
+        assert!(formatted.contains("Diagnostics:"));
+        assert!(formatted.contains("next: Check the role's provider/model in /role"));
+        assert!(!formatted.contains("output ·"));
     }
 
     #[test]
