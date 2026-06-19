@@ -889,9 +889,10 @@ fn show_config(config_path: &Path) -> Result<()> {
                     Some(_) => "(empty)".to_string(),
                     None => "—".to_string(),
                 };
+                let endpoint = p.base_url.as_deref().unwrap_or("—");
                 println!(
-                    "  - {:<10} type={:<10} api_key={}",
-                    name, p.kind, key_status
+                    "  - {:<10} type={:<10} api_key={} base_url={}",
+                    name, p.kind, key_status, endpoint
                 );
             }
 
@@ -2155,10 +2156,11 @@ fn list_providers(config_path: &Path) -> Result<()> {
         return Ok(());
     }
 
+    let loaded_config = Config::load(config_path).ok();
     println!("Providers ({})", path.display());
     println!(
-        "  {:<12} {:<10} {:<24} endpoint",
-        "provider", "type", "api_key"
+        "  {:<12} {:<10} {:<24} {:<30} {:<22} roles",
+        "provider", "type", "api_key", "endpoint", "models"
     );
 
     let mut rows = providers.iter().collect::<Vec<_>>();
@@ -2178,12 +2180,58 @@ fn list_providers(config_path: &Path) -> Result<()> {
             .get("base_url")
             .and_then(serde_yaml::Value::as_str)
             .unwrap_or("-");
+        let (models, roles) = loaded_config
+            .as_ref()
+            .map(|cfg| provider_model_role_summary(cfg, provider))
+            .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
         println!(
-            "  {:<12} {:<10} {:<24} {}",
-            provider, kind, api_key, endpoint
+            "  {:<12} {:<10} {:<24} {:<30} {:<22} {}",
+            provider, kind, api_key, endpoint, models, roles
         );
     }
     Ok(())
+}
+
+fn provider_model_role_summary(cfg: &Config, provider: &str) -> (String, String) {
+    let mut model_ids = cfg
+        .models
+        .iter()
+        .filter(|model| model.provider == provider)
+        .map(|model| model.id.clone())
+        .collect::<Vec<_>>();
+    model_ids.sort();
+    model_ids.dedup();
+
+    let model_id_set = model_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    let mut roles = cfg
+        .roles
+        .iter()
+        .filter(|(_, role)| model_id_set.contains(role.model.as_str()))
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    roles.sort();
+    roles.dedup();
+
+    (
+        compact_name_summary(&model_ids, 3),
+        compact_name_summary(&roles, 3),
+    )
+}
+
+fn compact_name_summary(items: &[String], limit: usize) -> String {
+    if items.is_empty() {
+        return "-".to_string();
+    }
+    let mut summary = items
+        .iter()
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(",");
+    if items.len() > limit {
+        summary.push_str(&format!(",+{}", items.len() - limit));
+    }
+    summary
 }
 
 struct SelectOption {
@@ -3696,6 +3744,40 @@ mod tests {
             api_key: Some("test-key".to_string()),
             base_url: None,
         }
+    }
+
+    #[test]
+    fn provider_model_role_summary_links_models_and_roles() {
+        let mut cfg = config_with_models();
+        cfg.roles.insert(
+            "reviewer".to_string(),
+            RoleConfig {
+                model: "sonnet".to_string(),
+                runtime: "claude-code".to_string(),
+                agent_teams: false,
+            },
+        );
+        cfg.roles.insert(
+            "worker-codex".to_string(),
+            RoleConfig {
+                model: "gpt4o".to_string(),
+                runtime: "codex".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        assert_eq!(
+            provider_model_role_summary(&cfg, "anthropic"),
+            ("sonnet".to_string(), "planner,reviewer".to_string())
+        );
+        assert_eq!(
+            provider_model_role_summary(&cfg, "openai"),
+            ("gpt4o".to_string(), "worker-codex".to_string())
+        );
+        assert_eq!(
+            provider_model_role_summary(&cfg, "missing"),
+            ("-".to_string(), "-".to_string())
+        );
     }
 
     #[test]

@@ -449,7 +449,7 @@ fn provider_command_args(args: &str) -> Result<Vec<Vec<String>>, String> {
             "provider".to_string(),
             "list".to_string(),
         ]]),
-        "setup" => provider_setup_args(&parts[1..]),
+        "setup" | "edit" => provider_setup_args(&parts[1..]),
         "delete" | "remove" | "rm" => provider_delete_args(&parts[1..]),
         "key" | "set-key" => provider_key_args(&parts[1..]),
         "env" | "set-env" => provider_env_key_args(&parts[1..]),
@@ -895,6 +895,8 @@ struct ProviderSummary {
     kind: String,
     auth: String,
     endpoint: String,
+    models: Option<String>,
+    roles: Option<String>,
 }
 
 fn concise_roles_success(
@@ -1044,8 +1046,9 @@ fn provider_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
     if providers.len() > 8 {
         lines.push(body_line(&format!("… {} more", providers.len() - 8), true));
     }
-    lines.push(next_line("/provider setup", "edit auth or endpoint"));
+    lines.push(next_line("/provider edit <name>", "fix auth or endpoint"));
     lines.push(next_line("/role", "bind roles to provider models"));
+    lines.push(next_line("/doctor", "verify provider/model/runtime wiring"));
     Some(lines)
 }
 
@@ -1073,31 +1076,40 @@ fn role_summary_lines(text: &str, label: &'static str) -> Option<Vec<Line<'stati
 }
 
 fn provider_summary_line(provider: &ProviderSummary) -> Line<'static> {
-    let (symbol, color, auth) = provider_auth_status(provider);
+    let (symbol, color, auth, health) = provider_auth_status(provider);
     let endpoint = if provider.endpoint.trim().is_empty()
         || provider.endpoint == "-"
         || provider.endpoint == "—"
     {
         "default".to_string()
     } else {
-        truncate_text(&provider.endpoint, 56)
+        truncate_text(&provider.endpoint, 42)
     };
-    Line::from(vec![
-        Span::styled(
-            format!("  {symbol} "),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:<13}", provider.name),
-            Style::default().fg(TIFFANY_SOFT),
-        ),
-        Span::styled(
-            format!("{:<11}", provider.kind),
-            Style::default().fg(Color::Gray),
-        ),
-        Span::styled(format!("{auth:<10}"), Style::default().fg(Color::DarkGray)),
-        Span::styled(endpoint, Style::default().fg(Color::DarkGray)),
-    ])
+    Line::from(
+        vec![
+            Span::styled(
+                format!("  {symbol} "),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{:<13}", provider.name),
+                Style::default().fg(TIFFANY_SOFT),
+            ),
+            Span::styled(
+                format!("{:<11}", provider.kind),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(format!("{auth:<10}"), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{:<44}", endpoint),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(health, Style::default().fg(color)),
+        ]
+        .into_iter()
+        .chain(provider_assoc_spans(provider))
+        .collect::<Vec<_>>(),
+    )
 }
 
 fn role_summary_line(role: &RoleSummary) -> Line<'static> {
@@ -1126,15 +1138,44 @@ fn role_summary_line(role: &RoleSummary) -> Line<'static> {
     ])
 }
 
-fn provider_auth_status(provider: &ProviderSummary) -> (&'static str, Color, &'static str) {
+fn provider_auth_status(
+    provider: &ProviderSummary,
+) -> (&'static str, Color, &'static str, &'static str) {
     let auth = provider.auth.trim();
     if provider.kind.eq_ignore_ascii_case("ollama") {
-        return ("●", TIFFANY_BLUE, "local");
+        return ("●", TIFFANY_BLUE, "local", "ready");
     }
     if auth.is_empty() || auth == "-" || auth == "—" || auth.eq_ignore_ascii_case("none") {
-        return ("○", Color::Yellow, "no key");
+        return ("⚠", Color::Yellow, "no key", "needs auth");
     }
-    ("✓", TIFFANY_BLUE, "auth set")
+    ("✓", TIFFANY_BLUE, "auth set", "ready")
+}
+
+fn provider_assoc_spans(provider: &ProviderSummary) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    if let Some(models) = provider
+        .models
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "-")
+    {
+        spans.push(Span::styled(
+            format!("  models {}", truncate_text(models, 22)),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    if let Some(roles) = provider
+        .roles
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "-")
+    {
+        spans.push(Span::styled(
+            format!("  roles {}", truncate_text(roles, 22)),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    spans
 }
 
 fn parse_provider_summaries(text: &str) -> Vec<ProviderSummary> {
@@ -1192,6 +1233,8 @@ fn parse_provider_table_row(line: &str) -> Option<ProviderSummary> {
         kind: parts[1].to_string(),
         auth: parts[2].to_string(),
         endpoint: parts[3].to_string(),
+        models: parts.get(4).map(|value| (*value).to_string()),
+        roles: parts.get(5).map(|value| (*value).to_string()),
     })
 }
 
@@ -1216,11 +1259,27 @@ fn parse_config_show_provider(line: &str) -> Option<ProviderSummary> {
             }
         })
         .unwrap_or_else(|| "-".to_string());
+    let endpoint = parts
+        .iter()
+        .find_map(|part| {
+            part.strip_prefix("base_url=")
+                .or_else(|| part.strip_prefix("endpoint="))
+        })
+        .unwrap_or("-")
+        .to_string();
     Some(ProviderSummary {
         name,
         kind,
         auth,
-        endpoint: "-".to_string(),
+        endpoint,
+        models: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("models="))
+            .map(ToString::to_string),
+        roles: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("roles="))
+            .map(ToString::to_string),
     })
 }
 
@@ -2596,10 +2655,10 @@ mod tests {
     fn provider_summary_lines_render_status_rows_and_next_steps() {
         let lines = provider_summary_lines(
             "Providers (/Users/me/.orchestrator/config.yaml)\n\
-               provider     type       api_key                  endpoint\n\
-               anthropic    anthropic  sk-c...aslE              https://api.minimaxi.com/anthropic\n\
-               google       google     -                        -\n\
-               ollama       ollama     -                        http://localhost:11434\n",
+               provider     type       api_key                  endpoint                      models                 roles\n\
+               anthropic    anthropic  sk-c...aslE              https://api.minimaxi.com/anthropic sonnet,opus           planner,reviewer\n\
+               google       google     -                        -                             gemini                critic\n\
+               ollama       ollama     -                        http://localhost:11434        local                 worker-local\n",
         )
         .expect("provider summary lines");
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
@@ -2607,11 +2666,17 @@ mod tests {
         assert!(text.contains("✓ provider  3 configured"));
         assert!(text.contains("anthropic"));
         assert!(text.contains("auth set"));
-        assert!(text.contains("○ google"));
+        assert!(text.contains("ready"));
+        assert!(text.contains("⚠ google"));
         assert!(text.contains("no key"));
+        assert!(text.contains("needs auth"));
         assert!(text.contains("● ollama"));
         assert!(text.contains("local"));
+        assert!(text.contains("models sonnet,opus"));
+        assert!(text.contains("roles planner,reviewer"));
+        assert!(text.contains("next  /provider edit <name>  fix auth or endpoint"));
         assert!(text.contains("next  /role  bind roles to provider models"));
+        assert!(text.contains("next  /doctor  verify provider/model/runtime wiring"));
         assert!(!text.contains("provider     type"));
     }
 
@@ -2620,8 +2685,8 @@ mod tests {
         let lines = provider_summary_lines(
             "=== Orchestrator config ===\n\
              Providers (2):\n\
-               - anthropic  type=anthropic  api_key=✓ set\n\
-               - google     type=google     api_key=—\n\
+               - anthropic  type=anthropic  api_key=✓ set base_url=https://api.anthropic.com models=sonnet roles=planner\n\
+               - google     type=google     api_key=— base_url=— models=gemini roles=critic\n\
              Models (1):\n\
                - sonnet claude-sonnet (provider: anthropic)\n",
         )
@@ -2631,7 +2696,10 @@ mod tests {
         assert!(text.contains("✓ provider  2 configured"));
         assert!(text.contains("anthropic"));
         assert!(text.contains("auth set"));
-        assert!(text.contains("○ google"));
+        assert!(text.contains("https://api.anthropic.com"));
+        assert!(text.contains("models sonnet"));
+        assert!(text.contains("roles planner"));
+        assert!(text.contains("⚠ google"));
         assert!(text.contains("no key"));
         assert!(!text.contains("Models (1)"));
     }
@@ -3685,6 +3753,17 @@ mod tests {
                 "OPENAI_API_KEY",
                 "--endpoint",
                 "https://api.openai.com/v1"
+            ])]
+        );
+        assert_eq!(
+            provider_command_args("edit minimax --env MINIMAX_API_KEY").expect("provider args"),
+            vec![strings(&[
+                "config",
+                "provider",
+                "setup",
+                "minimax",
+                "--env",
+                "MINIMAX_API_KEY"
             ])]
         );
         assert_eq!(
