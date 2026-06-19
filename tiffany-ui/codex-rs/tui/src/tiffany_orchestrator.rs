@@ -1,5 +1,4 @@
-use std::collections::HashSet;
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::process::ExitStatus;
 use std::process::Stdio;
 
@@ -105,6 +104,16 @@ struct BridgeState {
     seen_statuses: HashSet<String>,
     malformed_stdout: VecDeque<String>,
     final_output: Option<String>,
+    worker_metadata: HashMap<String, WorkerMeta>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct WorkerMeta {
+    agent: Option<String>,
+    worker_role: Option<String>,
+    runtime: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
 }
 
 pub(crate) fn spawn_event_bridge(app_event_tx: AppEventSender, launch: TiffanyOrchestratorLaunch) {
@@ -1421,7 +1430,10 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 }
 
 impl BridgeState {
-    fn emit_event(&mut self, app_event_tx: &AppEventSender, event: TiffanyProgressEvent) {
+    fn emit_event(&mut self, app_event_tx: &AppEventSender, mut event: TiffanyProgressEvent) {
+        self.remember_worker_metadata(&event);
+        self.apply_worker_metadata(&mut event);
+
         let visible = visible_content(&event);
         if event.status == "output" && visible.is_none() {
             return;
@@ -1479,6 +1491,62 @@ impl BridgeState {
             .collect::<Vec<_>>()
             .join("\n")
     }
+
+    fn remember_worker_metadata(&mut self, event: &TiffanyProgressEvent) {
+        if event.role != "worker" {
+            return;
+        }
+        let Some(task_id) = event
+            .task_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+
+        let meta = self.worker_metadata.entry(task_id.to_string()).or_default();
+        fill_present(&mut meta.agent, event.agent.as_deref());
+        fill_present(&mut meta.worker_role, event.worker_role.as_deref());
+        fill_present(&mut meta.runtime, event.runtime.as_deref());
+        fill_present(&mut meta.model, event.model.as_deref());
+        fill_present(&mut meta.provider, event.provider.as_deref());
+    }
+
+    fn apply_worker_metadata(&self, event: &mut TiffanyProgressEvent) {
+        if event.role != "worker" {
+            return;
+        }
+        let Some(task_id) = event.task_id.as_deref() else {
+            return;
+        };
+        let Some(meta) = self.worker_metadata.get(task_id) else {
+            return;
+        };
+
+        fill_missing(&mut event.agent, meta.agent.as_deref());
+        fill_missing(&mut event.worker_role, meta.worker_role.as_deref());
+        fill_missing(&mut event.runtime, meta.runtime.as_deref());
+        fill_missing(&mut event.model, meta.model.as_deref());
+        fill_missing(&mut event.provider, meta.provider.as_deref());
+    }
+}
+
+fn fill_present(slot: &mut Option<String>, value: Option<&str>) {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    *slot = Some(value.to_string());
+}
+
+fn fill_missing(slot: &mut Option<String>, value: Option<&str>) {
+    if slot
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return;
+    }
+    fill_present(slot, value);
 }
 
 fn emit_intro(app_event_tx: &AppEventSender, launch: &TiffanyOrchestratorLaunch) {
@@ -1762,11 +1830,7 @@ fn event_title(event: &TiffanyProgressEvent) -> String {
         && matches!(event.status.as_str(), "done" | "failed")
         && event.task_id.is_some()
     {
-        let role = event
-            .worker_role
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| event.agent.as_deref().unwrap_or("worker"));
+        let role = worker_role_label(event);
         let status = if event.status == "done" {
             "done"
         } else {
@@ -1776,17 +1840,20 @@ fn event_title(event: &TiffanyProgressEvent) -> String {
             .agent
             .as_deref()
             .filter(|value| !value.trim().is_empty());
-        let mut title = match runtime {
-            Some(runtime) if runtime != role => format!("{role} {status} · {runtime}"),
-            _ => format!("{role} {status}"),
-        };
+        let mut parts = vec![format!("{role} {status}")];
+        if let Some(runtime) = runtime.filter(|runtime| *runtime != role) {
+            parts.push(runtime.to_string());
+        }
+        if let Some(model) = provider_model_label(event) {
+            parts.push(model);
+        }
         if let Some(id) = short_task_id(event.task_id.as_deref()) {
-            title = format!("{title} · {id}");
+            parts.push(id.to_string());
         }
         if let Some(duration) = event.duration_ms.map(format_duration_ms) {
-            title = format!("{title} · {duration}");
+            parts.push(duration);
         }
-        return title;
+        return parts.join(" · ");
     }
 
     let mut title = normalize_event_message(&event.message);
@@ -1848,19 +1915,23 @@ fn output_label(event: &TiffanyProgressEvent) -> String {
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let mut label = match (role, agent) {
+    let mut parts = Vec::new();
+    match (role, agent) {
         (Some(role), Some(agent)) if event.role == "worker" && role != agent => {
-            format!("{role} · {agent}")
+            parts.push(role.to_string());
+            parts.push(agent.to_string());
         }
-        (Some(role), _) => role.to_string(),
-        (None, Some(agent)) => agent.to_string(),
-        (None, None) => event.role.clone(),
-    };
-    if let Some(id) = short_task_id(event.task_id.as_deref()) {
-        label.push_str(" · ");
-        label.push_str(id);
+        (Some(role), _) => parts.push(role.to_string()),
+        (None, Some(agent)) => parts.push(agent.to_string()),
+        (None, None) => parts.push(event.role.clone()),
     }
-    label
+    if let Some(model) = provider_model_label(event) {
+        parts.push(model);
+    }
+    if let Some(id) = short_task_id(event.task_id.as_deref()) {
+        parts.push(id.to_string());
+    }
+    parts.join(" · ")
 }
 
 fn event_detail_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>> {
@@ -2600,6 +2671,75 @@ mod tests {
         assert_eq!(
             line_text(&lines[0]),
             "↳ 03 worker · worker-cc · claude-code · 12345678 output"
+        );
+    }
+
+    #[test]
+    fn worker_metadata_carries_model_into_output_and_done_titles() {
+        let mut state = BridgeState::default();
+        let started = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "running".to_string(),
+            message: "worker-cc started".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: Some("claude-code".to_string()),
+            model: Some("MiniMax-M3".to_string()),
+            provider: Some("minimax".to_string()),
+            task_prompt: Some("do the work".to_string()),
+            content: None,
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+        state.remember_worker_metadata(&started);
+
+        let mut output = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            message: "worker output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: Some("done".to_string()),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+        state.apply_worker_metadata(&mut output);
+        assert_eq!(
+            output_title(&output),
+            "03 worker · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678 output"
+        );
+
+        let mut done = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "done".to_string(),
+            message: "worker-cc done".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: None,
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: Some(1_250),
+        };
+        state.apply_worker_metadata(&mut done);
+        assert_eq!(
+            event_title(&done),
+            "worker-cc done · claude-code · minimax/MiniMax-M3 · 12345678 · 1.2s"
         );
     }
 
