@@ -6,6 +6,9 @@ use super::process::{
     create_process_capture_file, format_failure_context, record_run_event, record_run_progress,
     refresh_live_trace, start_live_trace,
 };
+use super::queue_state::{
+    can_start_queued_batch, drain_queued_prompts, queue_followup, run_is_active,
+};
 use super::state::{ChatMsg, InputState};
 use super::util::{
     format_duration_ms, humanize_jsonish, is_low_value_execution_output, truncate_chars,
@@ -38,7 +41,7 @@ impl RunController {
     }
 
     pub(super) fn start_next_queued(&self, input: &mut InputState) {
-        if !queued_batch_can_start(input) {
+        if !can_start_queued_batch(input) {
             return;
         }
 
@@ -128,38 +131,6 @@ impl RunController {
     }
 }
 
-fn queue_followup(input: &mut InputState, prompt: String) {
-    input.queued_prompts.push(prompt);
-}
-
-fn drain_queued_prompts(input: &mut InputState) -> String {
-    let prompts = std::mem::take(&mut input.queued_prompts);
-    merge_queued_prompts(prompts)
-}
-
-fn merge_queued_prompts(prompts: Vec<String>) -> String {
-    let mut prompts = prompts
-        .into_iter()
-        .map(|prompt| prompt.trim().to_string())
-        .filter(|prompt| !prompt.is_empty())
-        .collect::<Vec<_>>();
-
-    match prompts.len() {
-        0 => String::new(),
-        1 => prompts.remove(0),
-        _ => prompts
-            .into_iter()
-            .enumerate()
-            .map(|(idx, prompt)| format!("{}. {}", idx + 1, prompt))
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-    }
-}
-
-fn run_is_active(input: &InputState) -> bool {
-    input.run_rx.is_some() || input.run_handle.is_some()
-}
-
 fn initial_run_status(input: &InputState, prompt: &str) -> String {
     let worker = input.agent_hint.as_deref().unwrap_or("auto");
     let context = if input.last_context_messages == 0 {
@@ -176,10 +147,6 @@ fn initial_run_status(input: &InputState, prompt: &str) -> String {
         context,
         truncate_chars(prompt, 120)
     )
-}
-
-fn queued_batch_can_start(input: &InputState) -> bool {
-    !run_is_active(input) && !input.queue_paused && !input.queued_prompts.is_empty()
 }
 
 /// Run the orchestrator, but check the cancel flag before starting.
@@ -710,7 +677,7 @@ mod tests {
 
     #[test]
     fn queued_messages_merge_into_one_prompt_when_started() {
-        let merged = merge_queued_prompts(vec![
+        let merged = crate::tui::queue_state::merge_queued_prompts(vec![
             "first change".into(),
             "second change".into(),
             "  ".into(),
@@ -731,14 +698,14 @@ mod tests {
             ..InputState::default()
         };
 
-        assert!(!queued_batch_can_start(&input));
+        assert!(!can_start_queued_batch(&input));
 
         assert_eq!(input.queued_prompts, vec!["wait"]);
         assert!(input.run_rx.is_none());
         assert!(input.run_handle.is_none());
 
         input.queue_paused = false;
-        assert!(queued_batch_can_start(&input));
+        assert!(can_start_queued_batch(&input));
     }
 
     #[test]

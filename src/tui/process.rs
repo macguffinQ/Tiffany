@@ -1,3 +1,4 @@
+use super::queue_state::run_is_active;
 use super::state::{ChatMsg, InputState};
 use super::util::{
     copy_to_clipboard, humanize_jsonish, is_low_value_execution_output,
@@ -640,10 +641,6 @@ fn live_trace_block_state(input: &InputState) -> &'static str {
     } else {
         "not visible"
     }
-}
-
-fn run_is_active(input: &InputState) -> bool {
-    input.run_rx.is_some() || input.run_handle.is_some()
 }
 
 #[cfg(test)]

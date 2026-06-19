@@ -3,6 +3,7 @@ use super::process::{
     complete_live_trace, export_process_capture, format_process_capture, format_process_summary,
     live_trace_status, live_trace_summary, process_filter_summary, refresh_live_trace,
 };
+use super::queue_state::{format_queue_show, run_is_active, QueueSnapshot};
 use super::run_state::format_final_result;
 use super::state::{ChatMsg, InputState, TuiRuntimeConfig};
 use super::util::{
@@ -60,7 +61,7 @@ pub(super) fn handle_slash_command_with_runtime(
             push_system(input, help_text());
         }
         "clear" | "c" | "new" => {
-            let active_run = input.run_rx.is_some() || input.run_handle.is_some();
+            let active_run = run_is_active(input);
             input.transcript.clear();
             input.trace_message_index = None;
             input.context_cutoff = 0;
@@ -283,8 +284,7 @@ pub(super) fn handle_slash_command_with_runtime(
             if matches!(
                 args.first().copied(),
                 Some("resume" | "unpause" | "run" | "start" | "go")
-            ) && input.run_rx.is_none()
-                && input.run_handle.is_none()
+            ) && !run_is_active(input)
                 && !input.queue_paused
                 && !input.queued_prompts.is_empty()
             {
@@ -292,7 +292,7 @@ pub(super) fn handle_slash_command_with_runtime(
             }
         }
         "retry" | "again" => {
-            if input.run_rx.is_some() || input.run_handle.is_some() {
+            if run_is_active(input) {
                 push_system(
                     input,
                     "A task is already running; retry after it finishes.".into(),
@@ -1713,16 +1713,8 @@ fn format_workflow_status(config: &Config, input: &InputState) -> String {
         .or_else(|| runtime::default_worker_role(&config.roles))
         .unwrap_or_else(|| "(missing worker)".into());
 
-    let queue = if input.queued_prompts.is_empty() {
-        "empty".to_string()
-    } else {
-        format!(
-            "{} pending ({})",
-            input.queued_prompts.len(),
-            queue_state_label(input)
-        )
-    };
-    let run = if input.run_rx.is_some() || input.run_handle.is_some() {
+    let queue = QueueSnapshot::from_input(input, 0).pending_label();
+    let run = if run_is_active(input) {
         if input.current_stage.is_empty() {
             "active".to_string()
         } else {
@@ -1970,7 +1962,7 @@ fn format_tui_status(store: &SessionStore, config: &Config, input: &InputState) 
         .first()
         .map(|s| format!("{} {}", session_id8(s), format_session_state(s)))
         .unwrap_or_else(|| "none".into());
-    let run = if input.run_rx.is_some() || input.run_handle.is_some() {
+    let run = if run_is_active(input) {
         if input.current_stage.is_empty() {
             "active".to_string()
         } else if input.current_stage_detail.is_empty() {
@@ -1999,7 +1991,7 @@ fn format_tui_status(store: &SessionStore, config: &Config, input: &InputState) 
         },
         context_summary(input),
         input.queued_prompts.len(),
-        queue_state_label(input),
+        QueueSnapshot::from_input(input, 0).state_label(),
         input.agent_hint.as_deref().unwrap_or("auto"),
         config.roles.len(),
         config.models.len(),
@@ -2020,37 +2012,9 @@ fn format_doctor_command(runtime: &TuiRuntimeConfig) -> String {
     crate::doctor::run(config_path).render_text()
 }
 
-fn format_queue(input: &InputState) -> String {
-    if input.queued_prompts.is_empty() {
-        return "Queue is empty.\n\nWhile a run is active, type a normal message to queue it."
-            .into();
-    }
-
-    let mut out = format!(
-        "Queued batch ({}) — {}:",
-        input.queued_prompts.len(),
-        queue_state_label(input)
-    );
-    for (idx, prompt) in input.queued_prompts.iter().enumerate() {
-        out.push('\n');
-        out.push_str(&format!("  ↳ {}. {}", idx + 1, truncate_chars(prompt, 180)));
-    }
-    if input.queue_paused {
-        out.push_str("\n\nPaused: the batch will stay here until /queue resume or /queue run.");
-    } else {
-        out.push_str(
-            "\n\nExecution: all queued messages are merged into one follow-up prompt and run together after the current task finishes.",
-        );
-    }
-    out.push_str(
-        "\nManage: /queue edit <n> <text>, /queue promote <n>, /queue remove <n>, /queue pause, /queue clear.",
-    );
-    out
-}
-
 fn handle_queue_command(input: &mut InputState, args: &[&str]) -> String {
     match args.first().copied() {
-        None | Some("show" | "list" | "status") => format_queue(input),
+        None | Some("show" | "list" | "status") => format_queue_show(input),
         Some("clear") => clear_queue(input),
         Some("remove" | "rm" | "delete") => remove_queued_prompt(input, args.get(1).copied()),
         Some("promote" | "up" | "next") => promote_queued_prompt(input, args.get(1).copied()),
@@ -2064,14 +2028,6 @@ fn handle_queue_command(input: &mut InputState, args: &[&str]) -> String {
             "Unknown queue option: {}\nUsage: /queue [show|clear|remove <n>|promote <n>|edit <n> <text>|pause|resume|run]",
             other
         ),
-    }
-}
-
-fn queue_state_label(input: &InputState) -> &'static str {
-    if input.queue_paused {
-        "paused"
-    } else {
-        "ready"
     }
 }
 
@@ -2171,7 +2127,7 @@ fn run_queue_now(input: &mut InputState) -> String {
     input.queue_paused = false;
     if input.queued_prompts.is_empty() {
         "Queue is empty.".into()
-    } else if input.run_rx.is_some() || input.run_handle.is_some() {
+    } else if run_is_active(input) {
         format!(
             "Queue will run after the active task finishes ({} message(s)).",
             input.queued_prompts.len()
@@ -2695,10 +2651,11 @@ fn conversation_graph(input: &InputState, limit: usize) -> String {
         out.push_str(&format!("\n  {}. {} -> {}", number, label, summary));
     }
     if !input.queued_prompts.is_empty() {
+        let queue = QueueSnapshot::from_input(input, 0);
         out.push_str(&format!(
             "\n  queue -> {} pending message(s) ({})",
-            input.queued_prompts.len(),
-            queue_state_label(input)
+            queue.count,
+            queue.state_label()
         ));
     }
     out
@@ -2753,10 +2710,11 @@ fn conversation_mermaid_body(input: &InputState, limit: usize) -> String {
     }
 
     if !input.queued_prompts.is_empty() {
+        let queue = QueueSnapshot::from_input(input, 0);
         out.push_str(&format!(
             "  queue[\"queue: {} pending ({})\"]:::queue\n",
-            input.queued_prompts.len(),
-            escape_mermaid_label(queue_state_label(input))
+            queue.count,
+            escape_mermaid_label(queue.state_label())
         ));
         if let Some(prev) = previous {
             out.push_str(&format!("  {} --> queue\n", prev));
