@@ -285,12 +285,6 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
 
         crate::Cmd::Status => {
             print_status(config_path)?;
-            if mux::zellij::in_zellij() {
-                println!(
-                    "zellij:  in session {}",
-                    std::env::var("ZELLIJ_SESSION_NAME").unwrap_or_default()
-                );
-            }
             Ok(())
         }
 
@@ -483,7 +477,9 @@ fn print_status(config_path: &Path) -> Result<()> {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "(current executable unknown)".to_string())
     );
-    match tiffany_install::resolve_tiffany_binary() {
+    let tiffany_binary = tiffany_install::resolve_tiffany_binary();
+    let tiffany_ready = matches!(tiffany_binary.as_ref(), Some(binary) if binary.verified);
+    match tiffany_binary.as_ref() {
         Some(binary) => {
             let verified = if binary.verified { "" } else { " (not found)" };
             println!(
@@ -526,7 +522,7 @@ fn print_status(config_path: &Path) -> Result<()> {
         tiffany_install::launch_command_preview(config_path)
     );
 
-    match Config::load(config_path) {
+    let config_loaded = match Config::load(config_path) {
         Ok(cfg) => {
             println!("db:           {}", cfg.behavior.db_path.display());
             println!("logs:         {}", cfg.behavior.session_log_dir.display());
@@ -535,13 +531,90 @@ fn print_status(config_path: &Path) -> Result<()> {
                 "claude:       bypass_permissions={}",
                 cfg.behavior.cc_bypass_permissions
             );
+            true
         }
         Err(err) => {
             println!("config load:  {err:#}");
-            println!("next:         orchestrator setup");
+            false
         }
+    };
+    if mux::zellij::in_zellij() {
+        println!(
+            "zellij:       in session {}",
+            std::env::var("ZELLIJ_SESSION_NAME").unwrap_or_default()
+        );
+    }
+
+    for action in status_actions(
+        config_loaded,
+        tiffany_ready,
+        tiffany_install::legacy_tui_forced(),
+    ) {
+        println!("{:<13}{}", format!("{}:", action.label), action.command);
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StatusAction {
+    label: &'static str,
+    command: &'static str,
+}
+
+fn status_actions(
+    config_loaded: bool,
+    tiffany_ready: bool,
+    legacy_tui_forced: bool,
+) -> Vec<StatusAction> {
+    if !config_loaded {
+        return vec![
+            StatusAction {
+                label: "next",
+                command: "orchestrator setup",
+            },
+            StatusAction {
+                label: "check",
+                command: "orchestrator doctor",
+            },
+        ];
+    }
+
+    if legacy_tui_forced {
+        return vec![
+            StatusAction {
+                label: "next",
+                command: "unset ORCHESTRATOR_LEGACY_TUI, then run `orchestrator tui`",
+            },
+            StatusAction {
+                label: "check",
+                command: "orchestrator doctor",
+            },
+        ];
+    }
+
+    if tiffany_ready {
+        vec![
+            StatusAction {
+                label: "next",
+                command: "tiffany orchestrator",
+            },
+            StatusAction {
+                label: "check",
+                command: "orchestrator doctor",
+            },
+        ]
+    } else {
+        vec![
+            StatusAction {
+                label: "next",
+                command: "install tiffany-loop or run `./scripts/tiffany-dev` from source",
+            },
+            StatusAction {
+                label: "check",
+                command: "orchestrator doctor",
+            },
+        ]
+    }
 }
 
 fn show_config(config_path: &Path) -> Result<()> {
@@ -3777,5 +3850,58 @@ mod tests {
             "config provider setup custom --type openai --key <redacted> --endpoint https://llm.example.com/v1"
         );
         assert!(!preview.contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn status_actions_send_missing_config_to_setup() {
+        assert_eq!(
+            status_actions(false, true, false),
+            vec![
+                StatusAction {
+                    label: "next",
+                    command: "orchestrator setup",
+                },
+                StatusAction {
+                    label: "check",
+                    command: "orchestrator doctor",
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn status_actions_launch_tiffany_when_ready() {
+        assert_eq!(
+            status_actions(true, true, false),
+            vec![
+                StatusAction {
+                    label: "next",
+                    command: "tiffany orchestrator",
+                },
+                StatusAction {
+                    label: "check",
+                    command: "orchestrator doctor",
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn status_actions_explain_legacy_tui_override() {
+        let actions = status_actions(true, true, true);
+
+        assert_eq!(actions[0].label, "next");
+        assert!(actions[0].command.contains("ORCHESTRATOR_LEGACY_TUI"));
+        assert_eq!(actions[1].command, "orchestrator doctor");
+    }
+
+    #[test]
+    fn status_actions_explain_missing_tiffany_binary() {
+        let actions = status_actions(true, false, false);
+
+        assert_eq!(actions[0].label, "next");
+        assert!(actions[0].command.contains("install tiffany-loop"));
+        assert!(actions[0].command.contains("./scripts/tiffany-dev"));
+        assert_eq!(actions[1].command, "orchestrator doctor");
     }
 }

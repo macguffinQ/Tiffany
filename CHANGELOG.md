@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - Added release workflow preflight gating before publishing tagged builds.
 - Added release tag checks so tag versions must match the root Cargo package version.
 - Added actionable `orchestrator doctor` next steps for first-run setup and repair.
+- Added concise `orchestrator status` next/check actions for first-run launch guidance.
 
 ## [0.1.11] - 2026-06-19
 
