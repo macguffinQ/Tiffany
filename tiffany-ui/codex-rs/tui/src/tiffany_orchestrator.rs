@@ -2579,6 +2579,16 @@ fn strip_runtime_prefix(line: &str) -> String {
                         | "tool_use"
                         | "tool_result"
                         | "exec"
+                        | "local_shell_call"
+                        | "function_call"
+                        | "function_call_output"
+                        | "custom_tool_call"
+                        | "custom_tool_call_output"
+                        | "tool_search_call"
+                        | "tool_search_output"
+                        | "web_search_call"
+                        | "image_generation_call"
+                        | "mcp_tool_call"
                 )
             )
         {
@@ -3385,6 +3395,29 @@ mod tests {
         assert_eq!(
             visible_content(&event).as_deref(),
             Some("tool Bash: cargo test")
+        );
+
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            message: "codex output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("worker-codex".to_string()),
+            worker_role: Some("worker-codex".to_string()),
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: Some("codex local_shell_call: tool shell: cargo test --all".to_string()),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+
+        assert_eq!(
+            visible_content(&event).as_deref(),
+            Some("tool shell: cargo test --all")
         );
     }
 

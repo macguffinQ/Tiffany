@@ -202,8 +202,27 @@ pub fn normalize_output_summary(display: &str) -> String {
     let _agent = parts.next();
     match parts.next() {
         Some(
-            "assistant" | "event" | "result" | "final" | "final_answer" | "task_complete"
-            | "turn_complete" | "tool" | "tool_use" | "tool_result" | "exec",
+            "assistant"
+            | "event"
+            | "result"
+            | "final"
+            | "final_answer"
+            | "task_complete"
+            | "turn_complete"
+            | "tool"
+            | "tool_use"
+            | "tool_result"
+            | "exec"
+            | "local_shell_call"
+            | "function_call"
+            | "function_call_output"
+            | "custom_tool_call"
+            | "custom_tool_call_output"
+            | "tool_search_call"
+            | "tool_search_output"
+            | "web_search_call"
+            | "image_generation_call"
+            | "mcp_tool_call",
         ) => body.trim().to_string(),
         _ => trimmed.to_string(),
     }
@@ -517,8 +536,124 @@ fn summarize_inline_tool_object(object: &Map<String, Value>) -> Option<String> {
     match object.get("type").and_then(Value::as_str) {
         Some("tool_use") => summarize_tool_object(object),
         Some("tool_result") => summarize_tool_result_object(object),
+        Some("local_shell_call") => summarize_local_shell_call_object(object),
+        Some("function_call") => summarize_function_call_object(object),
+        Some("function_call_output") => summarize_function_call_output_object(object),
+        Some("custom_tool_call") => summarize_custom_tool_call_object(object),
+        Some("custom_tool_call_output") => summarize_custom_tool_call_output_object(object),
+        Some("tool_search_call") => summarize_tool_search_call_object(object),
+        Some("tool_search_output") => summarize_tool_search_output_object(object),
+        Some("web_search_call") => summarize_web_search_call_object(object),
+        Some("image_generation_call") => summarize_image_generation_call_object(object),
         _ => None,
     }
+}
+
+fn summarize_local_shell_call_object(object: &Map<String, Value>) -> Option<String> {
+    let action = object.get("action").and_then(Value::as_object);
+    let detail = action
+        .and_then(|action| {
+            action
+                .get("command")
+                .or_else(|| action.get("cmd"))
+                .and_then(command_value_to_text)
+        })
+        .or_else(|| {
+            object
+                .get("command")
+                .or_else(|| object.get("cmd"))
+                .and_then(command_value_to_text)
+        })
+        .or_else(|| object.get("status").and_then(value_to_text));
+    Some(format_tool_summary("shell", detail))
+}
+
+fn summarize_function_call_object(object: &Map<String, Value>) -> Option<String> {
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .and_then(non_empty)?;
+    let name = object
+        .get("namespace")
+        .and_then(Value::as_str)
+        .and_then(non_empty)
+        .map(|namespace| format!("{namespace}.{name}"))
+        .unwrap_or(name);
+    let detail = object.get("arguments").and_then(argument_value_to_text);
+    Some(format_tool_summary(&name, detail))
+}
+
+fn summarize_function_call_output_object(object: &Map<String, Value>) -> Option<String> {
+    summarize_output_body(
+        object.get("output"),
+        object.get("name").and_then(Value::as_str),
+        object
+            .get("success")
+            .and_then(Value::as_bool)
+            .map(|success| !success)
+            .unwrap_or(false),
+    )
+}
+
+fn summarize_custom_tool_call_object(object: &Map<String, Value>) -> Option<String> {
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .and_then(non_empty)?;
+    let detail = object
+        .get("input")
+        .or_else(|| object.get("arguments"))
+        .and_then(argument_value_to_text);
+    Some(format_tool_summary(&name, detail))
+}
+
+fn summarize_custom_tool_call_output_object(object: &Map<String, Value>) -> Option<String> {
+    summarize_output_body(
+        object.get("output"),
+        object.get("name").and_then(Value::as_str),
+        object
+            .get("success")
+            .and_then(Value::as_bool)
+            .map(|success| !success)
+            .unwrap_or(false),
+    )
+}
+
+fn summarize_tool_search_call_object(object: &Map<String, Value>) -> Option<String> {
+    let detail = object
+        .get("execution")
+        .and_then(value_to_text)
+        .or_else(|| object.get("arguments").and_then(argument_value_to_text))
+        .or_else(|| object.get("status").and_then(value_to_text));
+    Some(format_tool_summary("search", detail))
+}
+
+fn summarize_tool_search_output_object(object: &Map<String, Value>) -> Option<String> {
+    let status = object.get("status").and_then(value_to_text);
+    let count = object.get("tools").and_then(Value::as_array).map(Vec::len);
+    let detail = match (status, count) {
+        (Some(status), Some(count)) => Some(format!("{status}, {count} tool(s)")),
+        (Some(status), None) => Some(status),
+        (None, Some(count)) => Some(format!("{count} tool(s)")),
+        (None, None) => object.get("execution").and_then(value_to_text),
+    };
+    Some(format_tool_result_summary(Some("search"), detail, false))
+}
+
+fn summarize_web_search_call_object(object: &Map<String, Value>) -> Option<String> {
+    let detail = object
+        .get("action")
+        .and_then(web_search_action_text)
+        .or_else(|| object.get("status").and_then(value_to_text));
+    Some(format_tool_summary("web_search", detail))
+}
+
+fn summarize_image_generation_call_object(object: &Map<String, Value>) -> Option<String> {
+    let detail = object
+        .get("revised_prompt")
+        .and_then(value_to_text)
+        .or_else(|| object.get("status").and_then(value_to_text));
+    Some(format_tool_summary("image_generation", detail))
 }
 
 fn summarize_tool_result_object(object: &Map<String, Value>) -> Option<String> {
@@ -526,6 +661,7 @@ fn summarize_tool_result_object(object: &Map<String, Value>) -> Option<String> {
         .get("content")
         .and_then(tool_result_content_text)
         .or_else(|| object.get("result").and_then(value_to_text))
+        .or_else(|| object.get("output").and_then(output_body_text))
         .unwrap_or_default();
     let prefix = if object
         .get("is_error")
@@ -543,6 +679,46 @@ fn summarize_tool_result_object(object: &Map<String, Value>) -> Option<String> {
     }
 }
 
+fn summarize_output_body(
+    output: Option<&Value>,
+    name: Option<&str>,
+    is_error: bool,
+) -> Option<String> {
+    let content = output.and_then(output_body_text);
+    Some(format_tool_result_summary(name, content, is_error))
+}
+
+fn format_tool_summary(name: &str, detail: Option<String>) -> String {
+    match detail {
+        Some(detail) if !detail.trim().is_empty() => {
+            format!("tool {name}: {}", sanitize_text(detail.trim(), 220))
+        }
+        _ => format!("tool {name}"),
+    }
+}
+
+fn format_tool_result_summary(
+    name: Option<&str>,
+    detail: Option<String>,
+    is_error: bool,
+) -> String {
+    let prefix = match (
+        name.and_then(|name| non_empty(name).map(|name| sanitize_text(&name, 80))),
+        is_error,
+    ) {
+        (Some(name), true) => format!("tool {name} error"),
+        (Some(name), false) => format!("tool {name} result"),
+        (None, true) => "tool error".to_string(),
+        (None, false) => "tool result".to_string(),
+    };
+    match detail {
+        Some(detail) if !detail.trim().is_empty() => {
+            format!("{prefix}: {}", sanitize_text(detail.trim(), 220))
+        }
+        _ => prefix,
+    }
+}
+
 fn tool_result_content_text(value: &Value) -> Option<String> {
     if let Some(text) = value.as_str().and_then(non_empty) {
         return Some(text);
@@ -553,7 +729,7 @@ fn tool_result_content_text(value: &Value) -> Option<String> {
 
 fn tool_detail_text(object: &Map<String, Value>) -> Option<String> {
     for key in ["command", "cmd", "file_path", "path", "url", "query"] {
-        if let Some(text) = object.get(key).and_then(value_to_text) {
+        if let Some(text) = object.get(key).and_then(command_value_to_text) {
             return Some(text);
         }
     }
@@ -561,13 +737,14 @@ fn tool_detail_text(object: &Map<String, Value>) -> Option<String> {
     let input = object
         .get("input")
         .or_else(|| object.get("parameters"))
-        .or_else(|| object.get("args"))?;
+        .or_else(|| object.get("args"))
+        .or_else(|| object.get("arguments"))?;
     if let Some(text) = input.as_str().and_then(non_empty) {
-        return Some(text);
+        return Some(humanize_argument_text(&text));
     }
     let input = input.as_object()?;
     for key in ["command", "cmd", "file_path", "path", "url", "query"] {
-        if let Some(text) = input.get(key).and_then(value_to_text) {
+        if let Some(text) = input.get(key).and_then(command_value_to_text) {
             return Some(text);
         }
     }
@@ -582,6 +759,97 @@ fn tool_detail_text(object: &Map<String, Value>) -> Option<String> {
         (Some(pattern), None) => Some(pattern),
         _ => None,
     }
+}
+
+fn command_value_to_text(value: &Value) -> Option<String> {
+    if let Some(text) = value_to_text(value) {
+        return Some(text);
+    }
+    let array = value.as_array()?;
+    let parts = array.iter().filter_map(value_to_text).collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+fn argument_value_to_text(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str().and_then(non_empty) {
+        return Some(humanize_argument_text(&text));
+    }
+    if let Some(object) = value.as_object() {
+        if let Some(detail) = tool_detail_text(object) {
+            return Some(detail);
+        }
+        return Some(summarize_json_value(value));
+    }
+    if let Some(array) = value.as_array() {
+        let text = summarize_json_array(array);
+        return (!text.trim().is_empty()).then_some(text);
+    }
+    value_to_text(value)
+}
+
+fn humanize_argument_text(text: &str) -> String {
+    let trimmed = text.trim();
+    if looks_like_json(trimmed) {
+        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+            if let Some(object) = value.as_object() {
+                if let Some(detail) = tool_detail_text(object) {
+                    return detail;
+                }
+            }
+            return summarize_json_value(&value);
+        }
+    }
+    trimmed.to_string()
+}
+
+fn output_body_text(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str().and_then(non_empty) {
+        return Some(humanize_argument_text(&text));
+    }
+    if let Some(array) = value.as_array() {
+        let text = array
+            .iter()
+            .filter_map(|item| {
+                item.get("text")
+                    .and_then(value_to_text)
+                    .or_else(|| extract_text_from_value(item))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return (!text.trim().is_empty()).then_some(text);
+    }
+    if value.is_object() {
+        return extract_text_from_value(value).or_else(|| Some(summarize_json_value(value)));
+    }
+    value_to_text(value)
+}
+
+fn web_search_action_text(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let action = object
+        .get("type")
+        .and_then(value_to_text)
+        .unwrap_or_else(|| "search".into());
+    if let Some(query) = object.get("query").and_then(value_to_text) {
+        return Some(format!("{action}: {query}"));
+    }
+    if let Some(queries) = object.get("queries").and_then(Value::as_array) {
+        let queries = queries
+            .iter()
+            .filter_map(value_to_text)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !queries.trim().is_empty() {
+            return Some(format!("{action}: {queries}"));
+        }
+    }
+    if let Some(url) = object.get("url").and_then(value_to_text) {
+        if let Some(pattern) = object.get("pattern").and_then(value_to_text) {
+            return Some(format!("{action}: {pattern} in {url}"));
+        }
+        return Some(format!("{action}: {url}"));
+    }
+    Some(action)
 }
 
 fn value_array_texts(value: Option<&Value>) -> Vec<String> {
@@ -998,6 +1266,89 @@ mod tests {
         assert_eq!(text, "claude-code tool_use: tool Read: README.md");
         assert_eq!(normalize_output_summary(&text), "tool Read: README.md");
         assert!(!text.contains('{'));
+    }
+
+    #[test]
+    fn formats_codex_response_tool_items_without_raw_json() {
+        let shell = summarize_cli_stream_line(
+            &serde_json::json!({
+                "type": "local_shell_call",
+                "status": "in_progress",
+                "action": {
+                    "type": "exec",
+                    "command": ["cargo", "test", "--all"]
+                }
+            })
+            .to_string(),
+            500,
+        )
+        .unwrap();
+
+        assert_eq!(shell.kind, "local_shell_call");
+        assert_eq!(shell.text, "tool shell: cargo test --all");
+        assert!(!shell.text.contains('{'));
+
+        let call = summarize_cli_stream_line(
+            &serde_json::json!({
+                "type": "function_call",
+                "name": "exec_command",
+                "arguments": "{\"cmd\":\"ls -la\"}",
+                "call_id": "call_1"
+            })
+            .to_string(),
+            500,
+        )
+        .unwrap();
+
+        assert_eq!(call.kind, "function_call");
+        assert_eq!(call.text, "tool exec_command: ls -la");
+        assert!(!call.text.contains('{'));
+
+        let output = summarize_cli_stream_line(
+            &serde_json::json!({
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": [{ "type": "input_text", "text": "tests passed" }]
+            })
+            .to_string(),
+            500,
+        )
+        .unwrap();
+
+        assert_eq!(output.kind, "function_call_output");
+        assert_eq!(output.text, "tool result: tests passed");
+        assert!(!output.text.contains('{'));
+    }
+
+    #[test]
+    fn formats_codex_search_and_web_tool_items() {
+        let search = summarize_cli_stream_line(
+            &serde_json::json!({
+                "type": "tool_search_call",
+                "status": "in_progress",
+                "execution": "search available tools",
+                "arguments": { "query": "github" }
+            })
+            .to_string(),
+            500,
+        )
+        .unwrap();
+
+        assert_eq!(search.text, "tool search: search available tools");
+
+        let web = summarize_cli_stream_line(
+            &serde_json::json!({
+                "type": "web_search_call",
+                "status": "in_progress",
+                "action": { "type": "search", "query": "Agent Client Protocol" }
+            })
+            .to_string(),
+            500,
+        )
+        .unwrap();
+
+        assert_eq!(web.text, "tool web_search: search: Agent Client Protocol");
+        assert!(!web.text.contains('{'));
     }
 
     #[test]

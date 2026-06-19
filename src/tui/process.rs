@@ -463,6 +463,16 @@ fn compact_worker_label(label: &str) -> String {
                 | "tool_use"
                 | "tool_result"
                 | "exec"
+                | "local_shell_call"
+                | "function_call"
+                | "function_call_output"
+                | "custom_tool_call"
+                | "custom_tool_call_output"
+                | "tool_search_call"
+                | "tool_search_output"
+                | "web_search_call"
+                | "image_generation_call"
+                | "mcp_tool_call"
         )
     ) {
         parts.pop();
@@ -1115,6 +1125,16 @@ mod tests {
 
         assert!(line.contains("claude-code: tool Bash: cargo test"));
         assert!(!line.contains("tool_use"));
+
+        let line = format_run_event(&RunProgress::WorkerOutput {
+            task_id,
+            agent: "worker-codex".into(),
+            role: "worker-codex".into(),
+            content: "codex local_shell_call: tool shell: cargo test --all".into(),
+        });
+
+        assert!(line.contains("worker-codex: tool shell: cargo test --all"));
+        assert!(!line.contains("local_shell_call"));
 
         let line = format_run_event(&RunProgress::RoleOutput {
             role: "diagnostic".into(),
