@@ -287,6 +287,7 @@ orchestrator run "fix typo" --planner opus --worker codex
 
 # 9. Browse past sessions
 orchestrator sessions list
+orchestrator sessions show                    # latest session, human-readable
 orchestrator sessions show <id|prefix|last>          # human-readable by default
 orchestrator sessions show <id|prefix|last> --raw    # original JSONL
 orchestrator sessions show <id|prefix|last> --tree   # parent/child run tree

@@ -379,7 +379,7 @@ enum SessionsCmd {
     /// Show one session's events
     Show {
         /// Session UUID, short prefix, last, or .
-        id: String,
+        id: Option<String>,
         /// Print raw JSONL instead of human-readable event summaries
         #[arg(long)]
         raw: bool,
@@ -509,5 +509,17 @@ mod tests {
         let cli = Cli::parse_from(["orchestrator", "setup"]);
 
         assert!(matches!(cli.cmd, Cmd::Setup));
+    }
+
+    #[test]
+    fn sessions_show_defaults_to_last_when_id_is_omitted() {
+        let cli = Cli::parse_from(["orchestrator", "sessions", "show"]);
+
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Sessions {
+                action: SessionsCmd::Show { id: None, .. }
+            }
+        ));
     }
 }

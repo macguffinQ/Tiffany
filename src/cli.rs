@@ -196,7 +196,7 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                     tree,
                     flow,
                 } => {
-                    let s = store.resolve_selector(&id)?;
+                    let s = store.resolve_selector(id.as_deref().unwrap_or("last"))?;
                     let path = store.log_path(s.id);
                     if flow {
                         let all_sessions = store.list(10_000)?;

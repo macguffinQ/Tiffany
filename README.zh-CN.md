@@ -193,6 +193,7 @@ orchestrator run "implement fibonacci in src/fib.rs"
 
 # 7. 查看历史会话
 orchestrator sessions list
+orchestrator sessions show                    # 最近一次会话，默认人类可读
 orchestrator sessions show <id|prefix|last>          # 默认人类可读
 orchestrator sessions show <id|prefix|last> --raw    # 原始 JSONL
 orchestrator sessions show <id|prefix|last> --tree   # 父子 run 树
