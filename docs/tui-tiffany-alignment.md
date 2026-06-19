@@ -13,7 +13,9 @@ land in the fork and keep the upstream terminal architecture intact.
 
 - `tiffany-ui/` is a clone of `https://github.com/openai/codex`.
 - The fork branch is `tiffany-main`.
-- The CLI binary in `codex-rs/cli` is named `tiffany`.
+- The published UI binary is built from `codex-rs/tiffany-cli` and named
+  `tiffany`; the full upstream-style `codex-rs/cli` remains in the fork for
+  source compatibility but is not the release entrypoint.
 - `tiffany orchestrator` starts the tiffany-loop TUI in tiffany-loop orchestrator idle mode and
   waits for the first prompt in the native input box.
 - `tiffany orchestrator "..."` starts the tiffany-loop TUI and immediately streams
@@ -79,7 +81,7 @@ After the upstream copy, restore or re-apply Tiffany-owned changes only in these
 areas:
 
 - `tiffany-ui/TIFFANY_FORK.md`
-- `tiffany-ui/codex-rs/cli` command naming and `tiffany orchestrator` entry
+- `tiffany-ui/codex-rs/tiffany-cli` command naming and `tiffany orchestrator` entry
 - `tiffany-ui/codex-rs/tui/src/tiffany_orchestrator.rs`
 - small hook points that route native input, pending queue, provider, role, and
   doctor panels into the orchestrator bridge

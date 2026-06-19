@@ -12,6 +12,7 @@ use codex_tui::run_main;
 use std::env;
 use std::ffi::OsString;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use supports_color::Stream;
@@ -134,11 +135,51 @@ impl TiffanyOrchestratorCommand {
 }
 
 fn main() -> anyhow::Result<()> {
+    let args = env::args_os().collect::<Vec<_>>();
+    if is_early_clap_request(&args) {
+        TiffanyCli::parse_from(args);
+        return Ok(());
+    }
+
     install_tiffany_config_home()?;
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let cli = TiffanyCli::parse();
         run_tiffany(cli, arg0_paths).await
     })
+}
+
+fn is_early_clap_request(args: &[OsString]) -> bool {
+    if !is_primary_tiffany_invocation(args.first()) {
+        return false;
+    }
+
+    let mut positional_index = 0usize;
+    for arg in args.iter().skip(1) {
+        let Some(arg) = arg.to_str() else {
+            continue;
+        };
+        if arg == "--" {
+            return false;
+        }
+        if matches!(arg, "-h" | "--help" | "-V" | "--version") {
+            return true;
+        }
+        if positional_index == 0 && arg == "help" {
+            return true;
+        }
+        positional_index += 1;
+    }
+    false
+}
+
+fn is_primary_tiffany_invocation(arg0: Option<&OsString>) -> bool {
+    let Some(arg0) = arg0 else {
+        return false;
+    };
+    let Some(file_name) = Path::new(arg0).file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    file_name.strip_suffix(".exe").unwrap_or(file_name) == "tiffany"
 }
 
 async fn run_tiffany(cli: TiffanyCli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
@@ -319,6 +360,41 @@ mod tests {
 
         assert_eq!(command.args, vec!["hello"]);
         assert_eq!(command.event_args(), vec!["--worker", "worker-cc"]);
+    }
+
+    #[test]
+    fn help_and_version_skip_arg0_initialization_for_tiffany() {
+        assert!(is_early_clap_request(&[
+            OsString::from("tiffany"),
+            OsString::from("--help")
+        ]));
+        assert!(is_early_clap_request(&[
+            OsString::from("/opt/homebrew/bin/tiffany"),
+            OsString::from("orchestrator"),
+            OsString::from("-h")
+        ]));
+        assert!(is_early_clap_request(&[
+            OsString::from("tiffany.exe"),
+            OsString::from("--version")
+        ]));
+        assert!(is_early_clap_request(&[
+            OsString::from("tiffany"),
+            OsString::from("help"),
+            OsString::from("orchestrator")
+        ]));
+    }
+
+    #[test]
+    fn early_metadata_detection_does_not_intercept_helpers_or_prompt_literals() {
+        assert!(!is_early_clap_request(&[
+            OsString::from("apply_patch"),
+            OsString::from("--help")
+        ]));
+        assert!(!is_early_clap_request(&[
+            OsString::from("tiffany"),
+            OsString::from("--"),
+            OsString::from("--help")
+        ]));
     }
 
     #[test]
