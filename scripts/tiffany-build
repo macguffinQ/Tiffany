@@ -15,10 +15,12 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     "  ./scripts/tiffany-build" \
     "  ./scripts/tiffany-build --release --locked" \
     "  ./scripts/tiffany-build --fast-release --locked" \
+    "  ./scripts/tiffany-build --fast-release --locked --prune-dist-cache" \
     "" \
     "Environment:" \
     "  TIFFANY_CARGO_TARGET_DIR  shared Cargo target dir, default: ./target" \
-    "  TIFFANY_NO_STRIP=1        keep symbols in --fast-release binaries"
+    "  TIFFANY_NO_STRIP=1        keep symbols in --fast-release binaries" \
+    "  TIFFANY_PRUNE_DIST_CACHE=1 remove dist build cache after a successful build"
   exit 0
 fi
 
@@ -36,15 +38,34 @@ export CARGO_TARGET_DIR="$target_dir"
 
 cargo_flags=()
 dist_mode=0
+prune_dist_cache="${TIFFANY_PRUNE_DIST_CACHE:-0}"
+build_target=""
+expect_target=0
 prev_arg=""
 for arg in "$@"; do
+  if [[ "$expect_target" == "1" ]]; then
+    build_target="$arg"
+    expect_target=0
+  fi
+
   case "$arg" in
     --fast-release|--dist)
       dist_mode=1
       cargo_flags+=(--profile tiffany-dist)
       ;;
+    --prune-dist-cache)
+      prune_dist_cache=1
+      ;;
     --profile=tiffany-dist)
       dist_mode=1
+      cargo_flags+=("$arg")
+      ;;
+    --target)
+      expect_target=1
+      cargo_flags+=("$arg")
+      ;;
+    --target=*)
+      build_target="${arg#--target=}"
       cargo_flags+=("$arg")
       ;;
     tiffany-dist)
@@ -99,6 +120,22 @@ if [[ "$dist_mode" == "1" && "${TIFFANY_NO_STRIP:-0}" != "1" ]]; then
       fi
       ;;
   esac
+fi
+
+if [[ "$dist_mode" == "1" && "$prune_dist_cache" == "1" ]]; then
+  profile_dir="$target_dir/tiffany-dist"
+  if [[ -n "$build_target" ]]; then
+    profile_dir="$target_dir/$build_target/tiffany-dist"
+  fi
+
+  if [[ -d "$profile_dir" ]]; then
+    echo "pruning dist build cache while keeping final binaries..."
+    for entry in .fingerprint build deps examples incremental gn_out; do
+      if [[ -e "$profile_dir/$entry" ]]; then
+        rm -rf "$profile_dir/$entry"
+      fi
+    done
+  fi
 fi
 
 echo "done"

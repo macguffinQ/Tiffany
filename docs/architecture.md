@@ -90,7 +90,10 @@ cargo build --release
 The build scripts use a shared Cargo target directory. The root release binary
 lands at `target/release/orchestrator` for a normal release build, and the
 primary UI binary lands next to it as `target/release/tiffany`. Fast
-distributable builds use `target/tiffany-dist/`.
+distributable builds use `target/tiffany-dist/`. The final binaries are small
+relative to the build cache; use `./scripts/tiffany-build --fast-release --locked
+--prune-dist-cache` or `./scripts/tiffany-clean-targets --dist-cache` when you
+want to keep the runnable dist binaries but remove rebuildable dist internals.
 
 ## Terminal chat
 

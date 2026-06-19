@@ -27,13 +27,16 @@ Usage:
   ./scripts/tiffany-clean-targets --dist
       Remove tiffany-dist build outputs from shared and legacy target dirs.
 
+  ./scripts/tiffany-clean-targets --dist-cache
+      Remove tiffany-dist cache internals while keeping final binaries.
+
   ./scripts/tiffany-clean-targets --debug
       Remove debug build outputs from shared and legacy target dirs.
 
   ./scripts/tiffany-clean-targets --all
       Remove both ./target and tiffany-ui/codex-rs/target.
 
-  ./scripts/tiffany-clean-targets --dry-run --dist
+  ./scripts/tiffany-clean-targets --dry-run --dist-cache
       Print what would be removed without deleting files.
 
 By default the shared ./target directory is kept, so normal incremental builds
@@ -95,6 +98,9 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --dist)
       mode="dist"
+      ;;
+    --dist-cache)
+      mode="dist-cache"
       ;;
     --debug)
       mode="debug"
@@ -189,6 +195,20 @@ show_top_deep() {
   show_top_dir "legacy debug incremental top entries" "$legacy_target/debug/incremental"
 }
 
+remove_dist_cache() {
+  local target_root="$1"
+  local label="$2"
+  local profile_dir="$target_root/tiffany-dist"
+  if [[ ! -d "$profile_dir" ]]; then
+    echo "$label dist cache already absent: $profile_dir"
+    return
+  fi
+
+  for entry in .fingerprint build deps examples incremental gn_out; do
+    remove_path "$label tiffany-dist/$entry" "$profile_dir/$entry"
+  done
+}
+
 case "$mode" in
   sizes)
     show_sizes
@@ -208,6 +228,10 @@ case "$mode" in
   dist)
     remove_path "shared tiffany-dist target" "$shared_target/tiffany-dist"
     remove_path "legacy tiffany-dist target" "$legacy_target/tiffany-dist"
+    ;;
+  dist-cache)
+    remove_dist_cache "$shared_target" "shared"
+    remove_dist_cache "$legacy_target" "legacy"
     ;;
   debug)
     remove_path "shared debug target" "$shared_target/debug"
