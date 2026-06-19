@@ -603,19 +603,19 @@ impl Renderable for ProviderSetupView {
             }
         }
 
-        if let Some(error) = &self.error {
-            if row < area.height {
-                Paragraph::new(Line::from(vec![gutter(), error.clone().red()])).render(
-                    Rect {
-                        x: area.x,
-                        y: area.y.saturating_add(row),
-                        width: area.width,
-                        height: 1,
-                    },
-                    buf,
-                );
-                row += 1;
-            }
+        if let Some(error) = &self.error
+            && row < area.height
+        {
+            Paragraph::new(Line::from(vec![gutter(), error.clone().red()])).render(
+                Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(row),
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            row += 1;
         }
 
         if row < area.height {
@@ -794,7 +794,7 @@ fn provider_auth_line(draft: &ProviderSetupDraft) -> Line<'static> {
         return Line::from(vec![
             gutter(),
             "Auth   ".dim(),
-            "literal key".yellow(),
+            "literal key".fg(Color::Yellow),
             "  stored in config; env ref is safer".dim(),
         ]);
     }
@@ -823,7 +823,7 @@ fn provider_auth_line(draft: &ProviderSetupDraft) -> Line<'static> {
     Line::from(vec![
         gutter(),
         "Auth   ".dim(),
-        "missing".yellow(),
+        "missing".fg(Color::Yellow),
         "  choose Env or enter Key".dim(),
     ])
 }

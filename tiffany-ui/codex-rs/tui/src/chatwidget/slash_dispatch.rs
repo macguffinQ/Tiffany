@@ -1382,7 +1382,7 @@ fn provider_setup_initial_draft(
 
     ProviderSetupDraft {
         provider: provider.to_string(),
-        kind: kind.clone(),
+        kind,
         env,
         key,
         endpoint: existing
@@ -1398,8 +1398,7 @@ fn role_setup_initial_draft(role: Option<&str>) -> RoleSetupDraft {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("worker-codex");
-    let defaults =
-        role_default_setup(role).unwrap_or_else(|| role_default_setup("worker-codex").unwrap());
+    let defaults = role_default_setup(role).unwrap_or(WORKER_CODEX_ROLE_DEFAULTS);
     RoleSetupDraft {
         role: role.to_string(),
         provider: defaults.provider.to_string(),
@@ -1451,10 +1450,10 @@ fn expand_home_path(path: &str) -> std::path::PathBuf {
     if path == "~" {
         return dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(path));
     }
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
     }
     std::path::PathBuf::from(path)
 }
@@ -1562,15 +1561,17 @@ struct RoleSetupDefaults {
     teams: &'static str,
 }
 
+const WORKER_CODEX_ROLE_DEFAULTS: RoleSetupDefaults = RoleSetupDefaults {
+    provider: "minimax",
+    model_id: "minimax-m3-codex",
+    model_name: "MiniMax-M3",
+    runtime: "codex",
+    teams: "no",
+};
+
 fn role_default_setup(role: &str) -> Option<RoleSetupDefaults> {
     match role.to_ascii_lowercase().as_str() {
-        "worker-codex" => Some(RoleSetupDefaults {
-            provider: "minimax",
-            model_id: "minimax-m3-codex",
-            model_name: "MiniMax-M3",
-            runtime: "codex",
-            teams: "no",
-        }),
+        "worker-codex" => Some(WORKER_CODEX_ROLE_DEFAULTS),
         "worker-cc" => Some(RoleSetupDefaults {
             provider: "anthropic",
             model_id: "sonnet",

@@ -9,6 +9,8 @@ use crate::config_update::format_config_error;
 use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
+use ratatui::style::Color;
+use ratatui::style::Style;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
@@ -2257,9 +2259,10 @@ impl App {
         if prompt.is_empty() {
             self.insert_history_cell(
                 tui,
-                Box::new(history_cell::PlainHistoryCell::new(vec![
-                    "⚠ orchestrator prompt is empty".yellow().into(),
-                ])),
+                Box::new(history_cell::PlainHistoryCell::new(vec![Line::styled(
+                    "⚠ orchestrator prompt is empty",
+                    Style::default().fg(Color::Yellow),
+                )])),
             );
             return true;
         }

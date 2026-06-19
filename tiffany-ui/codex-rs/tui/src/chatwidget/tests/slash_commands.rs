@@ -524,7 +524,6 @@ fn provider_setup_draft_accepts_separate_fields() {
             env: "OPENAI_API_KEY".to_string(),
             key: String::new(),
             endpoint: "https://api.openai.com/v1".to_string(),
-            ..Default::default()
         },
     )
     .expect("provider draft args");
@@ -544,7 +543,6 @@ fn provider_setup_draft_rejects_env_and_key_together() {
             env: "OPENAI_API_KEY".to_string(),
             key: "sk-test".to_string(),
             endpoint: String::new(),
-            ..Default::default()
         },
     )
     .expect_err("env and key should conflict");

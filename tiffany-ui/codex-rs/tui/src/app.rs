@@ -1012,8 +1012,9 @@ See the Codex keymap documentation for supported actions and examples."
         })?;
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
-        let tiffany_orchestrator_config =
-            tiffany_orchestrator.as_ref().map(|launch| launch.config());
+        let tiffany_orchestrator_config = tiffany_orchestrator
+            .as_ref()
+            .map(crate::tiffany_orchestrator::TiffanyOrchestratorLaunch::config);
 
         let mut app = Self {
             model_catalog,

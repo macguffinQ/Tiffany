@@ -649,19 +649,19 @@ impl Renderable for RoleSetupView {
             }
         }
 
-        if let Some(error) = &self.error {
-            if row < area.height {
-                Paragraph::new(Line::from(vec![gutter(), error.clone().red()])).render(
-                    Rect {
-                        x: area.x,
-                        y: area.y.saturating_add(row),
-                        width: area.width,
-                        height: 1,
-                    },
-                    buf,
-                );
-                row += 1;
-            }
+        if let Some(error) = &self.error
+            && row < area.height
+        {
+            Paragraph::new(Line::from(vec![gutter(), error.clone().red()])).render(
+                Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(row),
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            row += 1;
         }
 
         if row < area.height {
@@ -1004,7 +1004,7 @@ fn role_binding_line(draft: &RoleSetupDraft) -> Line<'static> {
         return Line::from(vec![
             gutter(),
             "Role   ".dim(),
-            "missing".yellow(),
+            "missing".fg(Color::Yellow),
             "  choose a role".dim(),
         ]);
     }

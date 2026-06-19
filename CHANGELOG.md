@@ -24,6 +24,8 @@ All notable changes to this project will be documented in this file.
   diagnostics through the orchestrator bridge with issue-aware status styling.
 - Added concise repair hints to the TUI `/doctor` output so provider, role,
   runtime, and ready-state diagnostics point at the next command to run.
+- Improved TUI `/provider` and `/role` command output with status rows and
+  next-step hints instead of raw CLI tables.
 
 ## [0.1.11] - 2026-06-19
 

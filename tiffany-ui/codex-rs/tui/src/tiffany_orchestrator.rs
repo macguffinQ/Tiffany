@@ -21,8 +21,11 @@ use crate::app_event_sender::AppEventSender;
 use crate::history_cell::PlainHistoryCell;
 use codex_app_server_protocol::UserInput;
 
+#[allow(clippy::disallowed_methods)]
 const TIFFANY_BLUE: Color = Color::Rgb(10, 186, 181);
+#[allow(clippy::disallowed_methods)]
 const TIFFANY_DARK: Color = Color::Rgb(7, 94, 91);
+#[allow(clippy::disallowed_methods)]
 const TIFFANY_SOFT: Color = Color::Rgb(76, 210, 204);
 const HUMANIZE_MAX_CHARS: usize = 240_000;
 
@@ -277,10 +280,9 @@ pub(crate) fn contextual_prompt(
         "You are continuing a multi-turn tiffany-loop orchestrator conversation.\n\
          Use the previous turns to resolve follow-ups, pronouns, and references.\n\
          The current user request below is the highest priority.\n\n\
-         Previous turns:\n{}\n\n\
+         Previous turns:\n{recent}\n\n\
          ---\n\
-         Current user request:\n{}",
-        recent, current_prompt
+         Current user request:\n{current_prompt}",
     )
 }
 
@@ -599,7 +601,7 @@ fn provider_setup_args(parts: &[String]) -> Result<Vec<Vec<String>>, String> {
         "config".to_string(),
         "provider".to_string(),
         "setup".to_string(),
-        provider.clone(),
+        provider,
     ];
     if let Some(kind) = kind.filter(|value| !value.trim().is_empty()) {
         command.push("--type".to_string());
@@ -867,14 +869,34 @@ fn concise_success_lines(
     output: &std::process::Output,
 ) -> Option<Vec<Line<'static>>> {
     match label {
-        "roles" => concise_roles_success(command_args),
+        "roles" => concise_roles_success(command_args, output),
         "provider" => concise_provider_success(command_args, output),
         _ => None,
     }
 }
 
-fn concise_roles_success(command_args: &[String]) -> Option<Vec<Line<'static>>> {
-    if command_args.get(0).map(String::as_str) != Some("roles") {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RoleSummary {
+    name: String,
+    model: String,
+    display_model: Option<String>,
+    runtime: String,
+    teams: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProviderSummary {
+    name: String,
+    kind: String,
+    auth: String,
+    endpoint: String,
+}
+
+fn concise_roles_success(
+    command_args: &[String],
+    output: &std::process::Output,
+) -> Option<Vec<Line<'static>>> {
+    if command_args.first().map(String::as_str) != Some("roles") {
         return None;
     }
     match command_args.get(1).map(String::as_str) {
@@ -885,14 +907,26 @@ fn concise_roles_success(command_args: &[String]) -> Option<Vec<Line<'static>>> 
                 .unwrap_or("<model>");
             let provider = flag_value(command_args, "--provider").unwrap_or("existing");
             let runtime = flag_value(command_args, "--runtime").unwrap_or("runtime");
-            Some(vec![status_line(
-                "✓",
-                TIFFANY_BLUE,
-                "role",
-                &format!("saved {role} -> {model} via {provider}/{runtime}"),
-            )])
+            let teams = if command_args.iter().any(|arg| arg == "--agent-teams") {
+                "on"
+            } else {
+                "off"
+            };
+            Some(vec![
+                status_line(
+                    "✓",
+                    TIFFANY_BLUE,
+                    "role",
+                    &format!("saved {role} -> {model}"),
+                ),
+                body_line(&format!("runtime: {runtime}"), true),
+                body_line(&format!("provider: {provider}"), true),
+                body_line(&format!("agent teams: {teams}"), true),
+                next_line("/doctor", "verify provider/model/runtime wiring"),
+            ])
         }
-        Some("list") | Some("show") => None,
+        Some("list") => role_summary_lines(&String::from_utf8_lossy(&output.stdout), "roles"),
+        Some("show") => role_summary_lines(&String::from_utf8_lossy(&output.stdout), "role"),
         _ => None,
     }
 }
@@ -902,7 +936,7 @@ fn concise_provider_success(
     output: &std::process::Output,
 ) -> Option<Vec<Line<'static>>> {
     match (
-        command_args.get(0).map(String::as_str),
+        command_args.first().map(String::as_str),
         command_args.get(1).map(String::as_str),
         command_args.get(2).map(String::as_str),
     ) {
@@ -918,6 +952,9 @@ fn concise_provider_success(
                 "provider",
                 &format!("saved {provider}"),
             )];
+            if let Some(kind) = flag_value(rest, "--type") {
+                lines.push(body_line(&format!("type: {kind}"), true));
+            }
             if let Some(env) = flag_value(rest, "--env") {
                 lines.push(body_line(&format!("auth: ${env}"), true));
             } else if flag_value(rest, "--key").is_some() {
@@ -926,6 +963,8 @@ fn concise_provider_success(
             if let Some(endpoint) = flag_value(rest, "--endpoint") {
                 lines.push(body_line(&format!("endpoint: {endpoint}"), true));
             }
+            lines.push(next_line("/role", "bind planner/critic/worker to models"));
+            lines.push(next_line("/doctor", "verify the full chain"));
             Some(lines)
         }
         (Some("config"), Some("provider"), Some("delete")) => {
@@ -933,12 +972,15 @@ fn concise_provider_success(
                 .get(3)
                 .map(String::as_str)
                 .unwrap_or("<provider>");
-            Some(vec![status_line(
-                "✓",
-                TIFFANY_BLUE,
-                "provider",
-                &format!("deleted {provider}"),
-            )])
+            Some(vec![
+                status_line(
+                    "✓",
+                    TIFFANY_BLUE,
+                    "provider",
+                    &format!("deleted {provider}"),
+                ),
+                next_line("/doctor", "check roles and models for broken bindings"),
+            ])
         }
         (Some("config"), Some("set-endpoint"), _) => {
             let provider = command_args
@@ -946,39 +988,283 @@ fn concise_provider_success(
                 .map(String::as_str)
                 .unwrap_or("<provider>");
             let url = command_args.get(3).map(String::as_str).unwrap_or("<url>");
-            Some(vec![status_line(
-                "✓",
-                TIFFANY_BLUE,
-                "provider",
-                &format!("{provider} endpoint -> {url}"),
-            )])
+            Some(vec![
+                status_line(
+                    "✓",
+                    TIFFANY_BLUE,
+                    "provider",
+                    &format!("{provider} endpoint -> {url}"),
+                ),
+                next_line("/doctor", "verify provider connectivity"),
+            ])
         }
         (Some("config"), Some("set-key"), _) => {
             let provider = command_args
                 .get(2)
                 .map(String::as_str)
                 .unwrap_or("<provider>");
-            Some(vec![status_line(
-                "✓",
-                TIFFANY_BLUE,
-                "provider",
-                &format!("{provider} auth updated"),
-            )])
+            Some(vec![
+                status_line(
+                    "✓",
+                    TIFFANY_BLUE,
+                    "provider",
+                    &format!("{provider} auth updated"),
+                ),
+                next_line("/doctor", "verify provider auth"),
+            ])
         }
         (Some("config"), Some("provider"), Some("list")) | (Some("config"), Some("show"), _) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut lines = vec![status_line("✓", TIFFANY_BLUE, "provider", "configured")];
-            lines.extend(
-                stdout
-                    .lines()
-                    .filter(|line| !line.trim().is_empty())
-                    .take(12)
-                    .map(|line| body_line(line.trim_end(), false)),
-            );
-            Some(lines)
+            provider_summary_lines(&stdout)
         }
         _ => None,
     }
+}
+
+fn provider_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
+    let providers = parse_provider_summaries(text);
+    if providers.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![status_line(
+        "✓",
+        TIFFANY_BLUE,
+        "provider",
+        &format!("{} configured", providers.len()),
+    )];
+    for provider in providers.iter().take(8) {
+        lines.push(provider_summary_line(provider));
+    }
+    if providers.len() > 8 {
+        lines.push(body_line(&format!("… {} more", providers.len() - 8), true));
+    }
+    lines.push(next_line("/provider setup", "edit auth or endpoint"));
+    lines.push(next_line("/role", "bind roles to provider models"));
+    Some(lines)
+}
+
+fn role_summary_lines(text: &str, label: &'static str) -> Option<Vec<Line<'static>>> {
+    let roles = parse_role_summaries(text);
+    if roles.is_empty() {
+        return None;
+    }
+
+    let message = if roles.len() == 1 {
+        format!("{} configured", roles[0].name)
+    } else {
+        format!("{} registered", roles.len())
+    };
+    let mut lines = vec![status_line("✓", TIFFANY_BLUE, label, &message)];
+    for role in roles.iter().take(10) {
+        lines.push(role_summary_line(role));
+    }
+    if roles.len() > 10 {
+        lines.push(body_line(&format!("… {} more", roles.len() - 10), true));
+    }
+    lines.push(next_line("/role <name>", "edit one role binding"));
+    lines.push(next_line("/doctor", "verify the orchestration chain"));
+    Some(lines)
+}
+
+fn provider_summary_line(provider: &ProviderSummary) -> Line<'static> {
+    let (symbol, color, auth) = provider_auth_status(provider);
+    let endpoint = if provider.endpoint.trim().is_empty()
+        || provider.endpoint == "-"
+        || provider.endpoint == "—"
+    {
+        "default".to_string()
+    } else {
+        truncate_text(&provider.endpoint, 56)
+    };
+    Line::from(vec![
+        Span::styled(
+            format!("  {symbol} "),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:<13}", provider.name),
+            Style::default().fg(TIFFANY_SOFT),
+        ),
+        Span::styled(
+            format!("{:<11}", provider.kind),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(format!("{auth:<10}"), Style::default().fg(Color::DarkGray)),
+        Span::styled(endpoint, Style::default().fg(Color::DarkGray)),
+    ])
+}
+
+fn role_summary_line(role: &RoleSummary) -> Line<'static> {
+    let model = role.display_model.as_deref().unwrap_or(&role.model);
+    let teams = if role.teams { "teams on" } else { "teams off" };
+    Line::from(vec![
+        Span::styled(
+            "  ✓ ",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:<14}", role.name),
+            Style::default().fg(TIFFANY_SOFT),
+        ),
+        Span::styled(
+            format!("{:<18}", truncate_text(model, 18)),
+            Style::default(),
+        ),
+        Span::styled(
+            format!("{:<13}", role.runtime),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(teams, Style::default().fg(Color::DarkGray)),
+    ])
+}
+
+fn provider_auth_status(provider: &ProviderSummary) -> (&'static str, Color, &'static str) {
+    let auth = provider.auth.trim();
+    if provider.kind.eq_ignore_ascii_case("ollama") {
+        return ("●", TIFFANY_BLUE, "local");
+    }
+    if auth.is_empty() || auth == "-" || auth == "—" || auth.eq_ignore_ascii_case("none") {
+        return ("○", Color::Yellow, "no key");
+    }
+    ("✓", TIFFANY_BLUE, "auth set")
+}
+
+fn parse_provider_summaries(text: &str) -> Vec<ProviderSummary> {
+    let mut providers = Vec::new();
+    let mut in_config_providers = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("Providers (") && trimmed.ends_with(':') {
+            in_config_providers = true;
+            continue;
+        }
+        if in_config_providers {
+            if trimmed.starts_with("Models (")
+                || trimmed.starts_with("Roles (")
+                || trimmed.starts_with("Tag overrides")
+                || trimmed.starts_with("───")
+            {
+                in_config_providers = false;
+                continue;
+            }
+            if let Some(provider) = parse_config_show_provider(trimmed) {
+                providers.push(provider);
+            }
+            continue;
+        }
+        if let Some(provider) = parse_provider_table_row(trimmed) {
+            providers.push(provider);
+        }
+    }
+
+    providers
+}
+
+fn parse_provider_table_row(line: &str) -> Option<ProviderSummary> {
+    if line.starts_with("Providers ")
+        || line.starts_with("provider ")
+        || line.starts_with("===")
+        || line.starts_with("config file:")
+    {
+        return None;
+    }
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    if parts.len() < 4 {
+        return None;
+    }
+    if parts[0] == "-" {
+        return None;
+    }
+    Some(ProviderSummary {
+        name: parts[0].to_string(),
+        kind: parts[1].to_string(),
+        auth: parts[2].to_string(),
+        endpoint: parts[3].to_string(),
+    })
+}
+
+fn parse_config_show_provider(line: &str) -> Option<ProviderSummary> {
+    let line = line.strip_prefix("- ")?;
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    let name = parts.first()?.to_string();
+    let kind = parts
+        .iter()
+        .find_map(|part| part.strip_prefix("type="))
+        .unwrap_or("unknown")
+        .to_string();
+    let auth = parts
+        .iter()
+        .position(|part| part.starts_with("api_key="))
+        .map(|idx| {
+            let first = parts[idx].trim_start_matches("api_key=");
+            if first == "✓" && parts.get(idx + 1) == Some(&"set") {
+                "set".to_string()
+            } else {
+                first.to_string()
+            }
+        })
+        .unwrap_or_else(|| "-".to_string());
+    Some(ProviderSummary {
+        name,
+        kind,
+        auth,
+        endpoint: "-".to_string(),
+    })
+}
+
+fn parse_role_summaries(text: &str) -> Vec<RoleSummary> {
+    text.lines()
+        .filter_map(parse_role_summary_line)
+        .collect::<Vec<_>>()
+}
+
+fn parse_role_summary_line(line: &str) -> Option<RoleSummary> {
+    let trimmed = line.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("Registered roles")
+        || trimmed.starts_with("Register:")
+        || trimmed.starts_with("Roles (")
+    {
+        return None;
+    }
+    let trimmed = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+    let normalized = trimmed.replace('→', " ");
+    let parts = normalized.split_whitespace().collect::<Vec<_>>();
+    let name = parts.first()?.to_string();
+    let model = parts
+        .iter()
+        .find_map(|part| part.strip_prefix("model="))?
+        .to_string();
+    let display_model = parts
+        .iter()
+        .find_map(|part| {
+            part.strip_prefix('(')
+                .and_then(|value| value.strip_suffix(')'))
+        })
+        .map(ToString::to_string);
+    let runtime = parts
+        .iter()
+        .find_map(|part| part.strip_prefix("runtime="))
+        .unwrap_or("runtime")
+        .to_string();
+    let teams = parts
+        .iter()
+        .any(|part| *part == "[agent_teams]" || part.strip_prefix("teams=") == Some("true"));
+
+    Some(RoleSummary {
+        name,
+        model,
+        display_model,
+        runtime,
+        teams,
+    })
 }
 
 fn spawn_error_lines(
@@ -1151,10 +1437,10 @@ impl BridgeState {
             if is_redundant_role_output(&event.role, content) {
                 return;
             }
-            if event.role == "worker" {
-                if let Some(result) = event.content.as_deref().and_then(final_output_candidate) {
-                    remember_better_text(&mut self.final_output, result);
-                }
+            if event.role == "worker"
+                && let Some(result) = event.content.as_deref().and_then(final_output_candidate)
+            {
+                remember_better_text(&mut self.final_output, result);
             }
             let key = normalized_output_key(content);
             let scope = output_scope(&event);
@@ -1387,11 +1673,12 @@ fn emit_event_lines(
         return;
     }
 
+    let title = event_title(event);
     let mut lines = vec![status_line(
-        status_symbol(&event),
-        status_color(&event),
+        status_symbol(event),
+        status_color(event),
         &event.role,
-        &event_title(&event),
+        &title,
     )];
     lines.extend(event_detail_lines(event));
 
@@ -1867,6 +2154,26 @@ fn body_line(line: &str, dim: bool) -> Line<'static> {
     ])
 }
 
+fn next_line(command: &str, detail: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            "  next",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            command.to_string(),
+            Style::default()
+                .fg(TIFFANY_SOFT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(detail.to_string(), Style::default().fg(Color::DarkGray)),
+    ])
+}
+
 fn output_body_line(line: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled("  │ ", Style::default().fg(TIFFANY_DARK)),
@@ -1958,6 +2265,90 @@ mod tests {
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
         assert!(text.contains("repair  tiffany orchestrator  start an orchestration run"));
+    }
+
+    #[test]
+    fn provider_summary_lines_render_status_rows_and_next_steps() {
+        let lines = provider_summary_lines(
+            "Providers (/Users/me/.orchestrator/config.yaml)\n\
+               provider     type       api_key                  endpoint\n\
+               anthropic    anthropic  sk-c...aslE              https://api.minimaxi.com/anthropic\n\
+               google       google     -                        -\n\
+               ollama       ollama     -                        http://localhost:11434\n",
+        )
+        .expect("provider summary lines");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("✓ provider  3 configured"));
+        assert!(text.contains("anthropic"));
+        assert!(text.contains("auth set"));
+        assert!(text.contains("○ google"));
+        assert!(text.contains("no key"));
+        assert!(text.contains("● ollama"));
+        assert!(text.contains("local"));
+        assert!(text.contains("next  /role  bind roles to provider models"));
+        assert!(!text.contains("provider     type"));
+    }
+
+    #[test]
+    fn provider_summary_lines_parse_config_show_provider_section() {
+        let lines = provider_summary_lines(
+            "=== Orchestrator config ===\n\
+             Providers (2):\n\
+               - anthropic  type=anthropic  api_key=✓ set\n\
+               - google     type=google     api_key=—\n\
+             Models (1):\n\
+               - sonnet claude-sonnet (provider: anthropic)\n",
+        )
+        .expect("provider summary lines");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("✓ provider  2 configured"));
+        assert!(text.contains("anthropic"));
+        assert!(text.contains("auth set"));
+        assert!(text.contains("○ google"));
+        assert!(text.contains("no key"));
+        assert!(!text.contains("Models (1)"));
+    }
+
+    #[test]
+    fn role_summary_lines_render_registered_roles() {
+        let lines = role_summary_lines(
+            "Registered roles:\n\
+               critic         model=minimax-m3-claude (MiniMax-M3) runtime=claude-code  teams=false\n\
+               worker-cc      model=minimax-m3-claude (MiniMax-M3) runtime=claude-code  teams=true\n\
+               worker-codex   model=minimax-m3-codex (MiniMax-M3) runtime=codex        teams=false\n\
+             \n\
+             Register: orchestrator roles register <role> --model <model-id> --runtime <runtime-id>\n",
+            "roles",
+        )
+        .expect("role summary lines");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("✓ roles  3 registered"));
+        assert!(text.contains("critic"));
+        assert!(text.contains("MiniMax-M3"));
+        assert!(text.contains("worker-cc"));
+        assert!(text.contains("teams on"));
+        assert!(text.contains("worker-codex"));
+        assert!(text.contains("codex"));
+        assert!(text.contains("next  /doctor  verify the orchestration chain"));
+        assert!(!text.contains("Registered roles:"));
+        assert!(!text.contains("Register: orchestrator"));
+    }
+
+    #[test]
+    fn role_summary_lines_render_single_role() {
+        let lines = role_summary_lines(
+            "worker-codex   model=minimax-m3-codex (MiniMax-M3) runtime=codex        teams=false\n",
+            "role",
+        )
+        .expect("role summary lines");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("✓ role  worker-codex configured"));
+        assert!(text.contains("worker-codex"));
+        assert!(text.contains("teams off"));
     }
 
     #[test]
