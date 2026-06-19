@@ -9,10 +9,9 @@ use super::process::{
 use super::queue_state::{
     can_start_queued_batch, drain_queued_prompts, queue_followup, run_is_active,
 };
+use super::run_progress_view::{run_status_view, RunStatusView};
 use super::state::{ChatMsg, InputState};
-use super::util::{
-    format_duration_ms, humanize_jsonish, is_low_value_execution_output, truncate_chars,
-};
+use super::util::{humanize_jsonish, is_low_value_execution_output, truncate_chars};
 use crate::agent_events;
 use crate::core::session_store::SessionStore;
 use crate::core::types::Task;
@@ -170,101 +169,19 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
     input.last_event_at = Some(Instant::now());
     let terminal_event = matches!(&event, RunProgress::Done { .. } | RunProgress::Failed(_));
     record_run_progress(input, &event);
+    if let Some(view) = run_status_view(&event) {
+        apply_run_status_view(input, view);
+    }
 
     match event {
-        RunProgress::Planning => {
-            input.current_stage = "Planning".into();
-            input.current_stage_detail = "decomposing task".into();
-            update_last_assistant(input, "▸ Planning — decomposing task…".into(), "thinking");
-        }
-        RunProgress::Planned { sub_task_count } => {
-            input.current_stage = format!("Planned ({} sub-tasks)", sub_task_count);
-            input.current_stage_detail = "moving to critique".into();
-            update_last_assistant(
-                input,
-                format!(
-                    "▸ Planned {} sub-task(s). Moving to critique…",
-                    sub_task_count
-                ),
-                "thinking",
-            );
-        }
-        RunProgress::Critiquing { round } => {
-            input.current_stage = format!("Critiquing (round {})", round);
-            input.current_stage_detail = "adversarial review".into();
-            update_last_assistant(
-                input,
-                format!("▸ Critiquing (round {}) — adversarial review…", round),
-                "thinking",
-            );
-        }
-        RunProgress::CritiqueResult { approved, issues } => {
-            let msg = if approved {
-                "✓ critic  plan approved".to_string()
-            } else {
-                format!("● critic  plan needs changes · {} issue(s)", issues)
-            };
-            input.current_stage = if approved {
-                "critic: plan approved".into()
-            } else {
-                format!("critic: needs changes · {} issue(s)", issues)
-            };
-            input.current_stage_detail.clear();
-            update_last_assistant(input, msg, "thinking");
-        }
-        RunProgress::Replanning { attempt } => {
-            input.current_stage = format!("Replanning (attempt {})", attempt);
-            input.current_stage_detail = "incorporating feedback".into();
-            update_last_assistant(
-                input,
-                format!(
-                    "▸ Replanning (attempt {}) — incorporating feedback…",
-                    attempt
-                ),
-                "thinking",
-            );
-        }
-        RunProgress::Executing { sub_task_count } => {
-            input.current_stage = format!("Executing {} sub-task(s)", sub_task_count);
-            input.current_stage_detail = "running workers".into();
-            update_last_assistant(
-                input,
-                format!(
-                    "▸ Executing {} sub-task(s) — running workers…",
-                    sub_task_count
-                ),
-                "thinking",
-            );
-        }
-        RunProgress::WorkerStarted {
-            task_id,
-            agent,
-            role,
-            runtime,
-            model,
-            provider,
-            ..
-        } => {
-            let id8 = &task_id.to_string()[..8];
-            input.current_stage = format!("worker: {} started · {}", role, id8);
-            input.current_stage_detail = format!(
-                "{} · {} · {}",
-                runtime,
-                provider_model_label(provider.as_deref(), &model),
-                agent
-            );
-            update_last_assistant(
-                input,
-                format!(
-                    "● worker  {} started · {} · {} · {}",
-                    role,
-                    runtime,
-                    provider_model_label(provider.as_deref(), &model),
-                    id8
-                ),
-                "thinking",
-            );
-        }
+        RunProgress::Planning
+        | RunProgress::Planned { .. }
+        | RunProgress::Critiquing { .. }
+        | RunProgress::CritiqueResult { .. }
+        | RunProgress::Replanning { .. }
+        | RunProgress::Executing { .. }
+        | RunProgress::WorkerStarted { .. }
+        | RunProgress::Reviewing { .. } => {}
         RunProgress::WorkerOutput { content, .. } => {
             remember_worker_output(input, &content);
             capture_worker_output_as_chat(input, &content);
@@ -277,51 +194,17 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
             duration_ms,
             ok,
         } => {
-            let id8 = &task_id.to_string()[..8];
             if !ok {
                 input.run_worker_failure_count += 1;
             }
-            input.current_stage = if ok {
-                format!(
-                    "worker: {} done · {} · {}",
-                    role,
-                    id8,
-                    format_duration_ms(duration_ms)
-                )
-            } else {
-                format!(
-                    "worker: {} failed · {} · {}",
-                    role,
-                    id8,
-                    format_duration_ms(duration_ms)
-                )
-            };
-            input.current_stage_detail = agent.clone();
-        }
-        RunProgress::Reviewing { task_id } => {
-            let id8 = &task_id.to_string()[..8];
-            input.current_stage = format!("review: checking worker output · {}", id8);
-            input.current_stage_detail = "checking output".into();
-            update_last_assistant(
-                input,
-                format!("● review  checking worker output · {}", id8),
-                "thinking",
-            );
+            let _ = (task_id, agent, role, duration_ms);
         }
         RunProgress::ReviewResult {
-            task_id,
-            approved,
-            issues,
+            approved, issues, ..
         } => {
-            let id8 = &task_id.to_string()[..8];
             if !approved {
                 input.run_review_issue_count += issues.max(1);
             }
-            input.current_stage = if approved {
-                format!("review: passed · {}", id8)
-            } else {
-                format!("review: needs fixes · {} · {} issue(s)", id8, issues)
-            };
         }
         RunProgress::Done { task_count } => {
             let review_issues = input.run_review_issue_count;
@@ -416,10 +299,11 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
     terminal_event
 }
 
-fn provider_model_label(provider: Option<&str>, model: &str) -> String {
-    match provider.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(provider) => format!("{provider}/{model}"),
-        None => model.to_string(),
+fn apply_run_status_view(input: &mut InputState, view: RunStatusView) {
+    input.current_stage = view.stage;
+    input.current_stage_detail = view.detail;
+    if let Some(update) = view.assistant_update {
+        update_last_assistant(input, update, "thinking");
     }
 }
 

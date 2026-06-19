@@ -19,6 +19,7 @@ pub(super) mod context;
 pub(super) mod persist;
 pub(super) mod process;
 pub(super) mod queue_state;
+pub(super) mod run_progress_view;
 pub(super) mod run_state;
 pub(super) mod state;
 pub mod terminal;

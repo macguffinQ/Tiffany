@@ -5,11 +5,9 @@
 // for orchestrator progress: execution events become stable history lines here,
 // while the terminal loop only inserts those lines into scrollback.
 
+use super::run_progress_view::{progress_history_view, ProgressTone};
 use super::state::InputState;
-use super::util::{
-    format_duration_ms, normalize_execution_output_summary, summarize_execution_output,
-    truncate_chars,
-};
+use super::util::{normalize_execution_output_summary, summarize_execution_output, truncate_chars};
 use crate::agent_events;
 use crate::pipeline::orchestrator::RunProgress;
 
@@ -43,54 +41,6 @@ pub(super) fn progress_line(
     input: &InputState,
 ) -> Option<(&'static str, &'static str, String)> {
     match event {
-        RunProgress::Planning => Some(("●", YELLOW, "planning".into())),
-        RunProgress::Planned { sub_task_count } => Some((
-            "✓",
-            GREEN,
-            format!("plan ready — {} sub-task(s)", sub_task_count),
-        )),
-        RunProgress::Critiquing { round } => {
-            Some(("●", YELLOW, format!("checking plan — round {}", round)))
-        }
-        RunProgress::CritiqueResult { approved, issues } => {
-            if *approved {
-                Some(("✓", GREEN, "plan approved".into()))
-            } else {
-                Some((
-                    "●",
-                    YELLOW,
-                    format!("plan needs changes — {} issue(s)", issues),
-                ))
-            }
-        }
-        RunProgress::Replanning { attempt } => {
-            Some(("●", YELLOW, format!("replanning — attempt {}", attempt)))
-        }
-        RunProgress::Executing { sub_task_count } => Some((
-            "●",
-            YELLOW,
-            format!("running {} sub-task(s)", sub_task_count),
-        )),
-        RunProgress::WorkerStarted {
-            task_id,
-            agent: _,
-            role,
-            runtime,
-            model,
-            provider,
-            ..
-        } => Some((
-            "●",
-            YELLOW,
-            format_worker_lifecycle_line(
-                role,
-                "started",
-                Some(runtime.as_str()),
-                Some(provider_model_label(provider.as_deref(), model)),
-                task_id,
-                None,
-            ),
-        )),
         RunProgress::WorkerOutput {
             task_id,
             agent,
@@ -98,75 +48,21 @@ pub(super) fn progress_line(
             content,
         } => visible_worker_output_line(task_id, role, agent, content, input),
         RunProgress::RoleOutput { role, content } => visible_role_output_line(role, content, input),
-        RunProgress::WorkerDone {
-            task_id,
-            agent: _,
-            role,
-            duration_ms,
-            ok,
-        } => {
-            if *ok {
-                Some((
-                    "✓",
-                    GREEN,
-                    format_worker_lifecycle_line(
-                        role,
-                        "done",
-                        None,
-                        None,
-                        task_id,
-                        Some(format_duration_ms(*duration_ms)),
-                    ),
-                ))
-            } else {
-                Some((
-                    "✗",
-                    RED,
-                    format_worker_lifecycle_line(
-                        role,
-                        "failed",
-                        None,
-                        None,
-                        task_id,
-                        Some(format_duration_ms(*duration_ms)),
-                    ),
-                ))
-            }
-        }
-        RunProgress::Reviewing { task_id } => Some((
-            "●",
-            YELLOW,
-            format_review_lifecycle_line("checking worker output", task_id, None),
-        )),
-        RunProgress::ReviewResult {
-            task_id,
-            approved,
-            issues,
-        } => {
-            if *approved {
-                Some((
-                    "✓",
-                    GREEN,
-                    format_review_lifecycle_line("passed", task_id, None),
-                ))
-            } else {
-                Some((
-                    "●",
-                    YELLOW,
-                    format_review_lifecycle_line(
-                        "needs fixes",
-                        task_id,
-                        Some(format!("{} issue(s)", issues)),
-                    ),
-                ))
-            }
-        }
         RunProgress::Done { task_count } => {
             let _ = task_count;
             let _ = review_issue_count;
             None
         }
-        RunProgress::Failed(msg) => Some(("✗", RED, format!("error — {}", msg))),
+        _ => progress_history_view(event)
+            .map(|view| (view.icon, progress_tone_color(view.tone), view.line)),
+    }
+}
+
+fn progress_tone_color(tone: ProgressTone) -> &'static str {
+    match tone {
+        ProgressTone::Success => GREEN,
+        ProgressTone::Running => YELLOW,
+        ProgressTone::Error => RED,
     }
 }
 
@@ -283,54 +179,6 @@ fn worker_output_title(role: &str, agent: &str) -> String {
         (false, _, _) => role.to_string(),
         (_, false, _) => agent.to_string(),
         _ => "worker".to_string(),
-    }
-}
-
-fn format_worker_lifecycle_line(
-    role: &str,
-    action: &str,
-    runtime: Option<&str>,
-    provider_model: Option<String>,
-    task_id: &uuid::Uuid,
-    duration: Option<String>,
-) -> String {
-    let mut parts = vec![format!("{role} {action}")];
-    if let Some(runtime) = runtime
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != role.trim())
-    {
-        parts.push(runtime.to_string());
-    }
-    if let Some(provider_model) = provider_model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        parts.push(provider_model.to_string());
-    }
-    parts.push(short_task_id(task_id));
-    if let Some(duration) = duration {
-        parts.push(duration);
-    }
-    format!("worker  {}", parts.join(" · "))
-}
-
-fn format_review_lifecycle_line(
-    action: &str,
-    task_id: &uuid::Uuid,
-    suffix: Option<String>,
-) -> String {
-    let mut parts = vec![action.to_string(), short_task_id(task_id)];
-    if let Some(suffix) = suffix {
-        parts.push(suffix);
-    }
-    format!("review  {}", parts.join(" · "))
-}
-
-fn provider_model_label(provider: Option<&str>, model: &str) -> String {
-    match provider.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(provider) => format!("{provider}/{model}"),
-        None => model.to_string(),
     }
 }
 
