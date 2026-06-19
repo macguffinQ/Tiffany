@@ -1393,9 +1393,9 @@ fn is_redundant_role_output(role: &str, content: &str) -> bool {
     }
     let lower = content.trim().to_ascii_lowercase();
     match role {
-        "planner" => lower.starts_with("plan ready"),
+        "planner" => lower.starts_with("plan ready") && !lower.contains('\n'),
         "critic" | "reviewer" => {
-            lower.starts_with("approved") || lower.starts_with("needs changes")
+            lower.starts_with("approved") && !lower.contains('\n') && !lower.contains("suggestion")
         }
         _ => false,
     }
@@ -2071,12 +2071,62 @@ mod tests {
             "planner",
             "plan ready - 1 sub-task(s)"
         ));
+        assert!(!is_redundant_role_output(
+            "planner",
+            "plan ready - 1 sub-task(s)\n  1. answer the user"
+        ));
         assert!(is_redundant_role_output("critic", "approved (0 issue(s))"));
-        assert!(is_redundant_role_output(
+        assert!(!is_redundant_role_output(
             "reviewer",
             "needs changes (2 issue(s))"
         ));
+        assert!(!is_redundant_role_output(
+            "reviewer",
+            "approved - 0 issue(s)\n  suggestions:\n  - tighten wording"
+        ));
         assert!(!is_redundant_role_output("worker", "plan ready - no"));
+    }
+
+    #[test]
+    fn keeps_structured_role_details_without_raw_json() {
+        let planner = TiffanyProgressEvent {
+            role: "planner".to_string(),
+            status: "output".to_string(),
+            message: "planner output".to_string(),
+            task_id: None,
+            agent: None,
+            content: Some(
+                r#"{"sub_tasks":[{"prompt":"answer in Chinese","agent_hint":"worker-cc"}]}"#
+                    .to_string(),
+            ),
+            approved: None,
+            issues: None,
+            count: None,
+        };
+        let planner_visible = visible_content(&planner).expect("planner details visible");
+        assert!(planner_visible.contains("plan ready"));
+        assert!(planner_visible.contains("answer in Chinese"));
+        assert!(planner_visible.contains("worker-cc"));
+        assert!(!is_redundant_role_output(&planner.role, &planner_visible));
+        assert!(!planner_visible.contains('{'));
+
+        let reviewer = TiffanyProgressEvent {
+            role: "reviewer".to_string(),
+            status: "output".to_string(),
+            message: "reviewer output".to_string(),
+            task_id: None,
+            agent: None,
+            content: Some(r#"{"approved":false,"issues":["missing final answer"],"suggestions":["return a concise result"]}"#.to_string()),
+            approved: None,
+            issues: None,
+            count: None,
+        };
+        let reviewer_visible = visible_content(&reviewer).expect("review issue visible");
+        assert!(reviewer_visible.contains("needs changes"));
+        assert!(reviewer_visible.contains("missing final answer"));
+        assert!(reviewer_visible.contains("return a concise result"));
+        assert!(!is_redundant_role_output(&reviewer.role, &reviewer_visible));
+        assert!(!reviewer_visible.contains('{'));
     }
 
     #[cfg(unix)]
