@@ -1635,6 +1635,7 @@ mod tests {
             &RunProgress::WorkerOutput {
                 task_id,
                 agent: "claude-code".into(),
+                role: "worker-cc".into(),
                 content: "claude system".into(),
             },
             0,
@@ -1669,6 +1670,7 @@ mod tests {
         let first = RunProgress::WorkerOutput {
             task_id,
             agent: "claude-code".into(),
+            role: "worker-cc".into(),
             content: "claude assistant: useful summary".into(),
         };
 
@@ -1681,6 +1683,7 @@ mod tests {
         let duplicate = RunProgress::WorkerOutput {
             task_id,
             agent: "claude-code".into(),
+            role: "worker-cc".into(),
             content: "claude result: useful summary".into(),
         };
         assert!(progress_line(&duplicate, 0, &input).is_none());
@@ -1718,6 +1721,7 @@ mod tests {
             &RunProgress::WorkerOutput {
                 task_id,
                 agent: "claude-code".into(),
+                role: "worker-cc".into(),
                 content:
                     r#"claude-code result: {"result":"Implemented it in several paragraphs."}"#
                         .into(),

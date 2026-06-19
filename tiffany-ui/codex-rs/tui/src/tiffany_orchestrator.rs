@@ -83,6 +83,11 @@ struct TiffanyProgressEvent {
     message: String,
     task_id: Option<String>,
     agent: Option<String>,
+    worker_role: Option<String>,
+    runtime: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+    task_prompt: Option<String>,
     content: Option<String>,
     approved: Option<bool>,
     issues: Option<usize>,
@@ -1190,12 +1195,13 @@ fn emit_event_lines(
         return;
     }
 
-    let lines = vec![status_line(
+    let mut lines = vec![status_line(
         status_symbol(&event),
         status_color(&event),
         &event.role,
         &event_title(&event),
     )];
+    lines.extend(event_detail_lines(event));
 
     emit_lines(app_event_tx, lines);
 }
@@ -1241,6 +1247,55 @@ fn status_color(event: &TiffanyProgressEvent) -> Color {
 }
 
 fn event_title(event: &TiffanyProgressEvent) -> String {
+    if event.role == "worker" && event.status == "running" && event.task_id.is_some() {
+        let role = event
+            .worker_role
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| event.agent.as_deref().unwrap_or("worker"));
+        let runtime = event
+            .runtime
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .or(event.agent.as_deref())
+            .unwrap_or("runtime");
+        let route = match provider_model_label(event) {
+            Some(model) => format!("{role} · {runtime} · {model}"),
+            None => format!("{role} · {runtime}"),
+        };
+        if let Some(id) = short_task_id(event.task_id.as_deref()) {
+            return format!("{route} · {id}");
+        }
+        return route;
+    }
+    if event.role == "worker"
+        && matches!(event.status.as_str(), "done" | "failed")
+        && event.task_id.is_some()
+    {
+        let role = event
+            .worker_role
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| event.agent.as_deref().unwrap_or("worker"));
+        let status = if event.status == "done" {
+            "done"
+        } else {
+            "failed"
+        };
+        let runtime = event
+            .agent
+            .as_deref()
+            .filter(|value| !value.trim().is_empty());
+        let mut title = match runtime {
+            Some(runtime) if runtime != role => format!("{role} {status} · {runtime}"),
+            _ => format!("{role} {status}"),
+        };
+        if let Some(id) = short_task_id(event.task_id.as_deref()) {
+            title = format!("{title} · {id}");
+        }
+        return title;
+    }
+
     let mut title = event.message.clone();
     if let Some(agent) = event.agent.as_deref()
         && !title.contains(agent)
@@ -1274,15 +1329,58 @@ fn event_title(event: &TiffanyProgressEvent) -> String {
 }
 
 fn output_label(event: &TiffanyProgressEvent) -> String {
-    match (
-        event.agent.as_deref(),
-        short_task_id(event.task_id.as_deref()),
-    ) {
-        (Some(agent), Some(id)) => format!("{agent} · {id}"),
-        (Some(agent), None) => agent.to_string(),
+    let source = event
+        .worker_role
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or(event.agent.as_deref());
+    match (source, short_task_id(event.task_id.as_deref())) {
+        (Some(source), Some(id)) => format!("{source} · {id}"),
+        (Some(source), None) => source.to_string(),
         (None, Some(id)) => format!("{} · {id}", event.role),
         (None, None) => event.role.clone(),
     }
+}
+
+fn event_detail_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>> {
+    if event.role != "worker" || event.status != "running" || event.task_id.is_none() {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    if let Some(model) = provider_model_label(event) {
+        lines.push(body_line(&format!("model: {model}"), true));
+    }
+    if let Some(prompt) = event
+        .task_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(body_line(
+            &format!("task: {}", truncate_text(prompt, 180)),
+            false,
+        ));
+    }
+    lines
+}
+
+fn provider_model_label(event: &TiffanyProgressEvent) -> Option<String> {
+    let model = event
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(
+        match event
+            .provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(provider) => format!("{provider}/{model}"),
+            None => model.to_string(),
+        },
+    )
 }
 
 fn visible_content(event: &TiffanyProgressEvent) -> Option<String> {
@@ -1936,6 +2034,11 @@ mod tests {
             message: "claude output".to_string(),
             task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
             agent: Some("claude-code".to_string()),
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
             content: Some("done".to_string()),
             approved: None,
             issues: None,
@@ -1950,6 +2053,39 @@ mod tests {
     }
 
     #[test]
+    fn worker_started_lines_show_route_model_and_task() {
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "running".to_string(),
+            message: "worker-cc started".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: Some("claude-code".to_string()),
+            model: Some("MiniMax-M3".to_string()),
+            provider: Some("minimax".to_string()),
+            task_prompt: Some("回答用户的问题，并给出清晰结论".to_string()),
+            content: None,
+            approved: None,
+            issues: None,
+            count: None,
+        };
+
+        let mut lines = vec![status_line(
+            status_symbol(&event),
+            status_color(&event),
+            &event.role,
+            &event_title(&event),
+        )];
+        lines.extend(event_detail_lines(&event));
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"));
+        assert!(text.contains("model: minimax/MiniMax-M3"));
+        assert!(text.contains("task: 回答用户的问题"));
+    }
+
+    #[test]
     fn summarizes_structured_reviewer_json() {
         let event = TiffanyProgressEvent {
             role: "reviewer".to_string(),
@@ -1957,6 +2093,11 @@ mod tests {
             message: "reviewer output".to_string(),
             task_id: None,
             agent: None,
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
             content: Some("{\"approved\":true}".to_string()),
             approved: None,
             issues: None,
@@ -1976,6 +2117,11 @@ mod tests {
             message: "critic output".to_string(),
             task_id: None,
             agent: None,
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
             content: Some(
                 r#"{"approved":false,"issues":["worker prompt conflicts with direct answer"],"suggestions":["answer in Chinese"]}"#
                     .to_string(),
@@ -2000,6 +2146,11 @@ mod tests {
             message: "codex output".to_string(),
             task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
             agent: Some("worker-codex".to_string()),
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
             content: Some("worker-codex stderr: [1211] 模型不存在".to_string()),
             approved: None,
             issues: None,
@@ -2020,6 +2171,11 @@ mod tests {
             message: "claude output".to_string(),
             task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
             agent: Some("claude-code".to_string()),
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
             content: Some("结果\n- done".to_string()),
             approved: None,
             issues: None,
@@ -2040,6 +2196,11 @@ mod tests {
             message: "claude output".to_string(),
             task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
             agent: Some("claude-code".to_string()),
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
             content: Some("claude-code assistant: done".to_string()),
             approved: None,
             issues: None,
@@ -2058,6 +2219,11 @@ mod tests {
             message: "claude output".to_string(),
             task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
             agent: Some("claude-code".to_string()),
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
             content: Some("Final result\n你好！\n我可以帮你写代码。".to_string()),
             approved: None,
             issues: None,
@@ -2094,6 +2260,11 @@ mod tests {
             message: "claude output".to_string(),
             task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
             agent: Some("claude-code".to_string()),
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
             content: Some("claude-code assistant: useful summary".to_string()),
             approved: None,
             issues: None,
@@ -2146,6 +2317,11 @@ mod tests {
             message: "planner output".to_string(),
             task_id: None,
             agent: None,
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
             content: Some(
                 r#"{"sub_tasks":[{"prompt":"answer in Chinese","agent_hint":"worker-cc"}]}"#
                     .to_string(),
@@ -2167,6 +2343,11 @@ mod tests {
             message: "reviewer output".to_string(),
             task_id: None,
             agent: None,
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
             content: Some(r#"{"approved":false,"issues":["missing final answer"],"suggestions":["return a concise result"]}"#.to_string()),
             approved: None,
             issues: None,

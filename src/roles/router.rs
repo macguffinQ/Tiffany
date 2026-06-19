@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedAssignment {
+    pub role: String,
     pub model: String,
     pub provider: Option<String>,
     pub runtime: String,
@@ -116,9 +117,10 @@ impl CapabilityRouter {
         }
     }
 
-    fn assignment_for(&self, rc: &RoleConfig) -> ResolvedAssignment {
+    fn assignment_for(&self, role: &str, rc: &RoleConfig) -> ResolvedAssignment {
         if let Some(model) = self.models.get(rc.model.as_str()) {
             return ResolvedAssignment {
+                role: role.to_string(),
                 model: model.name.clone(),
                 provider: Some(model.provider.clone()),
                 runtime: rc.runtime.clone(),
@@ -126,6 +128,7 @@ impl CapabilityRouter {
             };
         }
         ResolvedAssignment {
+            role: role.to_string(),
             model: rc.model.clone(),
             provider: None,
             runtime: rc.runtime.clone(),
@@ -139,7 +142,7 @@ impl CapabilityRouter {
         // 1. task.agent_hint (set by CLI flags via main.rs → task.agent_hint)
         if let Some(hint) = &task.agent_hint {
             if let Some(rc) = self.roles.get(hint) {
-                return Ok(self.assignment_for(rc));
+                return Ok(self.assignment_for(hint, rc));
             }
         }
 
@@ -147,7 +150,7 @@ impl CapabilityRouter {
         for tag in &task.tags {
             if let Some(role_name) = self.tag_overrides.get(tag) {
                 if let Some(rc) = self.roles.get(role_name) {
-                    return Ok(self.assignment_for(rc));
+                    return Ok(self.assignment_for(role_name, rc));
                 }
             }
         }
@@ -157,6 +160,6 @@ impl CapabilityRouter {
             return Err(anyhow!("no default worker role in config"));
         };
         let rc = self.roles.get(&default_key).unwrap();
-        Ok(self.assignment_for(rc))
+        Ok(self.assignment_for(&default_key, rc))
     }
 }

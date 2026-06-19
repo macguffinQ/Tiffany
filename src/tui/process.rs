@@ -74,10 +74,12 @@ fn recorded_output_key_for_event(event: &RunProgress) -> Option<String> {
         RunProgress::WorkerOutput {
             task_id,
             agent,
+            role,
             content,
         } => Some(format!(
-            "worker:{}:{}:{}",
+            "worker:{}:{}:{}:{}",
             &task_id.to_string()[..8],
+            role,
             agent,
             normalized_recorded_output(content, 200)?
         )),
@@ -549,14 +551,26 @@ fn format_run_event_for_recording(event: &RunProgress) -> Option<String> {
         RunProgress::Executing { sub_task_count } => {
             Some(format!("Executing: {} sub-task(s)", sub_task_count))
         }
-        RunProgress::WorkerStarted { task_id, agent } => Some(format!(
-            "Worker started: {} ({})",
+        RunProgress::WorkerStarted {
+            task_id,
+            agent,
+            role,
+            runtime,
+            model,
+            provider,
+            ..
+        } => Some(format!(
+            "Worker started: {} via {} ({}, {}, {})",
+            role,
+            runtime,
+            provider_model_label(provider.as_deref(), model),
             agent,
             &task_id.to_string()[..8]
         )),
         RunProgress::WorkerOutput {
             task_id,
             agent,
+            role: _,
             content,
         } => {
             if agent_events::final_output_candidate(content, PROCESS_FINAL_OUTPUT_MAX_CHARS)
@@ -579,9 +593,15 @@ fn format_run_event_for_recording(event: &RunProgress) -> Option<String> {
             let display = summarize_execution_output(content, 180)?;
             Some(format!("{} output: {}", role, display))
         }
-        RunProgress::WorkerDone { task_id, agent, ok } => Some(format!(
-            "Worker {}: {} ({})",
+        RunProgress::WorkerDone {
+            task_id,
+            agent,
+            role,
+            ok,
+        } => Some(format!(
+            "Worker {}: {} ({}, {})",
             if *ok { "done" } else { "failed" },
+            role,
             agent,
             &task_id.to_string()[..8]
         )),
@@ -607,6 +627,13 @@ fn format_run_event_for_recording(event: &RunProgress) -> Option<String> {
             Some(format!("Done: {} sub-task(s) completed", task_count))
         }
         RunProgress::Failed(msg) => Some(format!("Failed: {}", humanize_jsonish(msg, 180))),
+    }
+}
+
+fn provider_model_label(provider: Option<&str>, model: &str) -> String {
+    match provider.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(provider) => format!("{provider}/{model}"),
+        None => model.to_string(),
     }
 }
 
@@ -928,6 +955,7 @@ mod tests {
         let line = format_run_event(&RunProgress::WorkerOutput {
             task_id,
             agent: "claude-code".into(),
+            role: "worker-cc".into(),
             content: r#"claude assistant: {"type":"assistant","message":{"content":[{"type":"text","text":"Working on it"}]}}"#.into(),
         });
 
@@ -977,6 +1005,7 @@ mod tests {
             &RunProgress::WorkerOutput {
                 task_id,
                 agent: "claude-code".into(),
+                role: "worker-cc".into(),
                 content: "claude assistant: useful summary".into(),
             },
         );
@@ -985,6 +1014,7 @@ mod tests {
             &RunProgress::WorkerOutput {
                 task_id,
                 agent: "claude-code".into(),
+                role: "worker-cc".into(),
                 content: "claude result: useful summary".into(),
             },
         );

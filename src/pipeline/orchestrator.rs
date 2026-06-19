@@ -42,10 +42,16 @@ pub enum RunProgress {
     WorkerStarted {
         task_id: Uuid,
         agent: String,
+        role: String,
+        runtime: String,
+        model: String,
+        provider: Option<String>,
+        prompt: String,
     },
     WorkerOutput {
         task_id: Uuid,
         agent: String,
+        role: String,
         content: String,
     },
     RoleOutput {
@@ -55,6 +61,7 @@ pub enum RunProgress {
     WorkerDone {
         task_id: Uuid,
         agent: String,
+        role: String,
         ok: bool,
     },
     Reviewing {
@@ -324,7 +331,7 @@ impl Orchestrator {
         let by_id: HashMap<Uuid, Task> = tasks.iter().map(|t| (t.id, t.clone())).collect();
         let mut completed_ids: HashSet<Uuid> = HashSet::new();
         let mut results: Vec<Task> = Vec::new();
-        let mut joinset: JoinSet<(Uuid, String, Result<Session>)> = JoinSet::new();
+        let mut joinset: JoinSet<(Uuid, String, String, Result<Session>)> = JoinSet::new();
 
         loop {
             // Find ready tasks: status==Pending (only — NOT Running) and all
@@ -361,13 +368,20 @@ impl Orchestrator {
                     .clone();
                 let task_id = t.id;
                 let agent = adapter.name().to_string();
+                let worker_role = assignment.role.clone();
                 let _ = tx.send(RunProgress::WorkerStarted {
                     task_id,
                     agent: agent.clone(),
+                    role: worker_role.clone(),
+                    runtime: assignment.runtime.clone(),
+                    model: assignment.model.clone(),
+                    provider: assignment.provider.clone(),
+                    prompt: t.prompt.clone(),
                 });
                 let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
                 let progress_tx = tx.clone();
                 let output_agent = agent.clone();
+                let output_role = worker_role.clone();
                 let forwarder = tokio::spawn(async move {
                     let mut last_output_key: Option<String> = None;
                     while let Some(event) = event_rx.recv().await {
@@ -387,6 +401,7 @@ impl Orchestrator {
                         let _ = progress_tx.send(RunProgress::WorkerOutput {
                             task_id,
                             agent: output_agent.clone(),
+                            role: output_role.clone(),
                             content,
                         });
                     }
@@ -394,7 +409,7 @@ impl Orchestrator {
                 joinset.spawn(async move {
                     let res = adapter.start(&t, Some(event_tx)).await;
                     let _ = forwarder.await;
-                    (task_id, agent, res.map(|h| h.session))
+                    (task_id, agent, worker_role, res.map(|h| h.session))
                 });
             }
 
@@ -413,7 +428,7 @@ impl Orchestrator {
             }
 
             if let Some(joined) = joinset.join_next().await {
-                let (task_id, agent, res) = joined?;
+                let (task_id, agent, role, res) = joined?;
                 match res {
                     Ok(mut session) => {
                         let done_agent = if session.agent.trim().is_empty() {
@@ -439,6 +454,7 @@ impl Orchestrator {
                         let _ = tx.send(RunProgress::WorkerDone {
                             task_id,
                             agent: done_agent,
+                            role,
                             ok: true,
                         });
                     }
@@ -453,11 +469,13 @@ impl Orchestrator {
                         let _ = tx.send(RunProgress::WorkerOutput {
                             task_id,
                             agent: agent.clone(),
+                            role: role.clone(),
                             content: format!("{} error: {}", agent, error_message),
                         });
                         let _ = tx.send(RunProgress::WorkerDone {
                             task_id,
                             agent,
+                            role,
                             ok: false,
                         });
                     }
@@ -850,13 +868,31 @@ mod tests {
             .await
             .unwrap();
 
+        let mut saw_worker_started = false;
         let mut saw_worker_output = false;
         while let Ok(event) = rx.try_recv() {
-            if let RunProgress::WorkerOutput { content, .. } = event {
-                saw_worker_output = content.contains("test-worker assistant")
-                    && content.contains("worker is making progress");
+            match event {
+                RunProgress::WorkerStarted {
+                    role,
+                    runtime,
+                    model,
+                    prompt,
+                    ..
+                } => {
+                    saw_worker_started = role == "worker-cc"
+                        && runtime == "test-runtime"
+                        && model == "test-model"
+                        && prompt == "stream me";
+                }
+                RunProgress::WorkerOutput { role, content, .. } => {
+                    saw_worker_output = role == "worker-cc"
+                        && content.contains("test-worker assistant")
+                        && content.contains("worker is making progress");
+                }
+                _ => {}
             }
         }
+        assert!(saw_worker_started, "expected WorkerStarted metadata event");
         assert!(saw_worker_output, "expected forwarded WorkerOutput event");
     }
 }

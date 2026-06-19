@@ -267,12 +267,32 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
                 "thinking",
             );
         }
-        RunProgress::WorkerStarted { task_id, agent } => {
+        RunProgress::WorkerStarted {
+            task_id,
+            agent,
+            role,
+            runtime,
+            model,
+            provider,
+            ..
+        } => {
             let id8 = &task_id.to_string()[..8];
-            input.current_stage = format!("Worker: {} ({})", agent, id8);
+            input.current_stage = format!("Worker: {} ({})", role, id8);
+            input.current_stage_detail = format!(
+                "{} · {} · {}",
+                runtime,
+                provider_model_label(provider.as_deref(), &model),
+                agent
+            );
             update_last_assistant(
                 input,
-                format!("▸ Worker started: {} ({})", agent, id8),
+                format!(
+                    "▸ Worker started: {} via {} ({}, {})",
+                    role,
+                    runtime,
+                    provider_model_label(provider.as_deref(), &model),
+                    id8
+                ),
                 "thinking",
             );
         }
@@ -281,16 +301,22 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
             capture_worker_output_as_chat(input, &content);
         }
         RunProgress::RoleOutput { .. } => {}
-        RunProgress::WorkerDone { task_id, agent, ok } => {
+        RunProgress::WorkerDone {
+            task_id,
+            agent,
+            role,
+            ok,
+        } => {
             let id8 = &task_id.to_string()[..8];
             if !ok {
                 input.run_worker_failure_count += 1;
             }
             input.current_stage = if ok {
-                format!("Worker done ✓: {} ({})", agent, id8)
+                format!("Worker done ✓: {} ({})", role, id8)
             } else {
-                format!("Worker failed: {} ({})", agent, id8)
+                format!("Worker failed: {} ({})", role, id8)
             };
+            input.current_stage_detail = agent.clone();
         }
         RunProgress::Reviewing { task_id } => {
             let id8 = &task_id.to_string()[..8];
@@ -408,6 +434,13 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
     }
     refresh_live_trace(input, terminal_event);
     terminal_event
+}
+
+fn provider_model_label(provider: Option<&str>, model: &str) -> String {
+    match provider.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(provider) => format!("{provider}/{model}"),
+        None => model.to_string(),
+    }
 }
 
 fn update_last_assistant(input: &mut InputState, content: String, status: &str) {
@@ -724,6 +757,7 @@ mod tests {
             RunProgress::WorkerOutput {
                 task_id: uuid::Uuid::nil(),
                 agent: "claude-code".into(),
+                role: "worker-cc".into(),
                 content: r#"claude-code result: {"result":"final answer body"}"#.into(),
             },
             &mut input,
@@ -810,6 +844,7 @@ mod tests {
             RunProgress::WorkerDone {
                 task_id,
                 agent: "test-worker".into(),
+                role: "worker-cc".into(),
                 ok: false,
             },
             &mut input,

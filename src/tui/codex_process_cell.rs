@@ -68,29 +68,49 @@ pub(super) fn progress_line(
             YELLOW,
             format!("running {} sub-task(s)", sub_task_count),
         )),
-        RunProgress::WorkerStarted { task_id, agent } => Some((
+        RunProgress::WorkerStarted {
+            task_id,
+            agent: _,
+            role,
+            runtime,
+            model,
+            provider,
+            ..
+        } => Some((
             "●",
             YELLOW,
-            format!("{} · {} started", agent, short_task_id(task_id)),
+            format!(
+                "{} · {} · {} · {} started",
+                role,
+                runtime,
+                provider_model_label(provider.as_deref(), model),
+                short_task_id(task_id)
+            ),
         )),
         RunProgress::WorkerOutput {
             task_id,
             agent,
+            role,
             content,
-        } => visible_worker_output_line(task_id, agent, content, input),
+        } => visible_worker_output_line(task_id, role, agent, content, input),
         RunProgress::RoleOutput { role, content } => visible_role_output_line(role, content, input),
-        RunProgress::WorkerDone { task_id, agent, ok } => {
+        RunProgress::WorkerDone {
+            task_id,
+            agent: _,
+            role,
+            ok,
+        } => {
             if *ok {
                 Some((
                     "✓",
                     GREEN,
-                    format!("{} · {} done", agent, short_task_id(task_id)),
+                    format!("{} · {} done", role, short_task_id(task_id)),
                 ))
             } else {
                 Some((
                     "✗",
                     RED,
-                    format!("{} · {} failed", agent, short_task_id(task_id)),
+                    format!("{} · {} failed", role, short_task_id(task_id)),
                 ))
             }
         }
@@ -188,9 +208,10 @@ fn visible_progress_key_for_event(event: &RunProgress, line: &str) -> String {
         RunProgress::WorkerOutput {
             task_id,
             agent,
+            role,
             content,
         } => visible_output_key(
-            &format!("worker:{}:{}", short_task_id(task_id), agent),
+            &format!("worker:{}:{}:{}", short_task_id(task_id), role, agent),
             &visible_worker_output_dedupe_display(content)
                 .unwrap_or_else(|| truncate_chars(line.trim(), 240)),
         ),
@@ -205,6 +226,7 @@ fn visible_progress_key_for_event(event: &RunProgress, line: &str) -> String {
 
 fn visible_worker_output_line(
     task_id: &uuid::Uuid,
+    role: &str,
     agent: &str,
     content: &str,
     input: &InputState,
@@ -215,7 +237,7 @@ fn visible_worker_output_line(
         PROGRESS_OUTPUT_EXPANDED_LIMIT
     };
     let display = visible_worker_output_display(content, max)?;
-    let role = format!("worker:{}:{}", short_task_id(task_id), agent);
+    let role = format!("worker:{}:{}:{}", short_task_id(task_id), role, agent);
     let dedupe_display =
         visible_worker_output_dedupe_display(content).unwrap_or_else(|| display.clone());
     if output_was_already_visible(input, &role, &dedupe_display) {
@@ -231,6 +253,13 @@ fn visible_worker_output_line(
             input.history_folded,
         ),
     ))
+}
+
+fn provider_model_label(provider: Option<&str>, model: &str) -> String {
+    match provider.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(provider) => format!("{provider}/{model}"),
+        None => model.to_string(),
+    }
 }
 
 fn visible_role_output_line(
@@ -459,6 +488,7 @@ mod tests {
             &RunProgress::WorkerOutput {
                 task_id,
                 agent: "claude-code".into(),
+                role: "worker-cc".into(),
                 content: "claude system".into(),
             },
             0,
@@ -493,6 +523,7 @@ mod tests {
         let first = RunProgress::WorkerOutput {
             task_id,
             agent: "claude-code".into(),
+            role: "worker-cc".into(),
             content: "claude assistant: useful summary".into(),
         };
 
@@ -505,6 +536,7 @@ mod tests {
         let duplicate = RunProgress::WorkerOutput {
             task_id,
             agent: "claude-code".into(),
+            role: "worker-cc".into(),
             content: "claude result: useful summary".into(),
         };
         assert!(progress_line(&duplicate, 0, &input).is_none());
@@ -573,6 +605,7 @@ mod tests {
             &RunProgress::WorkerOutput {
                 task_id,
                 agent: "claude-code".into(),
+                role: "worker-cc".into(),
                 content:
                     r#"claude-code result: {"result":"Implemented it in several paragraphs."}"#
                         .into(),
@@ -594,6 +627,7 @@ mod tests {
             &RunProgress::WorkerOutput {
                 task_id,
                 agent: "codex".into(),
+                role: "worker-codex".into(),
                 content: "codex stderr: API Error: 400 [1211][模型不存在，请检查模型代码。]".into(),
             },
             0,
