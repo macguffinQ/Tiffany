@@ -99,8 +99,9 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml`：指定 orchestrator 配置文件，同时继续让 tiffany-loop UI 配置隔离在 `TIFFANY_HOME`。
 - `./scripts/tiffany-dev orchestrator --legacy ...`：兼容旧 orchestrator CLI 桥接。
 - `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；需要更快的可分发构建时用 `--fast-release`，最终二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。需要构建后只保留最终 dist 二进制时，加 `--prune-dist-cache`。
-- `./scripts/tiffany-check --smoke`：debug 构建、检查 fork 格式，并验证 legacy bridge 和事件流入口。
+- `./scripts/tiffany-check --smoke`：debug 构建、检查 fork 格式，验证 legacy bridge、事件流入口，并运行示例 smoke 测试。
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
+- `./scripts/tiffany-check-examples`：只运行仓库内示例项目测试。
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist-cache|--dist|--debug`：查看构建缓存大小、定位大文件，保留最终 dist 二进制但删除 dist 中间缓存，或清理 incremental/release/debug 构建产物，避免 `target/` 膨胀。
 
 直接进入 `tiffany-ui/codex-rs` 执行 Cargo 命令时，也会通过 fork 的 Cargo 配置重定向到根目录 `./target`。旧 checkout 如果已经有 `tiffany-ui/codex-rs/target`，那是重复缓存，可以用 `./scripts/tiffany-clean-targets` 删除。
@@ -292,8 +293,9 @@ behavior:
 | `./scripts/tiffany-dev setup` | 从源码运行首次配置向导 |
 | `./scripts/tiffany-dev orchestrator` | 从 tiffany-loop fork 桥接到现有 orchestrator runtime |
 | `./scripts/tiffany-build [args]` | 在共享 `./target` 中同时构建两个二进制；可透传 `--release --locked`，也可用默认 strip 的 `--fast-release --locked`；加 `--prune-dist-cache` 可只保留最终 dist 二进制 |
-| `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge 验证 |
-| `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge 验证 |
+| `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge/example 验证 |
+| `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge/example 验证 |
+| `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist-cache|--dist|--debug` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
 | `tiffany orchestrator` | 安装后打开主 tiffany-loop UI |
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |

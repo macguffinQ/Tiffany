@@ -15,6 +15,7 @@ Use this before making the repository public.
 ```bash
 cargo fmt -- --check
 cargo test --all
+./scripts/tiffany-check-examples
 cargo build --locked
 ./scripts/open-source-audit
 (cd tiffany-ui/codex-rs && cargo fmt -p codex-tui -p tiffany-cli -- --check)
@@ -52,6 +53,7 @@ find . -path './target' -prune -o -path './tiffany-ui/codex-rs/target' -prune -o
 ```bash
 cargo fmt -- --check
 cargo test --all
+./scripts/tiffany-check-examples
 ./scripts/open-source-audit
 ./scripts/tiffany-check --dist
 ./scripts/tiffany-build --release --locked

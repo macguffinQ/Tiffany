@@ -7,10 +7,10 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/tiffany-check [--smoke|--dist]
 
-Checks the local tiffany-loop fork and orchestrator bridge.
+Checks the local tiffany-loop fork, orchestrator bridge, and checked-in examples.
 
 Modes:
-  --smoke  Debug build plus bridge/event smoke checks. Intended for PR/main CI.
+  --smoke  Debug build plus bridge/event/example smoke checks. Intended for PR/main CI.
   --dist   tiffany-dist profile build plus the same checks. Intended before release.
 
 Default: --dist
@@ -87,5 +87,7 @@ echo "checking orchestrator bridge..."
 
 echo "checking orchestrator event stream..."
 "$binary_dir/orchestrator" events --help >/dev/null 2>&1
+
+"$repo_dir/scripts/tiffany-check-examples"
 
 echo "check passed"

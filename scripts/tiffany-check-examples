@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required to check examples" >&2
+  exit 1
+fi
+
+echo "checking examples/python-fibonacci..."
+(cd "$repo_dir/examples/python-fibonacci" && python3 -m unittest discover -s tests)
+
+echo "examples check passed"

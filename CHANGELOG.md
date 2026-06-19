@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - Added a zero-dependency Python Fibonacci example for validating setup,
   orchestration, worker edits, and test execution from a fresh checkout.
+- Added an example smoke-check script and CI coverage for checked-in examples.
 
 ## [0.1.11] - 2026-06-19
 

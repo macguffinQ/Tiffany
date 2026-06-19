@@ -40,6 +40,7 @@ jobs:
         run: |
           cargo test --all
           cargo test --manifest-path crates/tiffany-event-format/Cargo.toml
+          ./scripts/tiffany-check-examples
 
       - name: Build
         run: cargo build --all

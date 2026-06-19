@@ -92,8 +92,9 @@ Development entrypoints:
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml` - use a specific orchestrator config while keeping tiffany-loop UI config isolated under `TIFFANY_HOME`.
 - `./scripts/tiffany-dev orchestrator --legacy ...` - compatibility bridge to the old orchestrator CLI.
 - `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI in the shared `./target` directory. Use `--fast-release` for a faster distributable build; final binaries are stripped unless `TIFFANY_NO_STRIP=1`. Add `--prune-dist-cache` when you want to keep only the final dist binaries after a successful build.
-- `./scripts/tiffany-check --smoke` - debug-build, format-check the fork, and verify the legacy bridge plus event-stream entrypoint.
+- `./scripts/tiffany-check --smoke` - debug-build, format-check the fork, verify the legacy bridge plus event-stream entrypoint, and run example smoke tests.
 - `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
+- `./scripts/tiffany-check-examples` - run only the checked-in example project tests.
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist-cache|--dist|--debug` - inspect build-cache size, find large artifacts, keep final dist binaries while removing dist internals, or remove incremental/release/debug build outputs when `target/` grows too large.
 
 Direct Cargo commands inside `tiffany-ui/codex-rs` are also redirected to the root `./target` through the fork's Cargo config. If an older checkout already has `tiffany-ui/codex-rs/target`, it is a legacy duplicate cache and can be removed with `./scripts/tiffany-clean-targets`.
@@ -387,8 +388,9 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `./scripts/tiffany-dev setup` | Run the first-run setup wizard from source |
 | `./scripts/tiffany-dev orchestrator` | Bridge from the tiffany-loop fork into the existing orchestrator runtime |
 | `./scripts/tiffany-build [args]` | Build both binaries in shared `./target`; forwards args such as `--release --locked`, or use stripped `--fast-release --locked`; add `--prune-dist-cache` to keep only final dist binaries |
-| `./scripts/tiffany-check --smoke` | Run the fast local fork/bridge verification |
-| `./scripts/tiffany-check --dist` | Run the release-profile fork/bridge verification |
+| `./scripts/tiffany-check --smoke` | Run the fast local fork/bridge/example verification |
+| `./scripts/tiffany-check --dist` | Run the release-profile fork/bridge/example verification |
+| `./scripts/tiffany-check-examples` | Run only checked-in example tests |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist-cache|--dist|--debug` | Inspect or trim shared and legacy Cargo build caches; default removes only the old fork-local target |
 | `tiffany orchestrator` | Open the primary tiffany-loop UI after install |
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
