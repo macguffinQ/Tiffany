@@ -17,6 +17,7 @@ const TIFFANY: &str = "\x1b[38;2;129;216;208m";
 const GREEN: &str = TIFFANY;
 const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
+const CYAN: &str = TIFFANY;
 const PROGRESS_OUTPUT_WIDTH: usize = 104;
 const PROGRESS_OUTPUT_LINE_LIMIT: usize = 36;
 const PROGRESS_OUTPUT_FOLDED_LIMIT: usize = 220;
@@ -159,9 +160,10 @@ fn visible_worker_output_line(
         return None;
     }
     let source = worker_output_title(role, agent, output.kind);
+    let (icon, color) = worker_output_style(output.kind);
     Some((
-        "↳",
-        DIM,
+        icon,
+        color,
         format_agent_output_block(
             &source,
             Some(&short_task_id(task_id)),
@@ -169,6 +171,17 @@ fn visible_worker_output_line(
             input.history_folded,
         ),
     ))
+}
+
+fn worker_output_style(kind: agent_events::VisibleAgentOutputKind) -> (&'static str, &'static str) {
+    match kind {
+        agent_events::VisibleAgentOutputKind::ToolCall => ("↳", CYAN),
+        agent_events::VisibleAgentOutputKind::ToolResult => ("✓", DIM),
+        agent_events::VisibleAgentOutputKind::Stderr => ("✗", RED),
+        agent_events::VisibleAgentOutputKind::Actionable => ("⚠", YELLOW),
+        agent_events::VisibleAgentOutputKind::Final => ("✓", CYAN),
+        agent_events::VisibleAgentOutputKind::Normal => ("↳", DIM),
+    }
 }
 
 fn worker_output_title(
@@ -500,6 +513,8 @@ mod tests {
             &InputState::default(),
         )
         .expect("final capture marker");
+        assert_eq!(line.0, "✓");
+        assert_eq!(line.1, CYAN);
         assert!(line.2.contains("final response captured"));
         assert!(line.2.contains("/result"));
         assert!(!line.2.contains("Implemented it in several paragraphs."));
@@ -521,7 +536,8 @@ mod tests {
         )
         .expect("codex stderr should be visible");
 
-        assert_eq!(line.0, "↳");
+        assert_eq!(line.0, "✗");
+        assert_eq!(line.1, RED);
         assert!(line.2.contains("codex"));
         assert!(line.2.contains("stderr"));
         assert!(line.2.contains("模型不存在"));
@@ -543,8 +559,48 @@ mod tests {
         .expect("tool call should be visible");
 
         assert_eq!(line.0, "↳");
+        assert_eq!(line.1, CYAN);
         assert!(line.2.contains("worker-codex · tool call"));
         assert!(line.2.contains("tool shell: cargo test --all"));
+    }
+
+    #[test]
+    fn labels_worker_tool_results_and_alerts_in_history() {
+        let task_id = uuid::Uuid::nil();
+
+        let result = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                content: "claude-code tool_result: tool result: tests passed".into(),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("tool result should be visible");
+
+        assert_eq!(result.0, "✓");
+        assert_eq!(result.1, DIM);
+        assert!(result.2.contains("worker-cc · claude-code · tool result"));
+        assert!(result.2.contains("tests passed"));
+
+        let alert = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                content: "claude-code assistant: permission denied while writing file".into(),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("alert should be visible");
+
+        assert_eq!(alert.0, "⚠");
+        assert_eq!(alert.1, YELLOW);
+        assert!(alert.2.contains("alert"));
+        assert!(alert.2.contains("permission denied"));
     }
 
     #[test]
