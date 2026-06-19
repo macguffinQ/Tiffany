@@ -304,12 +304,35 @@ pub fn is_redundant_role_output(role: &str, content: &str, max: usize) -> bool {
     }
     let display = humanize_jsonish(content, max);
     let normalized = normalize_output_summary(&display);
-    let lower = normalized.trim().to_ascii_lowercase();
+    let lines = normalized
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let lower = lines
+        .first()
+        .copied()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     match role {
         "planner" => lower.starts_with("plan ready"),
-        "critic" | "reviewer" => lower.starts_with("approved"),
+        "critic" | "reviewer" => {
+            lower.starts_with("approved")
+                || (lower.starts_with("needs changes")
+                    && !role_output_has_actionable_detail(&lines))
+        }
         _ => false,
     }
+}
+
+fn role_output_has_actionable_detail(lines: &[&str]) -> bool {
+    lines.iter().skip(1).any(|line| {
+        let lower = line.trim().to_ascii_lowercase();
+        !matches!(
+            lower.as_str(),
+            "issue:" | "issues:" | "suggestion:" | "suggestions:"
+        )
+    })
 }
 
 pub fn sanitize_text(s: &str, max: usize) -> String {
@@ -1006,6 +1029,16 @@ mod tests {
         assert!(!is_redundant_role_output(
             "reviewer",
             r#"{"approved":false,"issues":["missing output"]}"#,
+            200
+        ));
+        assert!(is_redundant_role_output(
+            "reviewer",
+            "needs changes: 1 issue(s)",
+            200
+        ));
+        assert!(!is_redundant_role_output(
+            "critic",
+            "needs changes: 1 issue(s)\n  - missing output",
             200
         ));
         assert!(is_redundant_role_output(

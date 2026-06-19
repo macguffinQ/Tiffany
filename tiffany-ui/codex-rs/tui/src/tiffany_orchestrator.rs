@@ -2398,9 +2398,23 @@ fn is_redundant_role_output(role: &str, content: &str) -> bool {
         .to_ascii_lowercase();
     match role {
         "planner" => lower.starts_with("plan ready") && lines.len() <= 1,
-        "critic" | "reviewer" => lower.starts_with("approved"),
+        "critic" | "reviewer" => {
+            lower.starts_with("approved")
+                || (lower.starts_with("needs changes")
+                    && !role_output_has_actionable_detail(&lines))
+        }
         _ => false,
     }
+}
+
+fn role_output_has_actionable_detail(lines: &[&str]) -> bool {
+    lines.iter().skip(1).any(|line| {
+        let lower = line.trim().to_ascii_lowercase();
+        !matches!(
+            lower.as_str(),
+            "issue:" | "issues:" | "suggestion:" | "suggestions:"
+        )
+    })
 }
 
 fn format_tiffany_summary_style(role: &str, content: &str) -> String {
@@ -3492,13 +3506,21 @@ mod tests {
             "reviewer",
             "approved - 0 issue(s)\n  suggestions:\n  - tighten wording"
         ));
-        assert!(!is_redundant_role_output(
+        assert!(is_redundant_role_output(
             "reviewer",
             "needs changes (2 issue(s))"
+        ));
+        assert!(is_redundant_role_output(
+            "critic",
+            "needs changes - 1 issue(s)\n  suggestions:"
         ));
         assert!(!is_redundant_role_output(
             "reviewer",
             "needs changes - 1 issue(s)\n  - missing final answer"
+        ));
+        assert!(!is_redundant_role_output(
+            "critic",
+            "needs changes - 1 issue(s)\n  suggestions:\n  - answer in Chinese"
         ));
         assert!(!is_redundant_role_output("worker", "plan ready - no"));
     }
