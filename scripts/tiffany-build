@@ -13,6 +13,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     "" \
     "Examples:" \
     "  ./scripts/tiffany-build" \
+    "  ./scripts/tiffany-build --small --locked" \
     "  ./scripts/tiffany-build --release --locked" \
     "  ./scripts/tiffany-build --fast-release --locked" \
     "  ./scripts/tiffany-build --fast-release --locked --prune-dist-cache" \
@@ -52,6 +53,9 @@ for arg in "$@"; do
     --fast-release|--dist)
       dist_mode=1
       cargo_flags+=(--profile tiffany-dist)
+      ;;
+    --small|--small-debug)
+      cargo_flags+=(--profile dev-small)
       ;;
     --prune-dist-cache)
       prune_dist_cache=1

@@ -91,23 +91,23 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 
 开发入口：
 
-- `./scripts/tiffany-dev`：默认进入 tiffany-loop orchestrator 的 tiffany-loop orchestration mode，首次缺失时构建 `./target/debug/orchestrator` 和 `./target/debug/tiffany-loop`，之后复用 debug binary 直接启动，打开后等待输入。
+- `./scripts/tiffany-dev`：默认进入 tiffany-loop orchestrator 的 tiffany-loop orchestration mode，首次缺失时构建 `./target/dev-small/orchestrator` 和 `./target/dev-small/tiffany-loop`，之后复用本地 binary 直接启动，打开后等待输入。需要完整调试符号时设置 `TIFFANY_DEV_PROFILE=dev`。
 - `./scripts/tiffany-dev --help`：只显示源码 checkout 的入口说明，不构建、不启动 UI。
 - `./scripts/tiffany-dev setup`：不安装二进制，直接运行本工程首次配置向导。
 - `./scripts/tiffany-dev config ...`：直接执行本工程 orchestrator config 命令，不会启动 TUI，也不要求 UI 登录；适合进 TUI 前先脚本化配置 provider。
 - `./scripts/tiffany-dev orchestrator "..."`：带初始问题立即运行 orchestrator 流程；native mode 默认执行者是 Claude Code（`worker-cc`），进入后输入框继续提交也会走 orchestrator。
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml`：指定 orchestrator 配置文件，同时继续让 tiffany-loop UI 配置隔离在 `TIFFANY_HOME`。
 - `./scripts/tiffany-dev orchestrator --legacy ...`：兼容旧 orchestrator CLI 桥接。
-- `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；需要更快的可分发构建时用 `--fast-release`，最终二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。需要构建后只保留最终 dist 二进制时，加 `--prune-dist-cache`。
-- `./scripts/tiffany-check --smoke`：debug 构建、检查 fork 格式，验证 legacy bridge、事件流入口，并运行示例 smoke 测试。
+- `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；源码本地运行用 `--small`，需要更快的可分发构建时用 `--fast-release`，最终 dist 二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。需要构建后只保留最终 dist 二进制时，加 `--prune-dist-cache`。
+- `./scripts/tiffany-check --smoke`：small debug 构建、检查 fork 格式，验证 legacy bridge、事件流入口，并运行示例 smoke 测试。
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
 - `./scripts/tiffany-check-examples`：只运行仓库内示例项目测试。
 - `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]`：运行汇总后的发布前检查；打 tag 前使用 `--full --tag vX.Y.Z`。
-- `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug`：查看构建缓存大小、定位大文件，在保留已编译依赖和最终二进制的同时清理可重建缓存，或清理更大的 build 输出，避免 `target/` 膨胀。
+- `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small`：查看构建缓存大小、定位大文件，在保留已编译依赖和最终二进制的同时清理可重建缓存，或清理更大的 build 输出，避免 `target/` 膨胀。
 
 直接进入 `tiffany-ui/codex-rs` 执行 Cargo 命令时，也会通过 fork 的 Cargo 配置重定向到根目录 `./target`。旧 checkout 如果已经有 `tiffany-ui/codex-rs/target`，那是重复缓存，可以用 `./scripts/tiffany-clean-targets` 删除。
 
-源码开发时，`./scripts/tiffany-dev` 默认复用已构建的 debug binary，避免每次启动都走 `cargo run`。只有明确需要 Cargo wrapper 时再设置 `TIFFANY_DEV_CARGO_RUN=1`。
+源码开发时，`./scripts/tiffany-dev` 默认复用已构建的 `dev-small` binary，避免每次启动都走 `cargo run`，也能减少本地构建缓存体积。需要完整调试符号时设置 `TIFFANY_DEV_PROFILE=dev`；只有明确需要 Cargo wrapper 时再设置 `TIFFANY_DEV_CARGO_RUN=1`。
 
 tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.tiffany`，tiffany-loop 内部配置读取会被映射到 `~/.tiffany/config.toml`，不会读写上游默认配置目录。SQLite 状态库默认也通过 `TIFFANY_SQLITE_HOME` 指到同一目录。需要多套配置时可以用 `TIFFANY_HOME=/path/to/tiffany-home` 覆盖。
 
@@ -294,12 +294,12 @@ behavior:
 | `./scripts/tiffany-dev` | 运行 tiffany-loop UI |
 | `./scripts/tiffany-dev setup` | 从源码运行首次配置向导 |
 | `./scripts/tiffany-dev orchestrator` | 从 tiffany-loop fork 桥接到现有 orchestrator runtime |
-| `./scripts/tiffany-build [args]` | 在共享 `./target` 中构建 runtime 和 UI 二进制；可透传 `--release --locked`，也可用默认 strip 的 `--fast-release --locked`；加 `--prune-dist-cache` 可只保留最终 dist 二进制 |
+| `./scripts/tiffany-build [args]` | 在共享 `./target` 中构建 runtime 和 UI 二进制；源码本地运行用 `--small --locked`，也可用默认 strip 的 `--fast-release --locked`；加 `--prune-dist-cache` 可只保留最终 dist 二进制 |
 | `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge/example 验证 |
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge/example 验证 |
 | `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | 执行汇总后的本地发布前检查 |
-| `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
+| `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
 | `tiffany-loop` | 安装后打开主 tiffany-loop UI |
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | 引导式配置 provider、model、role |

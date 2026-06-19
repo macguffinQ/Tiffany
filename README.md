@@ -84,23 +84,23 @@ The legacy [`src/tui`](src/tui/) path remains only as a compatibility bridge for
 
 Development entrypoints:
 
-- `./scripts/tiffany-dev` - run the tiffany-loop orchestrator in tiffany-loop orchestration mode, reusing `./target/debug/orchestrator` and `./target/debug/tiffany-loop` after the first build, then waiting for input.
+- `./scripts/tiffany-dev` - run the tiffany-loop orchestrator in tiffany-loop orchestration mode, reusing `./target/dev-small/orchestrator` and `./target/dev-small/tiffany-loop` after the first build, then waiting for input. Set `TIFFANY_DEV_PROFILE=dev` when you need full debug symbols.
 - `./scripts/tiffany-dev --help` - explain the source-checkout entrypoints without building or launching the UI.
 - `./scripts/tiffany-dev setup` - run the local first-run setup wizard without installing binaries.
 - `./scripts/tiffany-dev config ...` - run the local orchestrator config command directly. It does not launch the TUI or require a UI login; use it for scriptable provider setup before opening the TUI.
 - `./scripts/tiffany-dev orchestrator "..."` - run the orchestrator pipeline immediately with an initial prompt; native mode defaults worker execution to Claude Code (`worker-cc`), and later input-box submissions are routed into the same orchestrator pipeline.
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml` - use a specific orchestrator config while keeping tiffany-loop UI config isolated under `TIFFANY_HOME`.
 - `./scripts/tiffany-dev orchestrator --legacy ...` - compatibility bridge to the old orchestrator CLI.
-- `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI in the shared `./target` directory. Use `--fast-release` for a faster distributable build; final binaries are stripped unless `TIFFANY_NO_STRIP=1`. Add `--prune-dist-cache` when you want to keep only the final dist binaries after a successful build.
-- `./scripts/tiffany-check --smoke` - debug-build, format-check the fork, verify the legacy bridge plus event-stream entrypoint, and run example smoke tests.
+- `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI in the shared `./target` directory. Use `--small` for source-checkout local binaries or `--fast-release` for a faster distributable build; final dist binaries are stripped unless `TIFFANY_NO_STRIP=1`. Add `--prune-dist-cache` when you want to keep only the final dist binaries after a successful build.
+- `./scripts/tiffany-check --smoke` - small debug-build, format-check the fork, verify the legacy bridge plus event-stream entrypoint, and run example smoke tests.
 - `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
 - `./scripts/tiffany-check-examples` - run only the checked-in example project tests.
 - `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` - run the consolidated release-readiness checks; use `--full --tag vX.Y.Z` before tagging.
-- `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug` - inspect build-cache size, find large artifacts, trim rebuildable caches while keeping compiled deps/final binaries, or remove larger build outputs when `target/` grows too large.
+- `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` - inspect build-cache size, find large artifacts, trim rebuildable caches while keeping compiled deps/final binaries, or remove larger build outputs when `target/` grows too large.
 
 Direct Cargo commands inside `tiffany-ui/codex-rs` are also redirected to the root `./target` through the fork's Cargo config. If an older checkout already has `tiffany-ui/codex-rs/target`, it is a legacy duplicate cache and can be removed with `./scripts/tiffany-clean-targets`.
 
-For source-checkout development, `./scripts/tiffany-dev` builds missing debug binaries once and then execs the cached binary directly for faster repeat startup. Set `TIFFANY_DEV_CARGO_RUN=1` only when you specifically want Cargo's `cargo run` wrapper.
+For source-checkout development, `./scripts/tiffany-dev` builds missing `dev-small` binaries once and then execs the cached binary directly for faster repeat startup and smaller local build caches. Set `TIFFANY_DEV_PROFILE=dev` when you need full debug symbols, or `TIFFANY_DEV_CARGO_RUN=1` only when you specifically want Cargo's `cargo run` wrapper.
 
 tiffany-loop keeps fork state separate from upstream UI source. The fork uses `TIFFANY_HOME`, defaulting to `~/.tiffany`, and maps UI-internal config reads to `~/.tiffany/config.toml` instead of the upstream default config directory. SQLite state defaults to the same root through `TIFFANY_SQLITE_HOME`. Override with `TIFFANY_HOME=/path/to/tiffany-home`.
 
@@ -628,6 +628,7 @@ Agent Teams (CC's experimental multi-agent feature) already does shared task lis
 cargo build              # debug, ~30s incremental
 cargo build --release    # release, ~5-8min first time
 ./scripts/tiffany-build   # orchestrator + tiffany-loop UI
+./scripts/tiffany-build --small --locked
 ./scripts/tiffany-build --release --locked
 ./scripts/tiffany-build --fast-release --locked
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache

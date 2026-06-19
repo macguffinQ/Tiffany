@@ -10,7 +10,7 @@ Usage: ./scripts/tiffany-check [--smoke|--dist]
 Checks the local tiffany-loop fork, orchestrator bridge, and checked-in examples.
 
 Modes:
-  --smoke  Debug build plus bridge/event/example smoke checks. Intended for PR/main CI.
+  --smoke  Small debug build plus bridge/event/example smoke checks. Intended for PR/main CI.
   --dist   tiffany-dist profile build plus the same checks. Intended before release.
 
 Default: --dist
@@ -49,8 +49,8 @@ export CARGO_TARGET_DIR="$target_dir"
 
 case "$mode" in
   smoke)
-    build_args=(--locked)
-    binary_dir="$target_dir/debug"
+    build_args=(--small --locked)
+    binary_dir="$target_dir/dev-small"
     ;;
   dist)
     build_args=(--fast-release --locked)

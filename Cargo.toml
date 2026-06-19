@@ -79,6 +79,18 @@ tempfile = "3"
 # across local dev builds. This mirrors the tiffany-loop UI fork profile.
 debug = "limited"
 
+[profile.dev-small]
+inherits = "dev"
+# Source-checkout launcher profile: keep local runs fast and target/ smaller.
+# Use TIFFANY_DEV_PROFILE=dev when full debug symbols are needed.
+opt-level = 0
+debug = "none"
+
+[profile.dev-small.build-override]
+# Keep proc-macro dylibs symbolicated enough for stable loading on macOS/Xcode
+# beta toolchains while stripping debug info from normal runtime crates.
+debug = "limited"
+
 [profile.test]
 # Test binaries are numerous; limited debug info keeps local and CI target dirs
 # from growing quickly while preserving useful backtraces.

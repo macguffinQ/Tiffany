@@ -509,7 +509,11 @@ debug = "limited"
 inherits = "dev"
 opt-level = 0
 debug = "none"
-strip = "symbols"
+
+[profile.dev-small.build-override]
+# Keep proc-macro dylibs symbolicated enough for stable loading on macOS/Xcode
+# beta toolchains while stripping debug info from normal runtime crates.
+debug = "limited"
 
 [profile.release]
 lto = "thin"
