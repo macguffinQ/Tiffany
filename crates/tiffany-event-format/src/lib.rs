@@ -8,6 +8,20 @@ pub struct AgentEventSummary {
     pub text: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisibleAgentOutputKind {
+    Final,
+    Actionable,
+    Normal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VisibleAgentOutput {
+    pub kind: VisibleAgentOutputKind,
+    pub display: String,
+    pub dedupe_key: String,
+}
+
 pub fn classify_json_line(line: &str) -> String {
     serde_json::from_str::<Value>(line)
         .ok()
@@ -182,6 +196,35 @@ pub fn clean_visible_agent_output(content: &str, max: usize) -> Option<String> {
     let display = normalize_output_summary(&display);
     let display = strip_known_final_heading(&display);
     (!is_low_value_output(&display)).then_some(display)
+}
+
+pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOutput> {
+    if let Some(final_output) = final_output_candidate(content, max) {
+        let display = sanitize_text(&normalize_output_summary(&final_output), max);
+        let display = strip_known_final_heading(&display);
+        let display = display.trim().to_string();
+        if display.is_empty() {
+            return None;
+        }
+        return Some(VisibleAgentOutput {
+            kind: VisibleAgentOutputKind::Final,
+            dedupe_key: sanitize_text(&normalize_output_summary(&display), max),
+            display,
+        });
+    }
+
+    let display = clean_visible_agent_output(content, max)?;
+    let kind = if looks_like_actionable_output(&display) {
+        VisibleAgentOutputKind::Actionable
+    } else {
+        VisibleAgentOutputKind::Normal
+    };
+    let dedupe_key = sanitize_text(&normalize_output_summary(&display), max);
+    Some(VisibleAgentOutput {
+        kind,
+        display,
+        dedupe_key,
+    })
 }
 
 pub fn strip_runtime_output_prefix(line: &str) -> String {
@@ -359,10 +402,20 @@ pub fn is_low_value_output(text: &str) -> bool {
 }
 
 fn looks_like_actionable_stderr(lower: &str) -> bool {
+    looks_like_actionable_lowercase_output(lower)
+}
+
+pub fn looks_like_actionable_output(text: &str) -> bool {
+    looks_like_actionable_lowercase_output(&text.to_ascii_lowercase())
+}
+
+fn looks_like_actionable_lowercase_output(lower: &str) -> bool {
     [
         "error",
         "failed",
         "failure",
+        "rejected",
+        "needs changes",
         "panic",
         "unauthorized",
         "authentication",
@@ -1465,6 +1518,33 @@ mod tests {
             runtime_output_kind("codex turn_complete: done"),
             Some("turn_complete")
         );
+    }
+
+    #[test]
+    fn classifies_visible_agent_output_for_ui_surfaces() {
+        let final_output =
+            visible_agent_output("codex turn_complete: {\"result\":\"完成并验证。\"}", 500)
+                .expect("final output");
+        assert_eq!(final_output.kind, VisibleAgentOutputKind::Final);
+        assert_eq!(final_output.display, "完成并验证。");
+        assert_eq!(final_output.dedupe_key, "完成并验证。");
+
+        let error = visible_agent_output(
+            "codex stderr: API Error: 400 [1211][模型不存在，请检查模型代码。]",
+            500,
+        )
+        .expect("actionable error");
+        assert_eq!(error.kind, VisibleAgentOutputKind::Actionable);
+        assert!(error.display.contains("模型不存在"));
+        assert!(!error.display.contains('{'));
+
+        let normal =
+            visible_agent_output("claude assistant: useful summary", 500).expect("normal output");
+        assert_eq!(normal.kind, VisibleAgentOutputKind::Normal);
+        assert_eq!(normal.display, "useful summary");
+        assert_eq!(normal.dedupe_key, "useful summary");
+
+        assert!(visible_agent_output("claude-code assistant: thinking", 500).is_none());
     }
 
     #[test]

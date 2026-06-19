@@ -3,7 +3,6 @@ use crate::pipeline::orchestrator::RunProgress;
 use serde::Serialize;
 use std::collections::HashSet;
 
-const TEXT_OUTPUT_MAX_CHARS: usize = 4_000;
 const TEXT_OUTPUT_SUMMARY_MAX_CHARS: usize = 360;
 const COMPACT_OUTPUT_SUMMARY_MAX_CHARS: usize = 180;
 
@@ -355,14 +354,12 @@ impl TiffanyTextProgressFormatter {
                 role,
                 content,
             } => {
-                let display = visible_output_summary(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
+                let output =
+                    visible_non_final_agent_output(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
                 Some(format!(
                     "worker:{}:{agent}:{role}:{}",
                     &task_id.to_string()[..8],
-                    agent_events::sanitize_text(
-                        &agent_events::normalize_output_summary(&display),
-                        TEXT_OUTPUT_SUMMARY_MAX_CHARS,
-                    )
+                    output.dedupe_key
                 ))
             }
             RunProgress::RoleOutput { role, content } => {
@@ -373,14 +370,9 @@ impl TiffanyTextProgressFormatter {
                 ) {
                     return None;
                 }
-                let display = visible_output_summary(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
-                Some(format!(
-                    "role:{role}:{}",
-                    agent_events::sanitize_text(
-                        &agent_events::normalize_output_summary(&display),
-                        TEXT_OUTPUT_SUMMARY_MAX_CHARS,
-                    )
-                ))
+                let output =
+                    visible_non_final_agent_output(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
+                Some(format!("role:{role}:{}", output.dedupe_key))
             }
             _ => None,
         }
@@ -427,11 +419,11 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
             content,
             ..
         } => {
-            let display = visible_output_summary(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
+            let output = visible_non_final_agent_output(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
             Some(format!(
                 "↳ worker   {} · {agent}\n{}",
                 short_id(task_id),
-                indent_block(&display, "  ")
+                indent_block(&output.display, "  ")
             ))
         }
         RunProgress::RoleOutput { role, content } => {
@@ -439,12 +431,12 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
             {
                 return None;
             }
-            let display = visible_output_summary(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
+            let output = visible_non_final_agent_output(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
             Some(format!(
                 "↳ {:<8}{}\n{}",
                 role_label(role),
                 "output",
-                indent_block(&display, "  ")
+                indent_block(&output.display, "  ")
             ))
         }
         RunProgress::WorkerDone {
@@ -583,18 +575,18 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
     }
 }
 
-fn visible_output_summary(content: &str, max: usize) -> Option<String> {
-    if agent_events::final_output_candidate(content, TEXT_OUTPUT_MAX_CHARS).is_some() {
-        return None;
-    }
-    let display = agent_events::humanize_jsonish(content, max);
-    let display = agent_events::normalize_output_summary(&display);
-    (!agent_events::is_low_value_output(&display)).then_some(display)
+fn visible_non_final_agent_output(
+    content: &str,
+    max: usize,
+) -> Option<agent_events::VisibleAgentOutput> {
+    let output = agent_events::visible_agent_output(content, max)?;
+    (output.kind != agent_events::VisibleAgentOutputKind::Final).then_some(output)
 }
 
 fn compact_output_summary(content: &str, max: usize) -> Option<String> {
-    let display = visible_output_summary(content, max)?;
-    let summary = display
+    let output = visible_non_final_agent_output(content, max)?;
+    let summary = output
+        .display
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())

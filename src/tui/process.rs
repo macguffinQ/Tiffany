@@ -103,11 +103,9 @@ fn normalized_recorded_output(content: &str, max: usize) -> Option<String> {
     if agent_events::final_output_candidate(content, PROCESS_FINAL_OUTPUT_MAX_CHARS).is_some() {
         return None;
     }
-    let display = summarize_execution_output(content, max)?;
-    Some(truncate_chars(
-        &normalize_execution_output_summary(&display),
-        220,
-    ))
+    let output = agent_events::visible_agent_output(content, max)?;
+    (output.kind != agent_events::VisibleAgentOutputKind::Final)
+        .then(|| truncate_chars(&output.dedupe_key, 220))
 }
 
 fn should_skip_recorded_run_event(input: &InputState, event: &str) -> bool {

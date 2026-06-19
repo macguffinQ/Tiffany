@@ -7,7 +7,7 @@
 
 use super::run_progress_view::{progress_history_view, ProgressTone};
 use super::state::InputState;
-use super::util::{normalize_execution_output_summary, summarize_execution_output, truncate_chars};
+use super::util::{normalize_execution_output_summary, truncate_chars};
 use crate::agent_events;
 use crate::pipeline::orchestrator::RunProgress;
 
@@ -249,55 +249,35 @@ fn format_agent_output_block(
 }
 
 fn visible_worker_output_display(content: &str, max: usize) -> Option<String> {
-    if worker_output_is_noise(content) {
-        return None;
-    }
-
-    if let Some(final_output) =
-        agent_events::final_output_candidate(content, FINAL_OUTPUT_MAX_CHARS)
+    if let Some(final_output) = agent_events::visible_agent_output(content, FINAL_OUTPUT_MAX_CHARS)
+        .filter(|output| output.kind == agent_events::VisibleAgentOutputKind::Final)
     {
-        return Some(format_captured_final_result(&final_output));
+        return Some(format_captured_final_result(&final_output.display));
     }
 
-    let display = normalize_visible_output(content, max)?;
-    if worker_output_is_final_like_display(&display) {
-        return Some(format_captured_final_result(&display));
+    let output = agent_events::visible_agent_output(content, max)?;
+    if worker_output_is_final_like_display(&output.display) {
+        return Some(format_captured_final_result(&output.display));
     }
-    Some(display)
+    Some(output.display)
 }
 
 fn visible_worker_output_dedupe_display(content: &str) -> Option<String> {
-    if worker_output_is_noise(content) {
-        return None;
-    }
-
-    if let Some(final_output) =
-        agent_events::final_output_candidate(content, FINAL_OUTPUT_MAX_CHARS)
-    {
-        return normalize_visible_output(&final_output, PROGRESS_OUTPUT_EXPANDED_LIMIT);
-    }
-
-    normalize_visible_output(content, PROGRESS_OUTPUT_EXPANDED_LIMIT)
+    agent_events::visible_agent_output(content, PROGRESS_OUTPUT_EXPANDED_LIMIT)
+        .map(|output| output.dedupe_key)
 }
 
 fn visible_role_output_display(role: &str, content: &str, max: usize) -> Option<String> {
     if agent_events::is_redundant_role_output(role, content, max) {
         return None;
     }
-    if worker_output_is_noise(content) {
+    let output = agent_events::visible_agent_output(content, max)?;
+    if role_is_pipeline_controller(role)
+        && output.kind != agent_events::VisibleAgentOutputKind::Actionable
+    {
         return None;
     }
-    let display = normalize_visible_output(content, max)?;
-    if role_is_pipeline_controller(role) && !role_output_is_actionable(&display) {
-        return None;
-    }
-    Some(display)
-}
-
-fn normalize_visible_output(content: &str, max: usize) -> Option<String> {
-    let display = summarize_execution_output(content, max)?;
-    let display = normalize_execution_output_summary(&display);
-    (!display.trim().is_empty()).then_some(display)
+    Some(output.display)
 }
 
 fn format_captured_final_result(display: &str) -> String {
@@ -321,24 +301,6 @@ fn one_line_process_summary(display: &str, max: usize) -> String {
     truncate_chars(&summary, max)
 }
 
-fn worker_output_is_noise(content: &str) -> bool {
-    let humanized = agent_events::humanize_jsonish(content, 120);
-    let raw_lower = humanized.trim().to_ascii_lowercase();
-    if raw_lower.contains(" system: system")
-        || raw_lower.contains(" assistant: thinking")
-        || raw_lower.ends_with(" system")
-        || raw_lower.ends_with(" thinking")
-    {
-        return true;
-    }
-    let normalized = agent_events::normalize_output_summary(&humanized);
-    let lower = normalized.trim().to_ascii_lowercase();
-    lower.is_empty()
-        || matches!(lower.as_str(), "system" | "thinking")
-        || lower.ends_with(" system")
-        || lower.ends_with(" thinking")
-}
-
 fn worker_output_is_final_like_display(display: &str) -> bool {
     let display = agent_events::normalize_output_summary(display);
     if display.lines().count() >= 2 {
@@ -358,26 +320,6 @@ fn role_display_name(role: &str) -> &'static str {
 
 fn role_is_pipeline_controller(role: &str) -> bool {
     matches!(role, "planner" | "critic" | "reviewer")
-}
-
-fn role_output_is_actionable(display: &str) -> bool {
-    let lower = display.to_ascii_lowercase();
-    [
-        "error",
-        "failed",
-        "failure",
-        "rejected",
-        "needs changes",
-        "permission",
-        "denied",
-        "authentication",
-        "api key",
-        "model not found",
-        "invalid model",
-        "模型不存在",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
 }
 
 fn output_was_already_visible(input: &InputState, scope: &str, display: &str) -> bool {
@@ -559,6 +501,37 @@ mod tests {
         assert_eq!(line.0, "↳");
         assert!(line.2.contains("codex"));
         assert!(line.2.contains("模型不存在"));
+    }
+
+    #[test]
+    fn shared_visible_output_classifier_keeps_role_errors_only() {
+        let input = InputState::default();
+
+        assert!(progress_line(
+            &RunProgress::RoleOutput {
+                role: "planner".into(),
+                content: r#"{"sub_tasks":[{"prompt":"say hello"}]}"#.into(),
+            },
+            0,
+            &input,
+        )
+        .is_none());
+
+        let critic = progress_line(
+            &RunProgress::RoleOutput {
+                role: "critic".into(),
+                content: r#"critic>
+{"approved":false,"issues":["模型不存在，需要修正 worker-codex 的 Model Name"]}"#
+                    .into(),
+            },
+            0,
+            &input,
+        )
+        .expect("critic issue should be visible");
+
+        assert!(critic.2.contains("needs changes"));
+        assert!(critic.2.contains("模型不存在"));
+        assert!(!critic.2.contains("\"approved\""));
     }
 
     #[test]
