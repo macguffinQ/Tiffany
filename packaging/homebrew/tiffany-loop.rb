@@ -20,6 +20,6 @@ class TiffanyLoop < Formula
 
   test do
     assert_match "orchestrator", shell_output("#{bin}/orchestrator --help")
-    assert_match "orchestrator", shell_output("#{bin}/tiffany orchestrator --help")
+    assert_match "orchestrator", shell_output("#{bin}/tiffany orchestrator --help 2>/dev/null")
   end
 end
