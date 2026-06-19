@@ -386,8 +386,11 @@ enum SessionsCmd {
         #[arg(long)]
         tail: Option<usize>,
         /// Show parent/child session links instead of event log
-        #[arg(long)]
+        #[arg(long, conflicts_with = "flow")]
         tree: bool,
+        /// Show a readable orchestration/worker waterfall
+        #[arg(long, conflicts_with_all = ["raw", "tree"])]
+        flow: bool,
     },
     /// Grep across all session logs
     Grep { pattern: String },

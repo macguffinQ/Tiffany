@@ -1285,7 +1285,9 @@ fn terminal_help() -> String {
      /resume last                  Restore the last terminal chat conversation\n\
      /session [id|prefix|last]     Show one session summary\n\
      /session tree [id|prefix|last] Show parent/child session tree\n\
+     /session flow [id|prefix|last] [n] Show orchestration event waterfall\n\
      /tree [id|prefix|last]        Show parent/child session tree\n\
+     /run-flow [id|prefix|last] [n] Show orchestration event waterfall\n\
      /log [id|prefix|last] [n]     Show session log tail\n\
      /trace [on|off|full|compact] Configure captured trace verbosity\n\
      /context [compact|full|off|clear] Control remembered conversation context\n\

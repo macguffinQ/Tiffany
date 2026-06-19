@@ -15,6 +15,10 @@ pub struct SessionLogRenderOptions {
     pub tail: Option<usize>,
 }
 
+pub struct SessionFlowRenderOptions {
+    pub tail_per_session: Option<usize>,
+}
+
 pub fn format_session_log(
     session: &Session,
     log_path: &Path,
@@ -212,6 +216,53 @@ pub fn format_session_tree(root: &Session, all_sessions: &[Session], log_dir: &P
     out
 }
 
+pub fn format_session_flow(
+    selected: &Session,
+    all_sessions: &[Session],
+    log_dir: &Path,
+    options: SessionFlowRenderOptions,
+) -> String {
+    let root = flow_root_session(selected, all_sessions);
+    let sessions = collect_session_subtree(root, all_sessions);
+    let mut out = format!(
+        "Session flow\n{}\n  selected: {}\n  sessions: {}\n  events: {}",
+        format_tree_session_line(root),
+        if selected.id == root.id {
+            "root".to_string()
+        } else {
+            format!(
+                "{} via root {}",
+                short_session_id(selected),
+                short_session_id(root)
+            )
+        },
+        sessions.len(),
+        match options.tail_per_session {
+            Some(limit) => format!("last {limit} raw line(s) per session; duplicates hidden"),
+            None => "all readable events; duplicates hidden".to_string(),
+        }
+    );
+
+    for (idx, session) in sessions.iter().enumerate() {
+        let marker = if idx == 0 { "●" } else { "↳" };
+        out.push_str(&format!(
+            "\n\n{} {}  /tree {}  /log {} 120\n  log: {}",
+            marker,
+            format_tree_session_line(session),
+            short_session_id(session),
+            short_session_id(session),
+            session_log_path(log_dir, session).display()
+        ));
+        out.push_str(&format_flow_session_events(
+            session,
+            log_dir,
+            options.tail_per_session,
+        ));
+    }
+
+    out
+}
+
 pub fn format_session_event(event: &Event) -> String {
     if event.kind == "heartbeat" {
         return format!("{} heartbeat", event.ts.format("%H:%M:%S"));
@@ -234,6 +285,116 @@ pub fn format_session_event_line(raw: &str) -> String {
         Ok(event) => format_session_event(&event),
         Err(_) => truncate_chars(raw, RAW_LINE_MAX_CHARS),
     }
+}
+
+fn flow_root_session<'a>(selected: &'a Session, all_sessions: &'a [Session]) -> &'a Session {
+    let by_id = all_sessions
+        .iter()
+        .map(|session| (session.id, session))
+        .collect::<HashMap<_, _>>();
+    let mut current = by_id.get(&selected.id).copied().unwrap_or(selected);
+    let mut visited = HashSet::new();
+
+    loop {
+        if !visited.insert(current.id) {
+            break;
+        }
+        let Some(parent) = current
+            .parent_session_ids
+            .iter()
+            .filter_map(|id| by_id.get(id).copied())
+            .min_by(|a, b| a.started_at.cmp(&b.started_at))
+        else {
+            break;
+        };
+        if visited.contains(&parent.id) {
+            break;
+        }
+        current = parent;
+    }
+
+    current
+}
+
+fn collect_session_subtree<'a>(root: &'a Session, all_sessions: &'a [Session]) -> Vec<&'a Session> {
+    let mut children_by_parent = HashMap::<uuid::Uuid, Vec<&Session>>::new();
+    for session in all_sessions {
+        for parent_id in &session.parent_session_ids {
+            children_by_parent
+                .entry(*parent_id)
+                .or_default()
+                .push(session);
+        }
+    }
+    for children in children_by_parent.values_mut() {
+        children.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+    }
+
+    let mut out = Vec::new();
+    let mut visited = HashSet::new();
+    collect_session_subtree_into(root, &children_by_parent, &mut visited, &mut out);
+    out
+}
+
+fn collect_session_subtree_into<'a>(
+    session: &'a Session,
+    children_by_parent: &HashMap<uuid::Uuid, Vec<&'a Session>>,
+    visited: &mut HashSet<uuid::Uuid>,
+    out: &mut Vec<&'a Session>,
+) {
+    if !visited.insert(session.id) {
+        return;
+    }
+    out.push(session);
+    if let Some(children) = children_by_parent.get(&session.id) {
+        for child in children {
+            collect_session_subtree_into(child, children_by_parent, visited, out);
+        }
+    }
+}
+
+fn format_flow_session_events(
+    session: &Session,
+    log_dir: &Path,
+    tail_per_session: Option<usize>,
+) -> String {
+    let path = session_log_path(log_dir, session);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(err) => return format!("\n  events:\n    log unavailable: {err}"),
+    };
+    let lines = content.lines().collect::<Vec<_>>();
+    let visible_lines = tail_slice(&lines, tail_per_session);
+    let range = if tail_per_session.is_some() {
+        format!(
+            "last {} of {} raw line(s)",
+            visible_lines.len(),
+            lines.len()
+        )
+    } else {
+        format!("{} raw line(s)", lines.len())
+    };
+    let mut out = format!("\n  events ({range}):");
+    if visible_lines.is_empty() {
+        out.push_str("\n    (empty)");
+        return out;
+    }
+
+    let mut seen_output_keys = HashSet::new();
+    let mut emitted = 0usize;
+    for raw in visible_lines {
+        if should_skip_human_event_line(raw, &mut seen_output_keys) {
+            continue;
+        }
+        out.push('\n');
+        out.push_str(&indent_block(&format_session_event_line(raw), "    "));
+        emitted += 1;
+    }
+    if emitted == 0 {
+        out.push_str("\n    (only low-value duplicate events in this range)");
+    }
+
+    out
 }
 
 fn format_session_list_row(session: &Session, child_count: usize) -> String {
@@ -671,5 +832,62 @@ mod tests {
         let worker_tree = format_session_tree(&worker, &[root, worker.clone()], tmp.path());
         assert!(worker_tree.contains("Parents:"));
         assert!(worker_tree.contains("/session tree"));
+    }
+
+    #[test]
+    fn formats_session_flow_from_worker_back_to_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut root = Session::new(Uuid::new_v4(), "orchestrator", Role::Orchestrator);
+        root.ended_at = Some(Utc::now());
+        let mut worker = Session::new(Uuid::new_v4(), "claude-code", Role::Worker);
+        worker.parent_session_ids.push(root.id);
+        worker.ended_at = Some(Utc::now());
+
+        let root_event = Event {
+            session_id: root.id,
+            task_id: root.task_id,
+            ts: Utc::now(),
+            kind: "planner".into(),
+            payload: serde_json::json!({"message": "plan ready"}),
+        };
+        let worker_event = Event {
+            session_id: worker.id,
+            task_id: worker.task_id,
+            ts: Utc::now(),
+            kind: "assistant".into(),
+            payload: serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "content": [{ "type": "text", "text": "worker finished" }]
+                }
+            }),
+        };
+        std::fs::write(
+            session_log_path(tmp.path(), &root),
+            format!("{}\n", serde_json::to_string(&root_event).unwrap()),
+        )
+        .unwrap();
+        std::fs::write(
+            session_log_path(tmp.path(), &worker),
+            format!("{}\n", serde_json::to_string(&worker_event).unwrap()),
+        )
+        .unwrap();
+
+        let flow = format_session_flow(
+            &worker,
+            &[root.clone(), worker.clone()],
+            tmp.path(),
+            SessionFlowRenderOptions {
+                tail_per_session: Some(20),
+            },
+        );
+
+        assert!(flow.contains("Session flow"));
+        assert!(flow.contains("selected:"));
+        assert!(flow.contains("orchestrator"));
+        assert!(flow.contains("claude-code"));
+        assert!(flow.contains("plan ready"));
+        assert!(flow.contains("worker finished"));
+        assert!(!flow.contains("\"message\""));
     }
 }

@@ -187,13 +187,27 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                     raw,
                     tail,
                     tree,
+                    flow,
                 } => {
                     let uuid = uuid::Uuid::parse_str(&id)
                         .with_context(|| format!("invalid session id: {}", id))?;
                     let sessions = store.get_many(&[uuid])?;
                     if let Some(s) = sessions.into_iter().next() {
                         let path = store.log_path(uuid);
-                        if tree {
+                        if flow {
+                            let all_sessions = store.list(10_000)?;
+                            println!(
+                                "{}",
+                                orchestrator::session_display::format_session_flow(
+                                    &s,
+                                    &all_sessions,
+                                    store.log_dir(),
+                                    orchestrator::session_display::SessionFlowRenderOptions {
+                                        tail_per_session: tail,
+                                    },
+                                )
+                            );
+                        } else if tree {
                             let all_sessions = store.list(10_000)?;
                             println!(
                                 "{}",

@@ -290,6 +290,7 @@ orchestrator sessions list
 orchestrator sessions show <id>          # human-readable by default
 orchestrator sessions show <id> --raw    # original JSONL
 orchestrator sessions show <id> --tree   # parent/child run tree
+orchestrator sessions show <id> --flow   # readable orchestration/worker waterfall
 orchestrator sessions grep "rate limit"
 
 # 10. See everything the orchestrator loaded
@@ -381,7 +382,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `orchestrator tui --detach` | Run terminal chat in background outside zellij (PID file at `~/.orchestrator/tui.pid`) |
 | `orchestrator acp` | Run an Agent Client Protocol server over stdio |
 | `orchestrator sessions list` | List recent sessions with role labels, parent/child hints, and tree/log shortcuts |
-| `orchestrator sessions show <id>` | Show a human-readable orchestration or worker session log (`--raw` keeps JSONL, `--tree` shows parent/child links) |
+| `orchestrator sessions show <id>` | Show a human-readable orchestration or worker session log (`--raw` keeps JSONL, `--tree` shows parent/child links, `--flow` shows the readable run waterfall) |
 | `orchestrator sessions grep <pattern>` | Search session logs and print readable event summaries |
 | `orchestrator sessions import-cc` | Import your existing CC sessions from `~/.claude/projects/<slug>/sessions/` |
 | `orchestrator config` | Inspect and edit orchestrator configuration |
