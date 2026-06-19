@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 const TEXT_OUTPUT_MAX_CHARS: usize = 4_000;
 const TEXT_OUTPUT_SUMMARY_MAX_CHARS: usize = 360;
+const COMPACT_OUTPUT_SUMMARY_MAX_CHARS: usize = 180;
 
 #[derive(Debug, Serialize)]
 pub struct TiffanyProgressEvent {
@@ -487,6 +488,101 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
     }
 }
 
+pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
+    match event {
+        RunProgress::Planning => Some("plan  planning work".into()),
+        RunProgress::Planned { sub_task_count } => {
+            Some(format!("plan  plan ready · {sub_task_count} sub-task(s)"))
+        }
+        RunProgress::Critiquing { round } => Some(format!("critic  checking plan · round {round}")),
+        RunProgress::CritiqueResult { approved, issues } => {
+            if *approved {
+                Some("critic  plan approved".into())
+            } else {
+                Some(format!("critic  plan needs changes · {issues} issue(s)"))
+            }
+        }
+        RunProgress::Replanning { attempt } => {
+            Some(format!("plan  updating plan · attempt {attempt}"))
+        }
+        RunProgress::Executing { sub_task_count } => {
+            Some(format!("run  running {sub_task_count} sub-task(s)"))
+        }
+        RunProgress::WorkerStarted {
+            task_id,
+            role,
+            runtime,
+            model,
+            provider,
+            ..
+        } => Some(format!(
+            "worker  {role} started · {runtime} · {} · {}",
+            provider_model_label(provider.as_deref(), model),
+            short_id(task_id)
+        )),
+        RunProgress::WorkerOutput {
+            task_id,
+            agent,
+            content,
+            ..
+        } => {
+            let display = compact_output_summary(content, 160)?;
+            Some(format!(
+                "worker output  {} {agent}: {display}",
+                short_id(task_id)
+            ))
+        }
+        RunProgress::RoleOutput { role, content } => {
+            if agent_events::is_redundant_role_output(
+                role,
+                content,
+                COMPACT_OUTPUT_SUMMARY_MAX_CHARS,
+            ) {
+                return None;
+            }
+            let display = compact_output_summary(content, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)?;
+            Some(format!("{}  {display}", compact_role_label(role)))
+        }
+        RunProgress::WorkerDone {
+            task_id,
+            role,
+            duration_ms,
+            ok,
+            ..
+        } => Some(format!(
+            "worker  {role} {} · {} · {}",
+            if *ok { "done" } else { "failed" },
+            short_id(task_id),
+            format_duration_ms(*duration_ms),
+        )),
+        RunProgress::Reviewing { task_id } => Some(format!(
+            "review  checking worker output · {}",
+            short_id(task_id)
+        )),
+        RunProgress::ReviewResult {
+            task_id,
+            approved,
+            issues,
+        } => {
+            if *approved {
+                Some(format!("review  passed · {}", short_id(task_id)))
+            } else {
+                Some(format!(
+                    "review  needs fixes · {} · {issues} issue(s)",
+                    short_id(task_id)
+                ))
+            }
+        }
+        RunProgress::Done { task_count } => {
+            Some(format!("done  {task_count} sub-task(s) completed"))
+        }
+        RunProgress::Failed(message) => Some(format!(
+            "error  {}",
+            agent_events::humanize_jsonish(message, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)
+        )),
+    }
+}
+
 fn visible_output_summary(content: &str, max: usize) -> Option<String> {
     if agent_events::final_output_candidate(content, TEXT_OUTPUT_MAX_CHARS).is_some() {
         return None;
@@ -494,6 +590,18 @@ fn visible_output_summary(content: &str, max: usize) -> Option<String> {
     let display = agent_events::humanize_jsonish(content, max);
     let display = agent_events::normalize_output_summary(&display);
     (!agent_events::is_low_value_output(&display)).then_some(display)
+}
+
+fn compact_output_summary(content: &str, max: usize) -> Option<String> {
+    let display = visible_output_summary(content, max)?;
+    let summary = display
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    (!summary.trim().is_empty()).then(|| agent_events::sanitize_text(&summary, max))
 }
 
 fn provider_model_label(provider: Option<&str>, model: &str) -> String {
@@ -510,6 +618,15 @@ fn role_label(role: &str) -> &'static str {
         "reviewer" => "reviewer",
         "worker" => "worker",
         _ => "agent",
+    }
+}
+
+fn compact_role_label(role: &str) -> &'static str {
+    match role {
+        "planner" => "plan",
+        "critic" => "critic",
+        "reviewer" => "review",
+        _ => "role",
     }
 }
 
@@ -603,5 +720,34 @@ mod tests {
             line,
             "● worker   worker-cc started · claude-code · minimax/MiniMax-M3 · 12345678"
         );
+    }
+
+    #[test]
+    fn compact_formatter_matches_tui_process_capture_shape() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+
+        let started = format_compact_progress_event(&RunProgress::WorkerStarted {
+            task_id,
+            agent: "claude-code".into(),
+            role: "worker-cc".into(),
+            runtime: "claude-code".into(),
+            model: "MiniMax-M3".into(),
+            provider: Some("minimax".into()),
+            prompt: "do work".into(),
+        })
+        .expect("started line");
+        assert_eq!(
+            started,
+            "worker  worker-cc started · claude-code · minimax/MiniMax-M3 · 12345678"
+        );
+
+        let output = format_compact_progress_event(&RunProgress::RoleOutput {
+            role: "critic".into(),
+            content: r#"{"approved":false,"issues":["missing test"]}"#.into(),
+        })
+        .expect("critic output");
+        assert!(output.contains("critic  needs changes: 1 issue(s)"));
+        assert!(output.contains("missing test"));
+        assert!(!output.contains('{'));
     }
 }

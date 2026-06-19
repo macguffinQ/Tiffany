@@ -45,6 +45,10 @@ land in the fork and keep the upstream terminal architecture intact.
   history, logs, plugins, and sessions do not use `~/.codex`. It also maps
   `CODEX_SQLITE_HOME` to `TIFFANY_SQLITE_HOME`, defaulting to the same root.
 - `src/tui/` remains the old compatibility path.
+- Runtime progress formatting is centralized in `src/tiffany_events.rs`:
+  JSONL remains the stable adapter protocol, `--format text` is the readable CLI
+  waterfall, and the legacy `/process` capture uses the same compact formatter
+  so planner/critic/worker/reviewer output is parsed and de-noised consistently.
 
 ## Rules
 

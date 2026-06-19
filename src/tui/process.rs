@@ -1,11 +1,12 @@
 use super::state::{ChatMsg, InputState};
 use super::util::{
-    copy_to_clipboard, format_duration_ms, humanize_jsonish, is_low_value_execution_output,
+    copy_to_clipboard, humanize_jsonish, is_low_value_execution_output,
     normalize_execution_output_summary, summarize_execution_output, truncate_chars,
 };
 use crate::agent_events;
 use crate::core::session_store::SessionStore;
 use crate::pipeline::orchestrator::RunProgress;
+use crate::tiffany_events::format_compact_progress_event;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -490,17 +491,6 @@ fn summarize_worker_content(content: &str, max: usize) -> Option<String> {
     (!display.trim().is_empty()).then_some(display)
 }
 
-fn compact_event_summary(display: &str, max: usize) -> String {
-    let summary = display
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .take(4)
-        .collect::<Vec<_>>()
-        .join(" / ");
-    truncate_chars(&summary, max)
-}
-
 fn role_label(role: &str) -> &'static str {
     match role {
         "planner" => "plan",
@@ -662,116 +652,7 @@ pub(super) fn format_run_event(event: &RunProgress) -> String {
 }
 
 fn format_run_event_for_recording(event: &RunProgress) -> Option<String> {
-    match event {
-        RunProgress::Planning => Some("plan  planning work".into()),
-        RunProgress::Planned { sub_task_count } => {
-            Some(format!("plan  plan ready · {} sub-task(s)", sub_task_count))
-        }
-        RunProgress::Critiquing { round } => {
-            Some(format!("critic  checking plan · round {}", round))
-        }
-        RunProgress::CritiqueResult { approved, issues } => {
-            if *approved {
-                Some("critic  plan approved".into())
-            } else {
-                Some(format!("critic  plan needs changes · {} issue(s)", issues))
-            }
-        }
-        RunProgress::Replanning { attempt } => {
-            Some(format!("plan  updating plan · attempt {}", attempt))
-        }
-        RunProgress::Executing { sub_task_count } => {
-            Some(format!("run  running {} sub-task(s)", sub_task_count))
-        }
-        RunProgress::WorkerStarted {
-            task_id,
-            agent: _,
-            role,
-            runtime,
-            model,
-            provider,
-            ..
-        } => Some(format!(
-            "worker  {} started · {} · {} · {}",
-            role,
-            runtime,
-            provider_model_label(provider.as_deref(), model),
-            &task_id.to_string()[..8]
-        )),
-        RunProgress::WorkerOutput {
-            task_id,
-            agent,
-            role: _,
-            content,
-        } => {
-            if agent_events::final_output_candidate(content, PROCESS_FINAL_OUTPUT_MAX_CHARS)
-                .is_some()
-            {
-                return None;
-            }
-            let display = summarize_worker_content(content, 160)?;
-            Some(format!(
-                "worker output  {} {}: {}",
-                &task_id.to_string()[..8],
-                agent,
-                compact_event_summary(&display, 160)
-            ))
-        }
-        RunProgress::RoleOutput { role, content } => {
-            if agent_events::is_redundant_role_output(role, content, 180) {
-                return None;
-            }
-            let display = summarize_execution_output(content, 180)?;
-            Some(format!(
-                "{}  {}",
-                role_label(role),
-                compact_event_summary(&display, 180)
-            ))
-        }
-        RunProgress::WorkerDone {
-            task_id,
-            agent: _,
-            role,
-            duration_ms,
-            ok,
-        } => Some(format!(
-            "worker  {} {} · {} · {}",
-            role,
-            if *ok { "done" } else { "failed" },
-            &task_id.to_string()[..8],
-            format_duration_ms(*duration_ms),
-        )),
-        RunProgress::Reviewing { task_id } => Some(format!(
-            "review  checking worker output · {}",
-            &task_id.to_string()[..8]
-        )),
-        RunProgress::ReviewResult {
-            task_id,
-            approved,
-            issues,
-        } => {
-            if *approved {
-                Some(format!("review  passed · {}", &task_id.to_string()[..8]))
-            } else {
-                Some(format!(
-                    "review  needs fixes · {} · {} issue(s)",
-                    &task_id.to_string()[..8],
-                    issues
-                ))
-            }
-        }
-        RunProgress::Done { task_count } => {
-            Some(format!("done  {} sub-task(s) completed", task_count))
-        }
-        RunProgress::Failed(msg) => Some(format!("error  {}", humanize_jsonish(msg, 180))),
-    }
-}
-
-fn provider_model_label(provider: Option<&str>, model: &str) -> String {
-    match provider.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(provider) => format!("{provider}/{model}"),
-        None => model.to_string(),
-    }
+    format_compact_progress_event(event)
 }
 
 pub(super) fn format_process_capture(input: &InputState, limit: usize) -> String {
