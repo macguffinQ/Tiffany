@@ -61,6 +61,28 @@ tiffany-loop orchestration mode
 provider 配置、角色路由、事件流和 runtime 执行。`orchestrator tui` 在
 安装了 `tiffany` 时会自动转到 `tiffany orchestrator`。
 
+## 先用最小示例试跑
+
+完成 setup 后，可以先用零依赖示例项目验证 UI、角色路由、worker 执行和测试回路是否都通：
+
+```bash
+cd examples/python-fibonacci
+python3 -m unittest discover -s tests
+tiffany orchestrator
+```
+
+然后输入：
+
+```text
+Add a lucas(n) function to fibonacci.py, add unit tests, and run python3 -m unittest discover -s tests.
+```
+
+也可以用非交互命令直接跑：
+
+```bash
+orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and run python3 -m unittest discover -s tests."
+```
+
 ## UI 方向：直接基于 tiffany-loop UI
 
 当前主 UI 路线已经切到完整 tiffany-loop UI：[`tiffany-ui/`](tiffany-ui/)。后续终端界面改动都应在这个 fork 里做，保留上游 Ratatui/Crossterm 架构、窗口缩放、选中复制、历史 cell、bottom pane、overlay 和退出渲染策略。

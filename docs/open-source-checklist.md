@@ -42,7 +42,7 @@ find . -path './target' -prune -o -path './tiffany-ui/codex-rs/target' -prune -o
 
 - [x] Add release binaries after the first tagged release.
 - [ ] Add screenshots or terminal recordings for `tiffany orchestrator`.
-- [ ] Add a minimal example project under `examples/`.
+- [x] Add a minimal example project under `examples/`.
 - [ ] Decide whether to publish to crates.io.
 - [x] Add a `CHANGELOG.md` before version `0.2.0`.
 - [x] Add Homebrew tap documentation and formula template.

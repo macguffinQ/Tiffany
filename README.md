@@ -53,6 +53,29 @@ The split is intentional: `tiffany` owns the terminal experience, while
 execution. `orchestrator tui` delegates to `tiffany orchestrator` when the TUI
 binary is installed.
 
+## Try The Minimal Example
+
+After setup, use the zero-dependency example project to verify that the UI,
+role routing, worker execution, and test-running loop are wired correctly:
+
+```bash
+cd examples/python-fibonacci
+python3 -m unittest discover -s tests
+tiffany orchestrator
+```
+
+Then ask:
+
+```text
+Add a lucas(n) function to fibonacci.py, add unit tests, and run python3 -m unittest discover -s tests.
+```
+
+The same task can be run non-interactively:
+
+```bash
+orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and run python3 -m unittest discover -s tests."
+```
+
 ## UI direction: tiffany-loop UI first
 
 The active UI path is now a full tiffany-loop UI under [`tiffany-ui/`](tiffany-ui/). New terminal UI work should happen there, keeping the upstream Ratatui/Crossterm architecture, resize handling, copy/selection behavior, history cells, bottom pane, overlays, and exit rendering intact.

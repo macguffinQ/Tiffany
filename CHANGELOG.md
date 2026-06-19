@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Added a zero-dependency Python Fibonacci example for validating setup,
+  orchestration, worker edits, and test execution from a fresh checkout.
+
 ## [0.1.11] - 2026-06-19
 
 ### Fixed
