@@ -149,19 +149,36 @@ impl DoctorReport {
 
     fn next_steps(&self) -> Vec<String> {
         let mut steps = Vec::new();
+        let messages = self
+            .lines
+            .iter()
+            .map(|line| line.message.as_str())
+            .collect::<Vec<_>>();
         if self.issue_count == 0 {
+            if messages
+                .iter()
+                .any(|message| message.contains("OpenAI-compatible provider has no base_url"))
+            {
+                steps.push(
+                    "Set missing OpenAI-compatible endpoints with `/provider endpoint <provider> <url>` before running workers."
+                        .to_string(),
+                );
+            }
+            if messages
+                .iter()
+                .any(|message| message.contains("Claude Code workers may pause"))
+            {
+                steps.push(
+                    "For unattended runs, set `behavior.cc_bypass_permissions: true` or approve Claude Code prompts manually."
+                        .to_string(),
+                );
+            }
             steps.push(
                 "Start the UI with `tiffany-loop` or `./scripts/tiffany-dev` from source."
                     .to_string(),
             );
             return steps;
         }
-
-        let messages = self
-            .lines
-            .iter()
-            .map(|line| line.message.as_str())
-            .collect::<Vec<_>>();
 
         if messages.iter().any(|message| {
             message.contains("config missing") || message.contains("config parse/load failed")
@@ -574,12 +591,27 @@ fn check_providers(
     let mut providers = cfg.providers.iter().collect::<Vec<_>>();
     providers.sort_by(|a, b| a.0.cmp(b.0));
     for (name, provider) in providers {
+        let endpoint = provider_endpoint(provider);
         if provider.kind == "ollama" {
             builder.ok(format!(
-                "{name}: local provider {}",
-                provider.base_url.as_deref().unwrap_or("(default)")
+                "{name}: type=ollama endpoint={}",
+                endpoint.unwrap_or("http://localhost:11434")
             ));
             continue;
+        }
+
+        builder.ok(format!(
+            "{name}: type={} endpoint={}",
+            provider.kind,
+            endpoint.unwrap_or(default_endpoint_for_kind(&provider.kind))
+        ));
+        if openai_compatible_provider_needs_endpoint(name, provider) {
+            builder.warn(format!(
+                "{name}: OpenAI-compatible provider has no base_url; requests will use https://api.openai.com/v1"
+            ));
+            builder.hint(format!(
+                "set it with `/provider endpoint {name} <url>` or `orchestrator config provider setup {name} --endpoint <url>`"
+            ));
         }
 
         if let Some(raw_secret) = raw_hints.and_then(|hints| hints.provider_api_keys.get(name)) {
@@ -616,6 +648,33 @@ fn check_providers(
             }
         }
     }
+}
+
+fn provider_endpoint(provider: &config::ProviderConfig) -> Option<&str> {
+    provider
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn default_endpoint_for_kind(kind: &str) -> &'static str {
+    match kind.to_ascii_lowercase().as_str() {
+        "anthropic" => "https://api.anthropic.com",
+        "google" => "https://generativelanguage.googleapis.com",
+        "ollama" => "http://localhost:11434",
+        "openai" => "https://api.openai.com/v1",
+        _ => "(provider default)",
+    }
+}
+
+fn openai_compatible_provider_needs_endpoint(
+    provider_name: &str,
+    provider: &config::ProviderConfig,
+) -> bool {
+    provider.kind.eq_ignore_ascii_case("openai")
+        && !provider_name.eq_ignore_ascii_case("openai")
+        && provider_endpoint(provider).is_none()
 }
 
 fn check_provider_env_refs(builder: &mut DoctorReportBuilder, provider: &str, refs: &[String]) {
@@ -658,7 +717,7 @@ fn check_models(builder: &mut DoctorReportBuilder, cfg: &Config) {
         }
         if cfg.providers.contains_key(&model.provider) {
             builder.ok(format!(
-                "{}: {} via {}",
+                "{}: api_model={} provider={}",
                 model.id, model.name, model.provider
             ));
         } else {
@@ -671,6 +730,11 @@ fn check_models(builder: &mut DoctorReportBuilder, cfg: &Config) {
                 model.provider, model.provider
             ));
         }
+    }
+
+    if cfg.models.iter().any(|model| model.id != model.name) {
+        builder.hint("model id is Tiffany's internal alias; api_model is the exact name sent to the provider");
+        builder.hint("for `model not found`, `模型不存在`, or `[1211]`, fix api_model with `/role <role>` or `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>`");
     }
 }
 
@@ -729,13 +793,19 @@ fn check_role_binding(
     if model_ok && runtime_ok {
         let model = model_cfg.expect("checked above");
         let provider_status = if cfg.providers.contains_key(&model.provider) {
-            format!("provider={}", model.provider)
+            model.provider.clone()
         } else {
-            format!("provider={} missing", model.provider)
+            format!("{} (missing)", model.provider)
         };
+        let resolved_runtime = resolved_runtime_label(cfg, &role.runtime);
         builder.ok(format!(
-            "{role_name}: model={} ({}, {}) runtime={} teams={}",
-            role.model, model.name, provider_status, role.runtime, role.agent_teams
+            "{role_name}: model={} -> {}/{} -> runtime={}{} teams={}",
+            role.model,
+            provider_status,
+            model.name,
+            role.runtime,
+            resolved_runtime,
+            on_off(role.agent_teams)
         ));
         return;
     }
@@ -758,6 +828,26 @@ fn check_role_binding(
             "available runtimes: {}",
             available_runtime_names(cfg)
         ));
+    }
+}
+
+fn resolved_runtime_label(cfg: &Config, runtime_id: &str) -> String {
+    if cfg.runtimes.contains_key(runtime_id) {
+        return String::new();
+    }
+    for alias in config::runtime_aliases(runtime_id) {
+        if cfg.runtimes.contains_key(*alias) {
+            return format!(" (resolved={alias})");
+        }
+    }
+    String::new()
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value {
+        "on"
+    } else {
+        "off"
     }
 }
 
@@ -1573,6 +1663,35 @@ mod tests {
     }
 
     #[test]
+    fn provider_check_warns_when_openai_compatible_endpoint_is_missing() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "minimax".into(),
+            ProviderConfig {
+                kind: "openai".into(),
+                api_key: Some("set".into()),
+                base_url: None,
+            },
+        );
+        let cfg = Config {
+            providers,
+            behavior: BehaviorConfig::default(),
+            ..Config::default()
+        };
+
+        let mut builder = DoctorReportBuilder::default();
+        check_providers(&mut builder, &cfg, None);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 0);
+        assert!(rendered.contains("minimax: type=openai endpoint=https://api.openai.com/v1"));
+        assert!(rendered.contains("minimax: OpenAI-compatible provider has no base_url"));
+        assert!(rendered.contains("/provider endpoint minimax <url>"));
+        assert!(rendered.contains("Set missing OpenAI-compatible endpoints"));
+    }
+
+    #[test]
     fn model_check_reports_missing_provider_and_duplicate_ids() {
         let cfg = Config {
             providers: HashMap::new(),
@@ -1600,6 +1719,63 @@ mod tests {
         assert!(rendered.contains("glm51: provider `openai-compatible` is not configured"));
         assert!(rendered.contains("model `glm51` is defined more than once"));
         assert_eq!(report.issue_count, 2);
+    }
+
+    #[test]
+    fn role_check_renders_full_model_runtime_chain() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "minimax".into(),
+            ProviderConfig {
+                kind: "openai".into(),
+                api_key: Some("set".into()),
+                base_url: Some("https://api.minimaxi.com/v1".into()),
+            },
+        );
+        let mut runtimes = HashMap::new();
+        runtimes.insert(
+            "codex".into(),
+            RuntimeConfig {
+                kind: "subprocess".into(),
+                binary: Some("codex".into()),
+                supports_mcp: false,
+                supports_agent_teams: false,
+            },
+        );
+        let mut roles = HashMap::new();
+        roles.insert(
+            "worker-codex".into(),
+            RoleConfig {
+                model: "minimax-m3-codex".into(),
+                runtime: "codex".into(),
+                agent_teams: false,
+            },
+        );
+        let cfg = Config {
+            providers,
+            runtimes,
+            models: vec![ModelConfig {
+                id: "minimax-m3-codex".into(),
+                provider: "minimax".into(),
+                name: "MiniMax-M3".into(),
+            }],
+            roles,
+            behavior: BehaviorConfig::default(),
+            ..Config::default()
+        };
+
+        let mut builder = DoctorReportBuilder::default();
+        check_models(&mut builder, &cfg);
+        check_roles(&mut builder, &cfg);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert!(rendered.contains("minimax-m3-codex: api_model=MiniMax-M3 provider=minimax"));
+        assert!(rendered.contains(
+            "worker-codex: model=minimax-m3-codex -> minimax/MiniMax-M3 -> runtime=codex teams=off"
+        ));
+        assert!(rendered.contains("model id is Tiffany's internal alias"));
+        assert!(rendered.contains("模型不存在"));
     }
 
     #[test]
@@ -1654,8 +1830,9 @@ mod tests {
         let rendered = report.render_text();
 
         assert!(rendered.contains("worker-cc: model=sonnet"));
-        assert!(rendered.contains("runtime=claude"));
+        assert!(rendered.contains("runtime=claude (resolved=claude-code) teams=on"));
         assert!(rendered.contains("Claude Code workers may pause"));
+        assert!(rendered.contains("behavior.cc_bypass_permissions: true"));
         assert!(!rendered.contains("worker-cc: runtime `claude` is not defined"));
     }
 
