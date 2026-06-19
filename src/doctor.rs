@@ -43,6 +43,14 @@ impl DoctorReport {
             }
         }
 
+        let issue_summary = self.issue_summary();
+        if !issue_summary.is_empty() {
+            out.push_str("\nIssue summary:\n");
+            for item in issue_summary {
+                out.push_str(&format!("- {item}\n"));
+            }
+        }
+
         let next_steps = self.next_steps();
         if !next_steps.is_empty() {
             out.push_str("\nNext steps:\n");
@@ -61,6 +69,82 @@ impl DoctorReport {
             ));
         }
         out
+    }
+
+    fn issue_summary(&self) -> Vec<String> {
+        let fail_messages = self
+            .lines
+            .iter()
+            .filter(|line| line.level == DoctorLevel::Fail)
+            .map(|line| line.message.as_str())
+            .collect::<Vec<_>>();
+        if fail_messages.is_empty() {
+            return Vec::new();
+        }
+
+        let mut provider_auth = Vec::new();
+        let mut runtime_tools = Vec::new();
+        let mut role_wiring = Vec::new();
+        let mut config_state = Vec::new();
+        let mut other = Vec::new();
+
+        for message in fail_messages {
+            if let Some((provider, envs)) = provider_env_unset(message) {
+                provider_auth.push(format!("{provider}={envs}"));
+            } else if let Some(provider) = provider_key_missing(message) {
+                provider_auth.push(provider.to_string());
+            } else if message.contains("not found on PATH") {
+                runtime_tools.push(message.to_string());
+            } else if message.contains("missing role config")
+                || message.contains("no worker role configured")
+                || message.contains("model `")
+                || message.contains("runtime `")
+            {
+                role_wiring.push(message.to_string());
+            } else if message.contains("config missing")
+                || message.contains("config parse/load failed")
+                || message.contains("provider `")
+                || message.contains("no models configured")
+                || message.contains("no runtimes configured")
+            {
+                config_state.push(message.to_string());
+            } else {
+                other.push(message.to_string());
+            }
+        }
+
+        let mut summary = Vec::new();
+        if !provider_auth.is_empty() {
+            provider_auth.sort();
+            provider_auth.dedup();
+            summary.push(format!(
+                "Provider auth missing for {} provider(s): {}",
+                provider_auth.len(),
+                join_limited(&provider_auth, 4)
+            ));
+        }
+        if !runtime_tools.is_empty() {
+            summary.push(format!(
+                "Runtime binaries missing: {}",
+                join_limited(&runtime_tools, 3)
+            ));
+        }
+        if !role_wiring.is_empty() {
+            summary.push(format!(
+                "Role/model wiring needs attention: {}",
+                join_limited(&role_wiring, 3)
+            ));
+        }
+        if !config_state.is_empty() {
+            summary.push(format!(
+                "Config needs attention: {}",
+                join_limited(&config_state, 3)
+            ));
+        }
+        for item in other.into_iter().take(3) {
+            summary.push(item);
+        }
+        summary
     }
 
     fn next_steps(&self) -> Vec<String> {
@@ -100,12 +184,13 @@ impl DoctorReport {
         }
         if messages.iter().any(|message| {
             message.contains("api key missing")
+                || message.contains("api key env")
                 || message.contains("provider `")
                 || message.contains("provider auth")
         }) {
             push_unique(
                 &mut steps,
-                "Configure provider auth with `/provider` in the TUI or `orchestrator config provider setup <provider>`.",
+                "Configure provider auth: run `tiffany-loop` then `/provider`, or `orchestrator config provider setup <provider> --env <ENV_NAME>`.",
             );
         }
         if messages.iter().any(|message| {
@@ -141,6 +226,31 @@ impl DoctorReport {
         steps.truncate(4);
         steps
     }
+}
+
+fn provider_env_unset(message: &str) -> Option<(&str, &str)> {
+    let (provider, rest) = message.split_once(": api key env ")?;
+    let envs = rest.strip_suffix(" unset")?;
+    Some((provider, envs))
+}
+
+fn provider_key_missing(message: &str) -> Option<&str> {
+    let (provider, rest) = message.split_once(": ")?;
+    if rest == "api key missing" {
+        Some(provider)
+    } else {
+        None
+    }
+}
+
+fn join_limited(items: &[String], limit: usize) -> String {
+    let shown = items.iter().take(limit).cloned().collect::<Vec<_>>();
+    let suffix = if items.len() > shown.len() {
+        format!(", +{}", items.len() - shown.len())
+    } else {
+        String::new()
+    };
+    shown.join(", ") + &suffix
 }
 
 fn push_unique(steps: &mut Vec<String>, step: impl Into<String>) {
@@ -1017,8 +1127,10 @@ mod tests {
         assert!(rendered.contains("✓ config parsed"));
         assert!(rendered.contains("✗ openai: api key missing"));
         assert!(rendered.contains("hint: export OPENAI_API_KEY"));
+        assert!(rendered.contains("Issue summary:"));
+        assert!(rendered.contains("Provider auth missing for 1 provider(s): openai"));
         assert!(rendered.contains("Next steps:"));
-        assert!(rendered.contains("Configure provider auth with `/provider`"));
+        assert!(rendered.contains("Configure provider auth:"));
         assert!(rendered.contains("1 issue(s) found"));
     }
 
@@ -1271,6 +1383,9 @@ mod tests {
 
         assert!(rendered.contains("minimax: api key env TIFFANY_TEST_MISSING_KEY unset"));
         assert!(rendered.contains("hint: export TIFFANY_TEST_MISSING_KEY=..."));
+        assert!(rendered
+            .contains("Provider auth missing for 1 provider(s): minimax=TIFFANY_TEST_MISSING_KEY"));
+        assert!(rendered.contains("orchestrator config provider setup <provider> --env <ENV_NAME>"));
         assert_eq!(report.issue_count, 1);
     }
 

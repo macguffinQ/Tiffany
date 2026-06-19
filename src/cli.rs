@@ -525,7 +525,7 @@ fn print_status(config_path: &Path) -> Result<()> {
         tiffany_install::launch_command_preview(config_path)
     );
 
-    let (config_loaded, config_healthy) = match Config::load(config_path) {
+    let (config_loaded, config_issues) = match Config::load(config_path) {
         Ok(cfg) => {
             println!("db:           {}", cfg.behavior.db_path.display());
             println!("logs:         {}", cfg.behavior.session_log_dir.display());
@@ -555,11 +555,11 @@ fn print_status(config_path: &Path) -> Result<()> {
                 "health:       {}",
                 status_config_health_from_issues(&config_issues)
             );
-            (true, config_issues.is_empty())
+            (true, config_issues)
         }
         Err(err) => {
             println!("config load:  {err:#}");
-            (false, false)
+            (false, Vec::new())
         }
     };
     if mux::zellij::in_zellij() {
@@ -571,7 +571,7 @@ fn print_status(config_path: &Path) -> Result<()> {
 
     for action in status_actions(
         config_loaded,
-        config_healthy,
+        &config_issues,
         tiffany_ready,
         tiffany_install::legacy_tui_forced(),
     ) {
@@ -665,13 +665,70 @@ fn status_config_issues(cfg: &Config) -> Vec<String> {
 }
 
 fn status_issue_summary(issues: &[String], limit: usize) -> String {
-    let shown = issues.iter().take(limit).cloned().collect::<Vec<_>>();
-    let suffix = if issues.len() > shown.len() {
-        format!("; +{}", issues.len() - shown.len())
+    let summary = status_issue_categories(issues);
+    let shown = summary.iter().take(limit).cloned().collect::<Vec<_>>();
+    let suffix = if summary.len() > shown.len() {
+        format!("; +{}", summary.len() - shown.len())
     } else {
         String::new()
     };
     shown.join("; ") + &suffix
+}
+
+fn status_issue_categories(issues: &[String]) -> Vec<String> {
+    let mut provider_auth = Vec::new();
+    let mut config_basics = Vec::new();
+    let mut role_wiring = Vec::new();
+    let mut other = Vec::new();
+
+    for issue in issues {
+        if let Some(provider) = issue.strip_suffix(" api key missing") {
+            provider_auth.push(provider.to_string());
+        } else if issue == "no providers" || issue == "no models" || issue == "no roles" {
+            config_basics.push(issue.clone());
+        } else if issue.contains(" model ")
+            || issue.contains(" runtime ")
+            || issue == "no default worker"
+        {
+            role_wiring.push(issue.clone());
+        } else {
+            other.push(issue.clone());
+        }
+    }
+
+    let mut categories = Vec::new();
+    if !provider_auth.is_empty() {
+        provider_auth.sort();
+        categories.push(format!(
+            "provider auth missing for {}: {}",
+            provider_auth.len(),
+            status_join_limited(&provider_auth, 4)
+        ));
+    }
+    if !config_basics.is_empty() {
+        categories.push(format!(
+            "config incomplete: {}",
+            status_join_limited(&config_basics, 3)
+        ));
+    }
+    if !role_wiring.is_empty() {
+        categories.push(format!(
+            "role/model wiring: {}",
+            status_join_limited(&role_wiring, 3)
+        ));
+    }
+    categories.extend(other);
+    categories
+}
+
+fn status_join_limited(items: &[String], limit: usize) -> String {
+    let shown = items.iter().take(limit).cloned().collect::<Vec<_>>();
+    let suffix = if items.len() > shown.len() {
+        format!(", +{}", items.len() - shown.len())
+    } else {
+        String::new()
+    };
+    shown.join(", ") + &suffix
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -682,7 +739,7 @@ struct StatusAction {
 
 fn status_actions(
     config_loaded: bool,
-    config_healthy: bool,
+    config_issues: &[String],
     tiffany_ready: bool,
     legacy_tui_forced: bool,
 ) -> Vec<StatusAction> {
@@ -712,7 +769,39 @@ fn status_actions(
         ];
     }
 
-    if !config_healthy {
+    if !config_issues.is_empty() {
+        if config_issues
+            .iter()
+            .all(|issue| issue.ends_with(" api key missing"))
+        {
+            return vec![
+                StatusAction {
+                    label: "next",
+                    command: "tiffany-loop then /provider, or `orchestrator config provider setup <provider> --env <ENV_NAME>`",
+                },
+                StatusAction {
+                    label: "check",
+                    command: "orchestrator doctor",
+                },
+            ];
+        }
+        if config_issues.iter().any(|issue| {
+            issue.contains(" model ")
+                || issue.contains(" runtime ")
+                || issue == "no default worker"
+                || issue == "no roles"
+        }) {
+            return vec![
+                StatusAction {
+                    label: "next",
+                    command: "tiffany-loop then /role, or `orchestrator roles register <role> --model <model-id> --runtime <runtime-id>`",
+                },
+                StatusAction {
+                    label: "check",
+                    command: "orchestrator doctor",
+                },
+            ];
+        }
         return vec![
             StatusAction {
                 label: "next",
@@ -3988,7 +4077,7 @@ mod tests {
     #[test]
     fn status_actions_send_missing_config_to_setup() {
         assert_eq!(
-            status_actions(false, false, true, false),
+            status_actions(false, &[], true, false),
             vec![
                 StatusAction {
                     label: "next",
@@ -4005,7 +4094,7 @@ mod tests {
     #[test]
     fn status_actions_launch_tiffany_when_ready() {
         assert_eq!(
-            status_actions(true, true, true, false),
+            status_actions(true, &[], true, false),
             vec![
                 StatusAction {
                     label: "next",
@@ -4021,7 +4110,7 @@ mod tests {
 
     #[test]
     fn status_actions_explain_legacy_tui_override() {
-        let actions = status_actions(true, true, true, true);
+        let actions = status_actions(true, &[], true, true);
 
         assert_eq!(actions[0].label, "next");
         assert!(actions[0].command.contains("ORCHESTRATOR_LEGACY_TUI"));
@@ -4030,7 +4119,7 @@ mod tests {
 
     #[test]
     fn status_actions_explain_missing_tiffany_binary() {
-        let actions = status_actions(true, true, false, false);
+        let actions = status_actions(true, &[], false, false);
 
         assert_eq!(actions[0].label, "next");
         assert!(actions[0].command.contains("install tiffany-loop"));
@@ -4040,11 +4129,27 @@ mod tests {
 
     #[test]
     fn status_actions_repair_unhealthy_config_before_launch() {
-        let actions = status_actions(true, false, true, false);
+        let issues = vec!["planner model missing-model missing".to_string()];
+        let actions = status_actions(true, &issues, true, false);
 
         assert_eq!(actions[0].label, "next");
-        assert!(actions[0].command.contains("orchestrator setup"));
-        assert!(actions[0].command.contains("/provider + /role"));
+        assert!(actions[0].command.contains("/role"));
+        assert!(actions[0].command.contains("orchestrator roles register"));
+        assert_eq!(actions[1].command, "orchestrator doctor");
+    }
+
+    #[test]
+    fn status_actions_focus_provider_only_gaps_on_provider_setup() {
+        let issues = vec![
+            "anthropic api key missing".to_string(),
+            "openai api key missing".to_string(),
+        ];
+        let actions = status_actions(true, &issues, true, false);
+
+        assert_eq!(actions[0].label, "next");
+        assert!(actions[0].command.contains("/provider"));
+        assert!(actions[0].command.contains("config provider setup"));
+        assert!(!actions[0].command.contains("orchestrator setup"));
         assert_eq!(actions[1].command, "orchestrator doctor");
     }
 
@@ -4117,6 +4222,25 @@ mod tests {
         assert!(issues.contains(&"planner model missing-model missing".to_string()));
         assert!(issues.contains(&"planner runtime missing-runtime missing".to_string()));
         assert!(issues.contains(&"no default worker".to_string()));
-        assert!(status_config_health(&cfg).contains("issue(s):"));
+        let health = status_config_health(&cfg);
+        assert!(health.contains("issue(s):"));
+        assert!(health.contains("provider auth missing for 1: openai"));
+        assert!(health.contains("role/model wiring:"));
+    }
+
+    #[test]
+    fn status_issue_summary_groups_provider_auth_noise() {
+        let issues = vec![
+            "anthropic api key missing".to_string(),
+            "google api key missing".to_string(),
+            "minimax api key missing".to_string(),
+            "openai api key missing".to_string(),
+            "worker-cc runtime claude-code missing".to_string(),
+        ];
+
+        let summary = status_issue_summary(&issues, 3);
+
+        assert!(summary.contains("provider auth missing for 4: anthropic, google, minimax, openai"));
+        assert!(summary.contains("role/model wiring: worker-cc runtime claude-code missing"));
     }
 }
