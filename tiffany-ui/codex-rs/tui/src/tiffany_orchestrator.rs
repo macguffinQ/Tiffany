@@ -2160,12 +2160,19 @@ fn is_redundant_role_output(role: &str, content: &str) -> bool {
     if role == "worker" {
         return false;
     }
-    let lower = content.trim().to_ascii_lowercase();
+    let lines = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let lower = lines
+        .first()
+        .copied()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     match role {
-        "planner" => lower.starts_with("plan ready") && !lower.contains('\n'),
-        "critic" | "reviewer" => {
-            lower.starts_with("approved") && !lower.contains('\n') && !lower.contains("suggestion")
-        }
+        "planner" => lower.starts_with("plan ready") && lines.len() <= 1,
+        "critic" | "reviewer" => lower.starts_with("approved"),
         _ => false,
     }
 }
@@ -2822,6 +2829,8 @@ mod tests {
             visible_content(&event).as_deref(),
             Some("approved - 0 issue(s)")
         );
+        let visible = visible_content(&event).expect("visible approval summary");
+        assert!(is_redundant_role_output(&event.role, &visible));
     }
 
     #[test]
@@ -2852,6 +2861,7 @@ mod tests {
         assert!(visible.contains("needs changes - 1 issue(s)"));
         assert!(visible.contains("worker prompt conflicts with direct answer"));
         assert!(visible.contains("suggestions:"));
+        assert!(!is_redundant_role_output(&event.role, &visible));
     }
 
     #[test]
@@ -3090,13 +3100,17 @@ mod tests {
             "plan ready - 1 sub-task(s)\n  1. answer the user"
         ));
         assert!(is_redundant_role_output("critic", "approved (0 issue(s))"));
+        assert!(is_redundant_role_output(
+            "reviewer",
+            "approved - 0 issue(s)\n  suggestions:\n  - tighten wording"
+        ));
         assert!(!is_redundant_role_output(
             "reviewer",
             "needs changes (2 issue(s))"
         ));
         assert!(!is_redundant_role_output(
             "reviewer",
-            "approved - 0 issue(s)\n  suggestions:\n  - tighten wording"
+            "needs changes - 1 issue(s)\n  - missing final answer"
         ));
         assert!(!is_redundant_role_output("worker", "plan ready - no"));
     }
