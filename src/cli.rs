@@ -171,20 +171,16 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             )?;
             match action {
                 crate::SessionsCmd::List { limit } => {
-                    let sessions = store.list(limit)?;
+                    let sessions = store.list(10_000)?;
+                    let shown = sessions
+                        .iter()
+                        .take(limit as usize)
+                        .cloned()
+                        .collect::<Vec<_>>();
                     println!(
-                        "{:<36}  {:<12}  {:<10}  {}",
-                        "SESSION ID", "AGENT", "ROLE", "STARTED"
+                        "{}",
+                        orchestrator::session_display::format_session_list(&shown, &sessions)
                     );
-                    for s in sessions {
-                        println!(
-                            "{:<36}  {:<12}  {:<10}  {}",
-                            s.id,
-                            s.agent,
-                            s.role.as_str(),
-                            s.started_at.format("%Y-%m-%d %H:%M:%S")
-                        );
-                    }
                 }
                 crate::SessionsCmd::Show {
                     id,

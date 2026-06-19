@@ -1178,7 +1178,7 @@ fn help_text() -> String {
      /model [role]                 Show model assignments\n\
      /agent [role|clear]           Route future worker tasks\n\
      /usage [today|week|month|all] Show token/cost usage\n\
-     /sessions [n]                 List recent sessions\n\
+     /sessions [n]                 List recent sessions with tree/log shortcuts\n\
      /import-cc [project]          Import Claude Code sessions into chat history\n\
      /resume last                  Restore the last terminal chat conversation\n\
      /session [id|prefix|last]     Show one session summary\n\
@@ -2930,16 +2930,10 @@ fn format_file_tail(path: &Path, lines: usize, title: &str) -> String {
 }
 
 pub(super) fn format_sessions(store: &SessionStore, limit: usize) -> String {
-    match store.list(limit as u32) {
-        Ok(sessions) if sessions.is_empty() => "No sessions yet.".into(),
+    match store.list(10_000) {
         Ok(sessions) => {
-            let mut out = format!("Recent sessions ({}):", sessions.len());
-            for s in sessions {
-                out.push('\n');
-                out.push_str("  ");
-                out.push_str(&format_session_row(&s));
-            }
-            out
+            let shown = sessions.iter().take(limit).cloned().collect::<Vec<_>>();
+            crate::session_display::format_session_list(&shown, &sessions)
         }
         Err(e) => format!("Could not list sessions: {:#}", e),
     }
@@ -3252,26 +3246,6 @@ fn resolve_session(
     }
 }
 
-fn format_session_row(s: &Session) -> String {
-    format!(
-        "{} {} {} {:<10} {:<18} tok={} ${:.4}",
-        session_id8(s),
-        format_session_state(s),
-        s.started_at.format("%Y-%m-%d %H:%M"),
-        s.role.as_str(),
-        truncate_chars(
-            if s.agent.is_empty() {
-                "(agent)"
-            } else {
-                &s.agent
-            },
-            18
-        ),
-        s.token_in + s.token_out,
-        s.cost_usd
-    )
-}
-
 fn format_session_state(s: &Session) -> &'static str {
     if s.ended_at.is_some() {
         "done"
@@ -3539,6 +3513,30 @@ mod tests {
         assert!(tree.contains("Children (1):"));
         assert!(tree.contains("claude-code"));
         assert!(tree.contains("/log"));
+    }
+
+    #[test]
+    fn sessions_command_shows_roles_relations_and_shortcuts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let mut root = Session::new(uuid::Uuid::new_v4(), "orchestrator", Role::Orchestrator);
+        root.ended_at = Some(chrono::Utc::now());
+        let mut worker = Session::new(uuid::Uuid::new_v4(), "worker-codex", Role::Worker);
+        worker.parent_session_ids.push(root.id);
+        worker.ended_at = Some(chrono::Utc::now());
+        store.finalize(&root).unwrap();
+        store.finalize(&worker).unwrap();
+
+        let list = format_sessions(&store, 10);
+
+        assert!(list.contains("Recent sessions"));
+        assert!(list.contains("orchestrator"));
+        assert!(list.contains("worker"));
+        assert!(list.contains("children=1"));
+        assert!(list.contains("parent="));
+        assert!(list.contains("/tree"));
+        assert!(list.contains("/log"));
     }
 
     #[test]

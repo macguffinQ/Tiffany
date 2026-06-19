@@ -3,7 +3,7 @@
 use crate::agent_events;
 use crate::core::types::{Event, Session};
 use anyhow::{Context, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -122,6 +122,44 @@ pub fn format_session_header(session: &Session, log_path: &Path) -> String {
     )
 }
 
+pub fn format_session_list(display_sessions: &[Session], all_sessions: &[Session]) -> String {
+    if all_sessions.is_empty() {
+        return "No sessions yet.".to_string();
+    }
+
+    let mut child_counts = HashMap::new();
+    for session in all_sessions {
+        for parent_id in &session.parent_session_ids {
+            *child_counts.entry(*parent_id).or_insert(0usize) += 1;
+        }
+    }
+
+    let mut out = if display_sessions.len() == all_sessions.len() {
+        format!("Recent sessions ({})", display_sessions.len())
+    } else {
+        format!(
+            "Recent sessions (showing {} of {})",
+            display_sessions.len(),
+            all_sessions.len()
+        )
+    };
+    out.push_str("\n  id       state     role          agent            started       relation       actions");
+
+    if display_sessions.is_empty() {
+        out.push_str("\n  (none shown; increase the limit to see sessions)");
+    }
+
+    for session in display_sessions {
+        let children = child_counts.get(&session.id).copied().unwrap_or(0);
+        out.push('\n');
+        out.push_str("  ");
+        out.push_str(&format_session_list_row(session, children));
+    }
+
+    out.push_str("\n\nOpen: /tree <id> for parent/child links; /log <id> 120 for readable events.");
+    out
+}
+
 pub fn format_session_tree(root: &Session, all_sessions: &[Session], log_dir: &Path) -> String {
     let mut children = all_sessions
         .iter()
@@ -198,6 +236,42 @@ pub fn format_session_event_line(raw: &str) -> String {
     }
 }
 
+fn format_session_list_row(session: &Session, child_count: usize) -> String {
+    let short = short_session_id(session);
+    format!(
+        "{:<8} {:<9} {:<12} {:<16} {:<13} {:<14} /tree {}  /log {} 120",
+        short,
+        format!("{} {}", session_state_icon(session), session_state(session)),
+        session.role.as_str(),
+        truncate_chars(
+            if session.agent.trim().is_empty() {
+                "(agent)"
+            } else {
+                &session.agent
+            },
+            16
+        ),
+        session.started_at.format("%m-%d %H:%M"),
+        format_session_relation(session, child_count),
+        short,
+        short
+    )
+}
+
+fn format_session_relation(session: &Session, child_count: usize) -> String {
+    match (session.parent_session_ids.len(), child_count) {
+        (0, 0) => "solo".to_string(),
+        (0, children) => format!("children={children}"),
+        (1, 0) => format!("parent={}", short_uuid(&session.parent_session_ids[0])),
+        (parents, 0) => format!("parents={parents}"),
+        (1, children) => format!(
+            "p={} c={children}",
+            short_uuid(&session.parent_session_ids[0])
+        ),
+        (parents, children) => format!("p={parents} c={children}"),
+    }
+}
+
 fn format_tree_session_line(session: &Session) -> String {
     format!(
         "{} {} {:<12} {:<16} {}",
@@ -218,6 +292,10 @@ fn format_tree_session_line(session: &Session) -> String {
 
 fn short_session_id(session: &Session) -> String {
     session.id.to_string().chars().take(8).collect()
+}
+
+fn short_uuid(id: &uuid::Uuid) -> String {
+    id.to_string().chars().take(8).collect()
 }
 
 fn session_state(session: &Session) -> &'static str {
@@ -552,6 +630,25 @@ mod tests {
 
         assert!(!human.contains("system system"));
         assert_eq!(human.matches("final answer").count(), 1);
+    }
+
+    #[test]
+    fn formats_session_list_with_tree_and_log_shortcuts() {
+        let mut root = Session::new(Uuid::new_v4(), "orchestrator", Role::Orchestrator);
+        root.ended_at = Some(Utc::now());
+        let mut worker = Session::new(Uuid::new_v4(), "claude-code", Role::Worker);
+        worker.parent_session_ids.push(root.id);
+        worker.ended_at = Some(Utc::now());
+
+        let list = format_session_list(&[root.clone(), worker.clone()], &[root, worker]);
+
+        assert!(list.contains("Recent sessions (2)"));
+        assert!(list.contains("orchestrator"));
+        assert!(list.contains("children=1"));
+        assert!(list.contains("worker"));
+        assert!(list.contains("parent="));
+        assert!(list.contains("/tree"));
+        assert!(list.contains("/log"));
     }
 
     #[test]

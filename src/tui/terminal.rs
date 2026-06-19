@@ -1280,7 +1280,7 @@ fn terminal_help() -> String {
      /agent [role|clear]           Route future worker tasks\n\
      /model [role]                 Show model assignments\n\
      /usage [today|week|month|all] Show token/cost usage\n\
-     /sessions [n]                 List recent sessions\n\
+     /sessions [n]                 List recent sessions with tree/log shortcuts\n\
      /import-cc [project]          Import Claude Code sessions into chat history\n\
      /resume last                  Restore the last terminal chat conversation\n\
      /session [id|prefix|last]     Show one session summary\n\
