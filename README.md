@@ -325,10 +325,13 @@ orchestrator run "refactor the auth module" --tag refactor
 # 7. Override worker route
 orchestrator run "fix typo" --planner opus --worker codex
 
-# 8. Source checkout UI
+# 8. Watch the live pipeline as readable text
+orchestrator events "fix typo" --format text
+
+# 9. Source checkout UI
 ./scripts/tiffany-dev
 
-# 9. Browse past sessions
+# 10. Browse past sessions
 orchestrator sessions list
 orchestrator sessions show                    # latest session, human-readable
 orchestrator sessions show <id|prefix|last>          # human-readable by default
@@ -337,10 +340,10 @@ orchestrator sessions show <id|prefix|last> --tree   # parent/child run tree
 orchestrator sessions show <id|prefix|last> --flow   # readable orchestration/worker waterfall
 orchestrator sessions grep "rate limit" --limit 10
 
-# 10. See everything the orchestrator loaded
+# 11. See everything the orchestrator loaded
 orchestrator config
 
-# 11. Import your existing CC sessions
+# 12. Import your existing CC sessions
 cd ~/your-project  # where you used CC before
 orchestrator sessions import-cc
 ```
@@ -417,6 +420,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | Guided first-run setup for providers, models, and roles |
 | `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
+| `orchestrator events "..."` | Stream progress events; default JSONL is stable for UI adapters/scripts, `--format text` prints a readable planner/critic/worker/reviewer waterfall |
 | `orchestrator config provider` | Open the guided provider selector |
 | `orchestrator config provider setup <provider>` | Configure a provider from built-in presets |
 | `orchestrator config provider delete <provider>` | Delete one configured provider |

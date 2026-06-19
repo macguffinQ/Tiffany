@@ -5,7 +5,7 @@ use orchestrator::config::Config;
 use orchestrator::core::types::{Role, Session, Task, TaskStatus};
 use orchestrator::pipeline::orchestrator::Orchestrator;
 use orchestrator::roles::ab_judge::AbJudge;
-use orchestrator::tiffany_events::TiffanyProgressEvent;
+use orchestrator::tiffany_events::{TiffanyProgressEvent, TiffanyTextProgressFormatter};
 use orchestrator::tiffany_install;
 use orchestrator::{adapters, cc_config, mux, roles, runtime, storage};
 use std::collections::HashSet;
@@ -64,6 +64,7 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             reviewer,
             no_critic,
             no_reviewer,
+            format,
         } => {
             let cfg = Config::load(config_path)?;
             let orch = build_orchestrator(
@@ -84,12 +85,24 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let run = tokio::spawn(async move { orch.run_with_progress(task, tx).await });
             let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
+            let mut text_formatter = TiffanyTextProgressFormatter::new();
 
             while let Some(event) = rx.recv().await {
-                let line = serde_json::to_string(&TiffanyProgressEvent::from(event))?;
-                stdout.write_all(line.as_bytes()).await?;
-                stdout.write_all(b"\n").await?;
-                stdout.flush().await?;
+                match format {
+                    crate::EventsFormat::Json => {
+                        let line = serde_json::to_string(&TiffanyProgressEvent::from(event))?;
+                        stdout.write_all(line.as_bytes()).await?;
+                        stdout.write_all(b"\n").await?;
+                        stdout.flush().await?;
+                    }
+                    crate::EventsFormat::Text => {
+                        if let Some(line) = text_formatter.format(&event) {
+                            stdout.write_all(line.as_bytes()).await?;
+                            stdout.write_all(b"\n").await?;
+                            stdout.flush().await?;
+                        }
+                    }
+                }
             }
 
             run.await??;

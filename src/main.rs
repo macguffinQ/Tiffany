@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -69,7 +69,7 @@ enum Cmd {
         no_reviewer: bool,
     },
 
-    /// Stream orchestrator progress events as JSONL for tiffany-loop TUI
+    /// Stream orchestrator progress events for tiffany-loop TUI or humans
     Events {
         /// Task prompt
         prompt: String,
@@ -101,6 +101,10 @@ enum Cmd {
         /// Skip reviewer
         #[arg(long)]
         no_reviewer: bool,
+
+        /// Output format: json keeps the stable JSONL protocol; text is a readable waterfall
+        #[arg(long, value_enum, default_value_t = EventsFormat::Json)]
+        format: EventsFormat,
     },
 
     /// Open terminal chat
@@ -161,6 +165,12 @@ enum Cmd {
         #[command(subcommand)]
         action: ConfigCmd,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum EventsFormat {
+    Json,
+    Text,
 }
 
 #[derive(Subcommand)]
@@ -547,6 +557,21 @@ mod tests {
                 assert_eq!(limit, 5);
             }
             _ => panic!("unexpected sessions grep command"),
+        }
+    }
+
+    #[test]
+    fn events_format_defaults_to_json_and_accepts_text() {
+        let cli = Cli::parse_from(["orchestrator", "events", "hello"]);
+        match cli.cmd {
+            Cmd::Events { format, .. } => assert_eq!(format, EventsFormat::Json),
+            _ => panic!("unexpected events command"),
+        }
+
+        let cli = Cli::parse_from(["orchestrator", "events", "hello", "--format", "text"]);
+        match cli.cmd {
+            Cmd::Events { format, .. } => assert_eq!(format, EventsFormat::Text),
+            _ => panic!("unexpected events command"),
         }
     }
 }

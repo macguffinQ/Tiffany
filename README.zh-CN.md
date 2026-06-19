@@ -228,10 +228,13 @@ tiffany-loop
 # 5. 或者运行单次非交互任务
 orchestrator run "implement fibonacci in src/fib.rs"
 
-# 6. 从源码打开 tiffany-loop UI
+# 6. 用可读瀑布流查看实时编排过程
+orchestrator events "fix typo" --format text
+
+# 7. 从源码打开 tiffany-loop UI
 ./scripts/tiffany-dev
 
-# 7. 查看历史会话
+# 8. 查看历史会话
 orchestrator sessions list
 orchestrator sessions show                    # 最近一次会话，默认人类可读
 orchestrator sessions show <id|prefix|last>          # 默认人类可读
@@ -320,6 +323,7 @@ behavior:
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | 引导式配置 provider、model、role |
 | `orchestrator run "..."` | 执行一个任务；`--ab` 会比较两个已配置 worker 路线 |
+| `orchestrator events "..."` | 流式输出进度事件；默认 JSONL 给 UI adapter/脚本使用，`--format text` 输出可读的 planner/critic/worker/reviewer 瀑布流 |
 | `orchestrator config provider setup <provider>` | 按预设配置 provider |
 | `orchestrator config provider list|presets` | 查看 provider 配置或内置预设 |
 | `orchestrator roles list` | 查看已注册角色 |
