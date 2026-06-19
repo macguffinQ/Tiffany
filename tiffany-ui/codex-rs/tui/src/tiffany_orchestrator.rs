@@ -890,8 +890,11 @@ struct RoleSummary {
     name: String,
     model: String,
     display_model: Option<String>,
+    provider: Option<String>,
+    api_model: Option<String>,
     runtime: String,
     teams: bool,
+    health: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1118,29 +1121,56 @@ fn provider_summary_line(provider: &ProviderSummary) -> Line<'static> {
 }
 
 fn role_summary_line(role: &RoleSummary) -> Line<'static> {
-    let model = role.display_model.as_deref().unwrap_or(&role.model);
+    let target = role_target_label(role);
     let teams = if role.teams { "teams on" } else { "teams off" };
+    let (symbol, color, health) = role_health_status(role);
     Line::from(vec![
         Span::styled(
-            "  ✓ ",
-            Style::default()
-                .fg(TIFFANY_BLUE)
-                .add_modifier(Modifier::BOLD),
+            format!("  {symbol} "),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:<14}", role.name),
             Style::default().fg(TIFFANY_SOFT),
         ),
         Span::styled(
-            format!("{:<18}", truncate_text(model, 18)),
+            format!("{:<18}", truncate_text(&role.model, 18)),
             Style::default(),
         ),
         Span::styled(
             format!("{:<13}", role.runtime),
             Style::default().fg(Color::Gray),
         ),
-        Span::styled(teams, Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{:<32}", truncate_text(&target, 32)),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(format!("{teams:<11}"), Style::default().fg(Color::DarkGray)),
+        Span::styled(truncate_text(&health, 34), Style::default().fg(color)),
     ])
+}
+
+fn role_target_label(role: &RoleSummary) -> String {
+    match (
+        role.provider.as_deref().filter(|value| !value.is_empty()),
+        role.api_model.as_deref().filter(|value| !value.is_empty()),
+    ) {
+        (Some(provider), Some(api_model)) if api_model != "-" => format!("{provider}/{api_model}"),
+        (Some(provider), _) if provider != "-" => provider.to_string(),
+        (_, Some(api_model)) if api_model != "-" => api_model.to_string(),
+        _ => role
+            .display_model
+            .as_deref()
+            .unwrap_or(&role.model)
+            .to_string(),
+    }
+}
+
+fn role_health_status(role: &RoleSummary) -> (&'static str, Color, String) {
+    match role.health.as_deref().map(str::trim) {
+        Some("ready") | None | Some("") => ("✓", TIFFANY_BLUE, "ready".to_string()),
+        Some(health) => ("⚠", Color::Yellow, health.to_string()),
+    }
 }
 
 fn provider_auth_status(
@@ -1331,8 +1361,23 @@ fn parse_role_summary_line(line: &str) -> Option<RoleSummary> {
         name,
         model,
         display_model,
+        provider: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("provider="))
+            .map(ToString::to_string),
+        api_model: parts
+            .iter()
+            .find_map(|part| {
+                part.strip_prefix("api_model=")
+                    .or_else(|| part.strip_prefix("model_name="))
+            })
+            .map(ToString::to_string),
         runtime,
         teams,
+        health: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("health="))
+            .map(ToString::to_string),
     })
 }
 
@@ -2770,9 +2815,9 @@ mod tests {
     fn role_summary_lines_render_registered_roles() {
         let lines = role_summary_lines(
             "Registered roles:\n\
-               critic         model=minimax-m3-claude (MiniMax-M3) runtime=claude-code  teams=false\n\
-               worker-cc      model=minimax-m3-claude (MiniMax-M3) runtime=claude-code  teams=true\n\
-               worker-codex   model=minimax-m3-codex (MiniMax-M3) runtime=codex        teams=false\n\
+               critic         model=minimax-m3-claude provider=minimax api_model=MiniMax-M3 runtime=claude-code teams=false health=ready\n\
+               worker-cc      model=minimax-m3-claude provider=minimax api_model=MiniMax-M3 runtime=claude-code teams=true health=ready\n\
+               worker-codex   model=minimax-m3-codex provider=minimax api_model=MiniMax-M3 runtime=codex teams=false health=runtime-missing:codex\n\
              \n\
              Register: orchestrator roles register <role> --model <model-id> --runtime <runtime-id>\n",
             "roles",
@@ -2783,10 +2828,12 @@ mod tests {
         assert!(text.contains("✓ roles  3 registered"));
         assert!(text.contains("critic"));
         assert!(text.contains("MiniMax-M3"));
+        assert!(text.contains("minimax/MiniMax-M3"));
         assert!(text.contains("worker-cc"));
         assert!(text.contains("teams on"));
         assert!(text.contains("worker-codex"));
         assert!(text.contains("codex"));
+        assert!(text.contains("runtime-missing:codex"));
         assert!(text.contains("next  /doctor  verify the orchestration chain"));
         assert!(!text.contains("Registered roles:"));
         assert!(!text.contains("Register: orchestrator"));
@@ -2803,6 +2850,7 @@ mod tests {
 
         assert!(text.contains("✓ role  worker-codex configured"));
         assert!(text.contains("worker-codex"));
+        assert!(text.contains("MiniMax-M3"));
         assert!(text.contains("teams off"));
     }
 

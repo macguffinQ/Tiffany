@@ -1255,16 +1255,41 @@ fn role_detail_for_cli(
     role: &str,
     role_cfg: &orchestrator::config::RoleConfig,
 ) -> String {
-    let model = cfg
-        .models
-        .iter()
-        .find(|m| m.id == role_cfg.model)
-        .map(|m| format!("{} ({})", m.id, m.name))
-        .unwrap_or_else(|| role_cfg.model.clone());
+    let model_entry = cfg.models.iter().find(|m| m.id == role_cfg.model);
+    let model = model_entry
+        .map(|m| m.id.as_str())
+        .unwrap_or(role_cfg.model.as_str());
+    let provider = model_entry.map(|m| m.provider.as_str()).unwrap_or("-");
+    let api_model = model_entry.map(|m| m.name.as_str()).unwrap_or("-");
+    let health = role_health_for_cli(cfg, role_cfg, model_entry);
     format!(
-        "{:<14} model={:<28} runtime={:<12} teams={}",
-        role, model, role_cfg.runtime, role_cfg.agent_teams
+        "{:<14} model={:<18} provider={:<12} api_model={:<28} runtime={:<12} teams={} health={}",
+        role, model, provider, api_model, role_cfg.runtime, role_cfg.agent_teams, health
     )
+}
+
+fn role_health_for_cli(
+    cfg: &Config,
+    role_cfg: &orchestrator::config::RoleConfig,
+    model_entry: Option<&orchestrator::config::ModelConfig>,
+) -> String {
+    let mut issues = Vec::new();
+    match model_entry {
+        Some(model) => {
+            if !cfg.providers.contains_key(&model.provider) {
+                issues.push(format!("provider-missing:{}", model.provider));
+            }
+        }
+        None => issues.push(format!("model-missing:{}", role_cfg.model)),
+    }
+    if cfg.runtime_config(&role_cfg.runtime).is_none() {
+        issues.push(format!("runtime-missing:{}", role_cfg.runtime));
+    }
+    if issues.is_empty() {
+        "ready".to_string()
+    } else {
+        issues.join(",")
+    }
 }
 
 fn available_models_for_cli(cfg: &Config) -> String {
@@ -3778,6 +3803,30 @@ mod tests {
             provider_model_role_summary(&cfg, "missing"),
             ("-".to_string(), "-".to_string())
         );
+    }
+
+    #[test]
+    fn role_detail_for_cli_surfaces_provider_api_model_and_health() {
+        let mut cfg = config_with_models();
+        cfg.providers
+            .insert("anthropic".to_string(), provider("anthropic"));
+
+        let planner = cfg.roles.get("planner").unwrap();
+        let detail = role_detail_for_cli(&cfg, "planner", planner);
+        assert!(detail.contains("model=sonnet"));
+        assert!(detail.contains("provider=anthropic"));
+        assert!(detail.contains("api_model=claude-sonnet-4-6"));
+        assert!(detail.contains("runtime=claude-code"));
+        assert!(detail.contains("health=ready"));
+
+        let broken = RoleConfig {
+            model: "missing-model".to_string(),
+            runtime: "missing-runtime".to_string(),
+            agent_teams: false,
+        };
+        let detail = role_detail_for_cli(&cfg, "broken", &broken);
+        assert!(detail.contains("health=model-missing:missing-model"));
+        assert!(detail.contains("runtime-missing:missing-runtime"));
     }
 
     #[test]
