@@ -182,6 +182,52 @@ async fn slash_roles_dispatches_to_tiffany_orchestrator() {
 }
 
 #[tokio::test]
+async fn slash_doctor_dispatches_to_tiffany_orchestrator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.handle_slash_command_dispatch(SlashCommand::Doctor);
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorDoctorCommand { args }) => {
+            assert_eq!(args, "");
+        }
+        other => panic!("expected TiffanyOrchestratorDoctorCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_doctor_inline_args_dispatch_to_tiffany_orchestrator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command_with_args(SlashCommand::Doctor, "run".to_string(), Vec::new());
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorDoctorCommand { args }) => {
+            assert_eq!(args, "run");
+        }
+        other => panic!("expected TiffanyOrchestratorDoctorCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_doctor_guides_when_not_in_orchestrator_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_slash_command_dispatch(SlashCommand::Doctor);
+
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("tiffany-loop orchestrator mode"));
+            assert!(rendered.contains("Usage: /doctor [run]"));
+        }
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_role_bare_opens_registration_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);

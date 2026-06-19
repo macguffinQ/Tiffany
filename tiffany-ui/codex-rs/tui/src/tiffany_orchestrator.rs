@@ -202,6 +202,42 @@ pub(crate) fn spawn_provider_command(
     });
 }
 
+pub(crate) fn spawn_doctor_command(
+    app_event_tx: AppEventSender,
+    config: TiffanyOrchestratorConfig,
+    args: String,
+) {
+    tokio::spawn(async move {
+        let command_args = match doctor_command_args(&args) {
+            Ok(command_args) => command_args,
+            Err(err) => {
+                emit_lines(
+                    &app_event_tx,
+                    vec![
+                        status_line("✗", Color::Red, "doctor", &err),
+                        body_line("Usage: /doctor [run]", true),
+                    ],
+                );
+                return;
+            }
+        };
+
+        match run_orchestrator_command(&config, &command_args).await {
+            Ok(output) => emit_doctor_output(&app_event_tx, output),
+            Err(err) => emit_lines(
+                &app_event_tx,
+                spawn_error_lines(
+                    "doctor",
+                    "✗",
+                    Color::Red,
+                    &format!("failed to run doctor command - {err}"),
+                    &err.to_string(),
+                ),
+            ),
+        }
+    });
+}
+
 pub(crate) fn idle_intro_lines() -> Vec<Line<'static>> {
     vec![
         brand_line("orchestration shell"),
@@ -443,6 +479,19 @@ fn provider_command_args(args: &str) -> Result<Vec<Vec<String>>, String> {
     }
 }
 
+fn doctor_command_args(args: &str) -> Result<Vec<String>, String> {
+    let parts = args
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        [] => Ok(vec!["doctor".to_string()]),
+        [arg] if matches!(arg.as_str(), "run" | "check" | "now") => Ok(vec!["doctor".to_string()]),
+        [arg] => Err(format!("unknown /doctor command '{arg}'")),
+        _ => Err("doctor accepts at most one argument".to_string()),
+    }
+}
+
 fn provider_delete_args(parts: &[String]) -> Result<Vec<Vec<String>>, String> {
     if parts.len() != 1 {
         return Err("provider delete needs <provider>".to_string());
@@ -623,6 +672,11 @@ fn emit_command_output(
     command_args: &[String],
     output: std::process::Output,
 ) {
+    if label == "doctor" {
+        emit_doctor_output(app_event_tx, output);
+        return;
+    }
+
     if output.status.success()
         && let Some(lines) = concise_success_lines(label, command_args, &output)
     {
@@ -669,6 +723,42 @@ fn emit_command_output(
         lines.push(body_line(hint, true));
     }
     emit_lines(app_event_tx, lines);
+}
+
+fn emit_doctor_output(app_event_tx: &AppEventSender, output: std::process::Output) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let text = format!("{stdout}{stderr}");
+    let has_issues = text.contains("issue(s) found")
+        || text.lines().any(|line| line.trim_start().starts_with('✗'));
+    let (symbol, color, message) = if !output.status.success() {
+        ("✗", Color::Red, "command failed")
+    } else if has_issues {
+        ("⚠", Color::Yellow, "issues found")
+    } else {
+        ("✓", TIFFANY_BLUE, "ready")
+    };
+    let mut lines = vec![status_line(symbol, color, "doctor", message)];
+    let mut emitted_body = false;
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.trim().is_empty() {
+            continue;
+        }
+        emitted_body = true;
+        lines.push(body_line(line, doctor_line_is_dim(line)));
+    }
+    if !emitted_body {
+        lines.push(body_line("no output", true));
+    }
+    emit_lines(app_event_tx, lines);
+}
+
+fn doctor_line_is_dim(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("hint:")
+        || trimmed.starts_with("Next steps:")
+        || trimmed.chars().next().is_some_and(|ch| ch.is_ascii_digit())
 }
 
 fn concise_success_lines(
@@ -1717,6 +1807,33 @@ mod tests {
         assert_eq!(lines[0].spans[3].style.fg, Some(TIFFANY_SOFT));
         assert_eq!(lines[2].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[3].spans[2].style.fg, Some(TIFFANY_SOFT));
+    }
+
+    #[test]
+    fn doctor_command_args_accepts_read_only_diagnostics() {
+        assert_eq!(doctor_command_args("").unwrap(), strings(&["doctor"]));
+        assert_eq!(doctor_command_args("run").unwrap(), strings(&["doctor"]));
+        assert_eq!(doctor_command_args("check").unwrap(), strings(&["doctor"]));
+        assert!(
+            doctor_command_args("delete")
+                .unwrap_err()
+                .contains("unknown")
+        );
+        assert!(
+            doctor_command_args("run now")
+                .unwrap_err()
+                .contains("at most")
+        );
+    }
+
+    #[test]
+    fn doctor_output_dims_hints_but_not_issue_lines() {
+        assert!(doctor_line_is_dim("  hint: configure provider auth"));
+        assert!(doctor_line_is_dim("Next steps:"));
+        assert!(doctor_line_is_dim("1. Run `orchestrator setup`"));
+        assert!(!doctor_line_is_dim("✗ openai: api key missing"));
+        assert!(!doctor_line_is_dim("⚠ 3 issue(s) found"));
+        assert!(!doctor_line_is_dim("✓ config parsed"));
     }
 
     #[test]

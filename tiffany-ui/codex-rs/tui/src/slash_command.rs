@@ -44,6 +44,7 @@ pub enum SlashCommand {
     Provider,
     Role,
     Roles,
+    Doctor,
     Agent,
     Side,
     Btw,
@@ -129,6 +130,7 @@ impl SlashCommand {
             SlashCommand::Provider => "configure tiffany-loop orchestrator providers",
             SlashCommand::Role => "register one tiffany-loop orchestrator role",
             SlashCommand::Roles => "inspect or register tiffany-loop orchestrator roles",
+            SlashCommand::Doctor => "diagnose tiffany-loop orchestrator setup",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Side | SlashCommand::Btw => {
                 "start a side conversation in an ephemeral fork"
@@ -169,6 +171,7 @@ impl SlashCommand {
                 | SlashCommand::Provider
                 | SlashCommand::Role
                 | SlashCommand::Roles
+                | SlashCommand::Doctor
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
@@ -239,6 +242,7 @@ impl SlashCommand {
             | SlashCommand::Provider
             | SlashCommand::Role
             | SlashCommand::Roles
+            | SlashCommand::Doctor
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
@@ -341,6 +345,8 @@ mod tests {
         assert!(SlashCommand::Role.supports_inline_args());
         assert!(SlashCommand::Roles.available_during_task());
         assert!(SlashCommand::Roles.supports_inline_args());
+        assert!(SlashCommand::Doctor.available_during_task());
+        assert!(SlashCommand::Doctor.supports_inline_args());
     }
 
     #[test]

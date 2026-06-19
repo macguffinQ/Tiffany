@@ -20,6 +20,8 @@ All notable changes to this project will be documented in this file.
 - Added a lightweight internal config health line to `orchestrator status`.
 - Made `orchestrator status` prefer setup/doctor repair guidance before launching
   the TUI when provider, model, role, or runtime wiring is unhealthy.
+- Added native `/doctor` support in the tiffany-loop orchestrator TUI, routing
+  diagnostics through the orchestrator bridge with issue-aware status styling.
 
 ## [0.1.11] - 2026-06-19
 

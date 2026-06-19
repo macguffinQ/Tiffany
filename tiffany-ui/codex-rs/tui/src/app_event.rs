@@ -249,6 +249,11 @@ pub(crate) enum AppEvent {
         args: String,
     },
 
+    /// Run tiffany-loop orchestrator diagnostics from the TUI.
+    TiffanyOrchestratorDoctorCommand {
+        args: String,
+    },
+
     /// Restore an output-free interrupted turn into the composer and roll it back.
     RestoreCancelledTurn(UserMessage),
 
