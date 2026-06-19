@@ -2,8 +2,9 @@
 
 use anyhow::{Context, Result};
 use orchestrator::config::Config;
-use orchestrator::core::types::Task;
+use orchestrator::core::types::{Role, Session, Task, TaskStatus};
 use orchestrator::pipeline::orchestrator::Orchestrator;
+use orchestrator::roles::ab_judge::AbJudge;
 use orchestrator::tiffany_events::TiffanyProgressEvent;
 use orchestrator::tiffany_install;
 use orchestrator::{adapters, cc_config, mux, roles, runtime, storage};
@@ -37,9 +38,6 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             no_critic,
             no_reviewer,
         } => {
-            if ab {
-                anyhow::bail!("A/B dual-run mode is not implemented yet; rerun without --ab");
-            }
             let cfg = Config::load(config_path)?;
             let orch = build_orchestrator(
                 &cfg,
@@ -50,22 +48,11 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                 reviewer.as_deref(),
             )
             .await?;
-            let mut task = Task::new(prompt);
-            task.tags = tag;
-            if let Some(w) = worker {
-                task.agent_hint = runtime::normalize_agent_hint_with_roles(&w, &cfg.roles);
+            if ab {
+                run_ab_mode(&cfg, &orch, prompt, tag, worker.as_deref()).await
+            } else {
+                run_single_mode(&cfg, &orch, prompt, tag, worker.as_deref()).await
             }
-            let results = orch.run(task).await?;
-            println!("\n✓ Completed {} task(s):", results.len());
-            for t in &results {
-                println!(
-                    "  - {} [{}] {}",
-                    t.id,
-                    format!("{:?}", t.role).to_lowercase(),
-                    t.prompt
-                );
-            }
-            Ok(())
         }
 
         crate::Cmd::Events {
@@ -443,6 +430,263 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             ),
             crate::ConfigCmd::UseRoleset { name } => apply_roleset(config_path, &name),
         },
+    }
+}
+
+async fn run_single_mode(
+    cfg: &Config,
+    orch: &Orchestrator,
+    prompt: String,
+    tags: Vec<String>,
+    worker: Option<&str>,
+) -> Result<()> {
+    let mut task = Task::new(prompt);
+    task.tags = tags;
+    if let Some(worker) = worker {
+        task.agent_hint = runtime::normalize_agent_hint_with_roles(worker, &cfg.roles);
+    }
+    let results = orch.run(task).await?;
+    print_completed_tasks(&results);
+    Ok(())
+}
+
+async fn run_ab_mode(
+    cfg: &Config,
+    orch: &Orchestrator,
+    prompt: String,
+    tags: Vec<String>,
+    worker: Option<&str>,
+) -> Result<()> {
+    let routes = ab_worker_routes(cfg, worker)?;
+    println!(
+        "A/B dual-run: {} vs {}",
+        routes[0].as_str(),
+        routes[1].as_str()
+    );
+
+    let mut summaries = Vec::new();
+    for (idx, route) in routes.iter().enumerate() {
+        println!("\n[A{}] running worker route: {}", idx + 1, route);
+        let mut task = Task::new(prompt.clone());
+        task.tags = tags.clone();
+        task.agent_hint = Some(route.clone());
+        let run = orch.run(task).await;
+        let summary = AbRunSummary::from_run(idx, route.clone(), run, orch).await;
+        println!(
+            "[A{}] {} — {} completed task(s), score bytes={}",
+            idx + 1,
+            summary.status_label(),
+            summary.completed_count,
+            summary.score_bytes
+        );
+        if let Some(error) = summary.error.as_deref() {
+            println!("[A{}] error: {}", idx + 1, error);
+        }
+        summaries.push(summary);
+    }
+
+    let winner = pick_ab_winner(&summaries)?;
+    let winner_summary = summaries
+        .get(winner)
+        .expect("AbJudge returned an existing route index");
+    println!(
+        "\n✓ A/B selected: A{} ({})",
+        winner + 1,
+        winner_summary.route
+    );
+    print_ab_summary(&summaries);
+    Ok(())
+}
+
+fn print_completed_tasks(results: &[Task]) {
+    println!("\n✓ Completed {} task(s):", results.len());
+    for t in results {
+        println!(
+            "  - {} [{}] {}",
+            t.id,
+            format!("{:?}", t.role).to_lowercase(),
+            t.prompt
+        );
+    }
+}
+
+fn ab_worker_routes(cfg: &Config, requested_worker: Option<&str>) -> Result<[String; 2]> {
+    let available = configured_worker_routes(cfg);
+    let Some(first) = requested_worker
+        .and_then(|worker| runtime::normalize_agent_hint_with_roles(worker, &cfg.roles))
+        .or_else(|| available.first().cloned())
+    else {
+        anyhow::bail!(
+            "A/B dual-run needs at least two configured worker roles. Add worker-cc and worker-codex with `orchestrator roles register ...`."
+        );
+    };
+
+    if !cfg.roles.contains_key(&first) {
+        anyhow::bail!(
+            "A/B worker route '{}' is not registered. Available worker roles: {}",
+            first,
+            available.join(", ")
+        );
+    }
+
+    let second = available
+        .iter()
+        .find(|route| route.as_str() != first.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "A/B dual-run needs two distinct configured worker roles. Available worker roles: {}",
+                if available.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    available.join(", ")
+                }
+            )
+        })?;
+
+    Ok([first, second])
+}
+
+fn configured_worker_routes(cfg: &Config) -> Vec<String> {
+    let mut routes = cfg
+        .roles
+        .iter()
+        .filter(|(name, role)| {
+            is_worker_route_name(name) && cfg.runtime_config(&role.runtime).is_some()
+        })
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    routes.sort_by_key(|name| worker_route_sort_key(name));
+    routes.dedup();
+    routes
+}
+
+fn worker_route_sort_key(name: &str) -> (u8, String) {
+    match name {
+        "worker-cc" => (0, name.to_string()),
+        "worker-codex" => (1, name.to_string()),
+        _ => (2, name.to_string()),
+    }
+}
+
+fn is_worker_route_name(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    (normalized.contains("worker") || normalized.contains("executor"))
+        && !normalized.contains("reviewer")
+}
+
+#[derive(Debug)]
+struct AbRunSummary {
+    index: usize,
+    route: String,
+    completed_count: usize,
+    score_bytes: usize,
+    ok: bool,
+    error: Option<String>,
+}
+
+impl AbRunSummary {
+    async fn from_run(
+        index: usize,
+        route: String,
+        run: Result<Vec<Task>>,
+        orch: &Orchestrator,
+    ) -> Self {
+        match run {
+            Ok(tasks) => {
+                let score_bytes = ab_score_bytes(&tasks, orch).await;
+                let ok = tasks
+                    .iter()
+                    .any(|task| task.status == TaskStatus::Completed);
+                Self {
+                    index,
+                    route,
+                    completed_count: tasks
+                        .iter()
+                        .filter(|task| task.status == TaskStatus::Completed)
+                        .count(),
+                    score_bytes,
+                    ok,
+                    error: None,
+                }
+            }
+            Err(err) => Self {
+                index,
+                route,
+                completed_count: 0,
+                score_bytes: usize::MAX / 4,
+                ok: false,
+                error: Some(format!("{err:#}")),
+            },
+        }
+    }
+
+    fn status_label(&self) -> &'static str {
+        if self.ok {
+            "ok"
+        } else {
+            "failed"
+        }
+    }
+}
+
+async fn ab_score_bytes(tasks: &[Task], orch: &Orchestrator) -> usize {
+    let worker_sessions = worker_sessions_for_tasks(orch, tasks);
+    let mut total = 0usize;
+    for session in worker_sessions {
+        let Some(adapter) = orch.adapters.get(&session.agent) else {
+            continue;
+        };
+        match adapter.get_diff(&session).await {
+            Ok(diff) if !diff.trim().is_empty() => {
+                total = total.saturating_add(diff.len());
+            }
+            _ => {
+                total = total.saturating_add(session_log_size(orch, &session));
+            }
+        }
+    }
+    total
+}
+
+fn worker_sessions_for_tasks(orch: &Orchestrator, tasks: &[Task]) -> Vec<Session> {
+    let task_ids = tasks
+        .iter()
+        .map(|task| task.id)
+        .collect::<std::collections::HashSet<_>>();
+    orch.session_store
+        .list(10_000)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|session| session.role == Role::Worker && task_ids.contains(&session.task_id))
+        .collect()
+}
+
+fn session_log_size(orch: &Orchestrator, session: &Session) -> usize {
+    std::fs::metadata(orch.session_store.log_path(session.id))
+        .map(|metadata| usize::try_from(metadata.len()).unwrap_or(usize::MAX / 4))
+        .unwrap_or(0)
+}
+
+fn pick_ab_winner(summaries: &[AbRunSummary]) -> Result<usize> {
+    let judge_inputs = summaries
+        .iter()
+        .map(|summary| ("x".repeat(summary.score_bytes.min(1024 * 1024)), summary.ok))
+        .collect::<Vec<_>>();
+    AbJudge::pick(&judge_inputs)
+}
+
+fn print_ab_summary(summaries: &[AbRunSummary]) {
+    println!("\nA/B summary:");
+    for summary in summaries {
+        println!(
+            "  A{} {:<18} status={} completed={} score_bytes={}",
+            summary.index + 1,
+            summary.route,
+            summary.status_label(),
+            summary.completed_count,
+            summary.score_bytes
+        );
     }
 }
 
@@ -4088,6 +4332,96 @@ mod tests {
             "TIFFANY_MINIMAX_API_KEY".to_string()
         )));
         assert!(!format!("{spec:?}").contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn ab_worker_routes_choose_two_configured_workers() {
+        let mut cfg = config_with_models();
+        cfg.roles.insert(
+            "worker-codex".to_string(),
+            RoleConfig {
+                model: "gpt4o".to_string(),
+                runtime: "codex".to_string(),
+                agent_teams: false,
+            },
+        );
+        cfg.roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "sonnet".to_string(),
+                runtime: "claude-code".to_string(),
+                agent_teams: true,
+            },
+        );
+
+        assert_eq!(
+            ab_worker_routes(&cfg, None).unwrap(),
+            ["worker-cc".to_string(), "worker-codex".to_string()]
+        );
+        assert_eq!(
+            ab_worker_routes(&cfg, Some("codex")).unwrap(),
+            ["worker-codex".to_string(), "worker-cc".to_string()]
+        );
+    }
+
+    #[test]
+    fn ab_worker_routes_require_two_distinct_workers() {
+        let mut cfg = config_with_models();
+        cfg.roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "sonnet".to_string(),
+                runtime: "claude-code".to_string(),
+                agent_teams: true,
+            },
+        );
+
+        let err = ab_worker_routes(&cfg, None).unwrap_err();
+
+        assert!(format!("{err:#}").contains("two distinct configured worker roles"));
+    }
+
+    #[test]
+    fn ab_winner_prefers_success_then_smaller_score() {
+        let summaries = vec![
+            AbRunSummary {
+                index: 0,
+                route: "worker-cc".to_string(),
+                completed_count: 1,
+                score_bytes: 400,
+                ok: true,
+                error: None,
+            },
+            AbRunSummary {
+                index: 1,
+                route: "worker-codex".to_string(),
+                completed_count: 0,
+                score_bytes: 1,
+                ok: false,
+                error: Some("failed".to_string()),
+            },
+        ];
+        assert_eq!(pick_ab_winner(&summaries).unwrap(), 0);
+
+        let summaries = vec![
+            AbRunSummary {
+                index: 0,
+                route: "worker-cc".to_string(),
+                completed_count: 1,
+                score_bytes: 400,
+                ok: true,
+                error: None,
+            },
+            AbRunSummary {
+                index: 1,
+                route: "worker-codex".to_string(),
+                completed_count: 1,
+                score_bytes: 40,
+                ok: true,
+                error: None,
+            },
+        ];
+        assert_eq!(pick_ab_winner(&summaries).unwrap(), 1);
     }
 
     #[test]

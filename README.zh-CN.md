@@ -131,7 +131,7 @@ tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.
 
 ## 主要特性
 
-- **角色编排**：Planner、Critic、Worker、Reviewer、Router、A/B Judge。
+- **角色编排**：Planner、Critic、Worker、Reviewer、Router、A/B Judge；`orchestrator run "..." --ab` 会用两个已配置 worker 路线各跑一遍，成功优先，成功状态相同则按 diff/日志大小选择更小的一侧。
 - **多运行时**：Claude Code、Codex CLI、直接 API。
 - **多模型/多提供商**：Anthropic、OpenAI、Google Gemini、Ollama、本地或 OpenAI 兼容端点。
 - **终端 TUI**：主线切到完整 tiffany-loop UI；旧 `orchestrator tui` 仅保留兼容。
@@ -319,7 +319,7 @@ behavior:
 | `tiffany-loop` | 安装后打开主 tiffany-loop UI |
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | 引导式配置 provider、model、role |
-| `orchestrator run "..."` | 执行一个任务 |
+| `orchestrator run "..."` | 执行一个任务；`--ab` 会比较两个已配置 worker 路线 |
 | `orchestrator config provider setup <provider>` | 按预设配置 provider |
 | `orchestrator config provider list|presets` | 查看 provider 配置或内置预设 |
 | `orchestrator roles list` | 查看已注册角色 |

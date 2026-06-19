@@ -137,7 +137,7 @@ Installed builds include `tiffany-loop`, `orchestrator`, and the compatibility a
 | **Worker (CC)** | Claude Sonnet (Agent Teams) | Any model + runtime |
 | **Worker (Codex)** | GPT-4o | Any model + runtime |
 | **Reviewer** | GPT-4o-mini | Any model + Claude/Codex CLI runtime |
-| **A/B Judge** | Built-in (tests + diff size) | Custom rule |
+| **A/B Judge** | Built-in success + diff/log-size heuristic | Custom rule |
 
 Providers: **Anthropic**, **OpenAI**, **Google Gemini**, **Ollama** (local), or any OpenAI-compatible endpoint.
 
@@ -503,6 +503,8 @@ Troubleshooting first:
 - Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, and worker CLI binaries.
 - For model errors, confirm the role's internal model id points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>`.
 
+`orchestrator run "..." --ab` runs the task through two configured worker roles, for example `worker-cc` and `worker-codex`. If `--worker <role>` is supplied, that route becomes side A and Tiffany picks another configured worker for side B. The built-in judge prefers a successful side; when both succeed or both fail, it prefers the smaller diff, falling back to session-log size when a diff is unavailable.
+
 Input behavior:
 
 - Press `Enter` to send.
@@ -746,7 +748,7 @@ orchestrator/
 - [x] Conversation flow graph summaries
 - [x] Patch checkpoint and rollback commands
 - [x] Optional zellij tab + --detach
-- [x] A/B judge
+- [x] A/B judge for two configured worker routes
 - [x] Token/cost usage command
 - [x] Webhook server (axum)
 - [x] Streaming process summaries in terminal chat

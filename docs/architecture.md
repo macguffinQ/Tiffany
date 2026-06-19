@@ -22,7 +22,7 @@ and `tiffany` for compatibility.
 - **Router** (built-in) — 3-tier resolution: CLI flag > task tag > config default
 - **Worker** (CC / Codex / direct) — executes a sub-task
 - **Reviewer** (default: Codex cheap model) — gates worker output before merge
-- **A/B Judge** (built-in) — picks winner from two parallel runs
+- **A/B Judge** (built-in) — picks a winner from two configured worker-route runs using success status, diff size, and session-log size fallback
 
 ## Pipeline
 
