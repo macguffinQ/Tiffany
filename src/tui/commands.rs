@@ -1656,20 +1656,29 @@ fn format_roles_registry(config: &Config, input: &InputState) -> String {
     out.push_str(
         "\n\nActions: /roles use <role>, /role <role>, /roles route, /roles save <role> <model> <runtime>",
     );
+    out.push_str("\nHealth: fix provider/auth with /provider, fix role/model/runtime with /role <role>, verify with /doctor.");
     out
 }
 
 fn format_role_detail_line(config: &Config, role: &str) -> String {
     let Some(role_cfg) = config.roles.get(role) else {
-        return format!("{} {:<18} missing", role_icon(role), role);
+        return format!(
+            "{} {:<18} missing  action=/role {}",
+            role_icon(role),
+            role,
+            role
+        );
     };
+    let model = role_model_display(config, &role_cfg.model);
+    let health = role_health_label(config, role_cfg);
     format!(
-        "{} {:<18} {:<12} {:<26} teams={}",
+        "{} {:<18} {:<12} {:<48} teams={}  {}",
         role_icon(role),
         role,
         role_cfg.runtime,
-        truncate_chars(&model_label(config, &role_cfg.model), 26),
-        on_off(role_cfg.agent_teams)
+        truncate_chars(&model, 48),
+        on_off(role_cfg.agent_teams),
+        health
     )
 }
 
@@ -1741,11 +1750,63 @@ fn workflow_role_line(config: &Config, role: &str) -> String {
     let Some(role_cfg) = config.roles.get(role) else {
         return "(missing)".into();
     };
+    let health = role_health_label(config, role_cfg);
     format!(
-        "{} · {} · {}",
+        "{} · {} · {} · {}",
         role,
         role_cfg.runtime,
-        model_label(config, &role_cfg.model)
+        role_model_display(config, &role_cfg.model),
+        health
+    )
+}
+
+fn role_model_display(config: &Config, model_id: &str) -> String {
+    match config.models.iter().find(|model| model.id == model_id) {
+        Some(model) => format!("{} -> {}/{}", model.id, model.provider, model.name),
+        None => format!("{model_id} -> model missing"),
+    }
+}
+
+fn role_health_label(config: &Config, role_cfg: &RoleConfig) -> String {
+    let mut issues = Vec::new();
+    if config.runtime_config(&role_cfg.runtime).is_none() {
+        issues.push(format!("runtime missing: {}", role_cfg.runtime));
+    }
+
+    match config
+        .models
+        .iter()
+        .find(|model| model.id == role_cfg.model)
+    {
+        Some(model) => match config.providers.get(&model.provider) {
+            Some(provider) => {
+                if provider_requires_key(provider.kind.as_str())
+                    && provider
+                        .api_key
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .is_none()
+                {
+                    issues.push(format!("auth unset: {}", model.provider));
+                }
+            }
+            None => issues.push(format!("provider missing: {}", model.provider)),
+        },
+        None => issues.push(format!("model missing: {}", role_cfg.model)),
+    }
+
+    if issues.is_empty() {
+        "✓ ready".into()
+    } else {
+        format!("⚠ {}", issues.join("; "))
+    }
+}
+
+fn provider_requires_key(kind: &str) -> bool {
+    !matches!(
+        kind.trim().to_ascii_lowercase().as_str(),
+        "ollama" | "local"
     )
 }
 
@@ -3966,9 +4027,52 @@ behavior:
         let registry = input.transcript.last().expect("roles response");
         assert!(registry.content.contains("Role registry"));
         assert!(registry.content.contains("worker-cc"));
+        assert!(registry.content.contains("Health: fix provider/auth"));
 
         handle_slash_command("/roles use worker-cc", &store, &cfg, &mut input);
         assert_eq!(input.agent_hint.as_deref(), Some("worker-cc"));
+    }
+
+    #[test]
+    fn roles_registry_surfaces_provider_model_and_health() {
+        let mut cfg = test_config();
+        cfg.providers.insert(
+            "anthropic".into(),
+            crate::config::ProviderConfig {
+                kind: "anthropic".into(),
+                api_key: Some("sk-test".into()),
+                base_url: None,
+            },
+        );
+        cfg.providers.insert(
+            "openai".into(),
+            crate::config::ProviderConfig {
+                kind: "openai".into(),
+                api_key: None,
+                base_url: Some("https://api.openai.com/v1".into()),
+            },
+        );
+        cfg.roles.insert(
+            "broken".into(),
+            RoleConfig {
+                model: "missing-model".into(),
+                runtime: "missing-runtime".into(),
+                agent_teams: false,
+            },
+        );
+
+        let planner = format_role_detail_line(&cfg, "planner");
+        assert!(planner.contains("sonnet -> anthropic/claude-sonnet-4-6"));
+        assert!(planner.contains("✓ ready"));
+
+        let codex = format_role_detail_line(&cfg, "worker-codex");
+        assert!(codex.contains("gpt4o -> openai/gpt-4o"));
+        assert!(codex.contains("auth unset: openai"));
+
+        let broken = format_role_detail_line(&cfg, "broken");
+        assert!(broken.contains("missing-model -> model missing"));
+        assert!(broken.contains("runtime missing: missing-runtime"));
+        assert!(broken.contains("model missing: missing-model"));
     }
 
     #[test]
