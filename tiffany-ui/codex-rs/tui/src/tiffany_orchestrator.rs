@@ -9,7 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use serde::Deserialize;
-use serde_json::Value;
+use tiffany_event_format as event_format;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
@@ -24,6 +24,7 @@ use codex_app_server_protocol::UserInput;
 const TIFFANY_BLUE: Color = Color::Rgb(10, 186, 181);
 const TIFFANY_DARK: Color = Color::Rgb(7, 94, 91);
 const TIFFANY_SOFT: Color = Color::Rgb(76, 210, 204);
+const HUMANIZE_MAX_CHARS: usize = 240_000;
 
 #[derive(Clone, Debug)]
 pub struct TiffanyOrchestratorLaunch {
@@ -1463,10 +1464,9 @@ fn visible_content(event: &TiffanyProgressEvent) -> Option<String> {
     if cleaned.is_empty() {
         return None;
     }
-    let display = strip_redundant_role_prefix(
-        &event.role,
-        &strip_final_heading(&humanize_jsonish(&cleaned)),
-    );
+    let humanized = event_format::humanize_jsonish(&cleaned, HUMANIZE_MAX_CHARS);
+    let display = strip_redundant_role_prefix(&event.role, &strip_final_heading(&humanized));
+    let display = format_tiffany_summary_style(&display);
     if is_low_value_output(&display) {
         return None;
     }
@@ -1490,42 +1490,13 @@ fn strip_redundant_role_prefix(role: &str, content: &str) -> String {
 }
 
 fn is_low_value_output(text: &str) -> bool {
-    let lower = text.trim().to_ascii_lowercase();
-    let stderr_like = lower.contains(" stderr:") || lower.ends_with(" stderr");
-    lower.is_empty()
-        || matches!(
-            lower.as_str(),
-            "system"
-                | "thinking"
-                | "claude system"
-                | "claude-code system"
-                | "codex system"
-                | "claude assistant: thinking"
-                | "claude-code assistant: thinking"
-                | "codex assistant: thinking"
-        )
-        || lower.contains(" heartbeat")
-        || (stderr_like && !looks_like_actionable_stderr(&lower))
+    event_format::is_low_value_output(text)
 }
 
 fn final_output_candidate(content: &str) -> Option<String> {
-    let lower = content.to_ascii_lowercase();
-    for marker in [
-        " result: ",
-        " final: ",
-        " final_answer: ",
-        " task_complete: ",
-        " turn_complete: ",
-    ] {
-        if let Some(idx) = lower.find(marker) {
-            let result = content[idx + marker.len()..].trim();
-            let result = strip_final_heading(&humanize_jsonish(result));
-            if !result.trim().is_empty() {
-                return Some(result);
-            }
-        }
-    }
-    None
+    event_format::final_output_candidate(content, HUMANIZE_MAX_CHARS)
+        .map(|result| strip_final_heading(&result))
+        .filter(|result| !result.trim().is_empty())
 }
 
 fn remember_better_text(slot: &mut Option<String>, candidate: String) {
@@ -1542,7 +1513,8 @@ fn remember_better_text(slot: &mut Option<String>, candidate: String) {
 }
 
 fn normalized_output_key(content: &str) -> String {
-    content.split_whitespace().collect::<Vec<_>>().join(" ")
+    event_format::normalized_output_key(content, HUMANIZE_MAX_CHARS)
+        .unwrap_or_else(|| content.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 fn output_scope(event: &TiffanyProgressEvent) -> String {
@@ -1572,12 +1544,28 @@ fn is_redundant_role_output(role: &str, content: &str) -> bool {
     }
 }
 
-fn looks_like_json_or_fence(content: &str) -> bool {
-    let trimmed = content.trim_start();
-    trimmed.starts_with('{')
-        || trimmed.starts_with('[')
-        || trimmed.starts_with("```json")
-        || trimmed.starts_with("```")
+fn format_tiffany_summary_style(content: &str) -> String {
+    let mut lines = content.lines();
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let first = restyle_summary_first_line(first);
+    let rest = lines.collect::<Vec<_>>();
+    if rest.is_empty() {
+        first
+    } else {
+        format!("{}\n{}", first, rest.join("\n"))
+    }
+}
+
+fn restyle_summary_first_line(line: &str) -> String {
+    for prefix in ["plan ready", "approved", "needs changes"] {
+        let needle = format!("{prefix}: ");
+        if let Some(rest) = line.strip_prefix(&needle) {
+            return format!("{prefix} - {rest}");
+        }
+    }
+    line.to_string()
 }
 
 fn strip_runtime_prefix(line: &str) -> String {
@@ -1616,43 +1604,6 @@ fn strip_runtime_prefix(line: &str) -> String {
     line.to_string()
 }
 
-fn humanize_jsonish(content: &str) -> String {
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    if let Some(summary) = summarize_angle_role_block(trimmed) {
-        return summary;
-    }
-    if let Some(inner) = json_code_fence_content(trimmed) {
-        return humanize_jsonish(inner);
-    }
-    if looks_like_json_or_fence(trimmed)
-        && let Ok(value) = serde_json::from_str::<Value>(trimmed)
-    {
-        return summarize_json_value(&value);
-    }
-    if let Some((prefix, raw)) = trimmed.split_once(": ") {
-        let raw = raw.trim();
-        if looks_like_json_or_fence(raw)
-            && let Ok(value) = serde_json::from_str::<Value>(raw)
-        {
-            let summary = summarize_json_value(&value);
-            return format!("{}: {}", prefix.trim(), summary);
-        }
-    }
-    if let Some(summary) = summarize_loose_structured_json(trimmed) {
-        return summary;
-    }
-    if let Some(summary) = summarize_jsonish_lines(trimmed) {
-        return summary;
-    }
-    if let Some(summary) = summarize_embedded_json_with_context(trimmed) {
-        return summary;
-    }
-    trimmed.to_string()
-}
-
 fn strip_final_heading(content: &str) -> String {
     let trimmed = content.trim();
     for heading in [
@@ -1680,481 +1631,6 @@ fn strip_final_heading(content: &str) -> String {
     trimmed.to_string()
 }
 
-fn json_code_fence_content(content: &str) -> Option<&str> {
-    let content = content.trim();
-    let rest = content.strip_prefix("```")?;
-    let content_start = rest.find('\n').map(|idx| idx + 1).unwrap_or(0);
-    let rest = &rest[content_start..];
-    let end = rest.find("```")?;
-    Some(rest[..end].trim())
-}
-
-fn summarize_json_value(value: &Value) -> String {
-    if let Some(object) = value.as_object() {
-        if let Some(summary) = summarize_error_object(object) {
-            return summary;
-        }
-        if let Some(summary) = summarize_plan_object(object) {
-            return summary;
-        }
-        if let Some(summary) = summarize_review_object(object) {
-            return summary;
-        }
-        if let Some(summary) = summarize_tool_object(object) {
-            return summary;
-        }
-    }
-    if let Some(text) = value.get("result").and_then(Value::as_str) {
-        return humanize_jsonish(text);
-    }
-    if let Some(text) = extract_text(value) {
-        return text;
-    }
-    if let Some(array) = value.as_array() {
-        return summarize_json_array(array);
-    }
-    if let Some(object) = value.as_object() {
-        let keys = object
-            .keys()
-            .take(6)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
-        if !keys.is_empty() {
-            return format!("structured output: {keys}");
-        }
-    }
-    value.to_string()
-}
-
-fn summarize_error_object(object: &serde_json::Map<String, Value>) -> Option<String> {
-    let error = object.get("error")?;
-    let message = if let Some(text) = error.as_str().filter(|text| !text.trim().is_empty()) {
-        text.trim().to_string()
-    } else if let Some(error_object) = error.as_object() {
-        error_object
-            .get("message")
-            .or_else(|| error_object.get("description"))
-            .or_else(|| error_object.get("detail"))
-            .and_then(value_to_text)
-            .or_else(|| extract_text(error))
-            .unwrap_or_else(|| "request failed".to_string())
-    } else {
-        value_to_text(error).unwrap_or_else(|| "request failed".to_string())
-    };
-
-    let code = error
-        .as_object()
-        .and_then(|error_object| {
-            error_object
-                .get("code")
-                .or_else(|| error_object.get("status"))
-                .or_else(|| error_object.get("type"))
-        })
-        .and_then(value_to_text);
-
-    Some(match code {
-        Some(code) if !message.contains(&code) => format!("error: {message} ({code})"),
-        _ => format!("error: {message}"),
-    })
-}
-
-fn summarize_plan_object(object: &serde_json::Map<String, Value>) -> Option<String> {
-    let sub_tasks = object.get("sub_tasks").and_then(Value::as_array)?;
-    let mut summary = format!("plan ready - {} sub-task(s)", sub_tasks.len());
-
-    for (idx, task) in sub_tasks.iter().take(6).enumerate() {
-        let prompt = task
-            .get("prompt")
-            .or_else(|| task.get("title"))
-            .or_else(|| task.get("name"))
-            .and_then(value_to_text)
-            .unwrap_or_else(|| "task".to_string());
-        summary.push_str(&format!(
-            "\n  {}. {}",
-            idx + 1,
-            truncate_text(prompt.trim(), 140)
-        ));
-
-        if let Some(agent) = task
-            .get("agent_hint")
-            .or_else(|| task.get("agent"))
-            .or_else(|| task.get("role"))
-            .and_then(value_to_text)
-        {
-            summary.push_str(&format!("\n     agent: {}", truncate_text(&agent, 80)));
-        }
-    }
-
-    if sub_tasks.len() > 6 {
-        summary.push_str(&format!("\n  … {} more", sub_tasks.len() - 6));
-    }
-
-    Some(summary)
-}
-
-fn summarize_review_object(object: &serde_json::Map<String, Value>) -> Option<String> {
-    let approved = object.get("approved").and_then(Value::as_bool)?;
-    let issues = value_array_texts(object.get("issues"));
-    let suggestions = value_array_texts(object.get("suggestions"));
-    let mut summary = if approved {
-        format!("approved - {} issue(s)", issues.len())
-    } else {
-        format!("needs changes - {} issue(s)", issues.len())
-    };
-
-    for issue in issues.iter().take(6) {
-        summary.push_str("\n  - ");
-        summary.push_str(&truncate_text(issue.trim(), 220));
-    }
-    if issues.len() > 6 {
-        summary.push_str(&format!("\n  … {} more issue(s)", issues.len() - 6));
-    }
-
-    if !suggestions.is_empty() {
-        summary.push_str("\n  suggestions:");
-        for suggestion in suggestions.iter().take(3) {
-            summary.push_str("\n  - ");
-            summary.push_str(&truncate_text(suggestion.trim(), 220));
-        }
-        if suggestions.len() > 3 {
-            summary.push_str(&format!(
-                "\n  … {} more suggestion(s)",
-                suggestions.len() - 3
-            ));
-        }
-    }
-
-    Some(summary)
-}
-
-fn summarize_tool_object(object: &serde_json::Map<String, Value>) -> Option<String> {
-    let name = object
-        .get("tool_name")
-        .or_else(|| object.get("name"))
-        .or_else(|| object.get("tool"))
-        .and_then(Value::as_str)
-        .filter(|name| !name.trim().is_empty())?;
-    let command = object
-        .get("input")
-        .and_then(|input| input.get("command").or_else(|| input.get("cmd")))
-        .or_else(|| object.get("command"))
-        .or_else(|| object.get("cmd"))
-        .and_then(value_to_text);
-
-    Some(match command {
-        Some(command) => format!("tool {name}: {}", truncate_text(&command, 180)),
-        None => format!("tool {name}"),
-    })
-}
-
-fn summarize_json_array(array: &[Value]) -> String {
-    let parts = array
-        .iter()
-        .filter_map(extract_text)
-        .take(6)
-        .collect::<Vec<_>>();
-    if parts.is_empty() {
-        format!("{} item(s)", array.len())
-    } else {
-        parts.join(" | ")
-    }
-}
-
-fn value_array_texts(value: Option<&Value>) -> Vec<String> {
-    value
-        .and_then(Value::as_array)
-        .map(|array| {
-            array
-                .iter()
-                .filter_map(|item| value_to_text(item).or_else(|| extract_text(item)))
-                .map(|text| truncate_text(text.trim(), 240))
-                .filter(|text| !text.trim().is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
-fn value_to_text(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) => (!text.trim().is_empty()).then(|| text.trim().to_string()),
-        Value::Number(number) => Some(number.to_string()),
-        Value::Bool(flag) => Some(flag.to_string()),
-        _ => None,
-    }
-}
-
-fn summarize_angle_role_block(content: &str) -> Option<String> {
-    let (head, body) = content.split_once('\n')?;
-    let role = head.trim().strip_suffix('>')?.trim();
-    if !matches!(role, "planner" | "critic" | "reviewer" | "worker" | "tool") {
-        return None;
-    }
-    let body = body.trim();
-    if body.is_empty() {
-        return None;
-    }
-    Some(format!("{role}: {}", humanize_jsonish(body)))
-}
-
-fn summarize_jsonish_lines(content: &str) -> Option<String> {
-    let lines = content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
-    if lines.len() < 2 {
-        return None;
-    }
-
-    let mut parsed = 0usize;
-    let mut out = Vec::new();
-    for line in lines.iter().take(24) {
-        if let Some(summary) = summarize_jsonish_line(line) {
-            parsed += 1;
-            push_unique_summary_line(&mut out, summary);
-        } else {
-            push_unique_summary_line(&mut out, truncate_text(line, 260));
-        }
-    }
-    if lines.len() > 24 {
-        out.push(format!("… {} more line(s)", lines.len() - 24));
-    }
-
-    (parsed > 0).then(|| out.join("\n"))
-}
-
-fn summarize_jsonish_line(line: &str) -> Option<String> {
-    if let Ok(value) = serde_json::from_str::<Value>(line.trim()) {
-        return Some(summarize_json_value(&value));
-    }
-    if let Some((prefix, raw)) = line.split_once(": ") {
-        let raw = raw.trim();
-        if looks_like_json_or_fence(raw)
-            && let Ok(value) = serde_json::from_str::<Value>(raw)
-        {
-            return Some(format!(
-                "{}: {}",
-                prefix.trim(),
-                summarize_json_value(&value)
-            ));
-        }
-    }
-    summarize_embedded_json_with_context(line).or_else(|| summarize_loose_structured_json(line))
-}
-
-fn push_unique_summary_line(out: &mut Vec<String>, line: String) {
-    let line = line.trim();
-    if line.is_empty() {
-        return;
-    }
-    if out.last().map(String::as_str) != Some(line) {
-        out.push(line.to_string());
-    }
-}
-
-fn summarize_embedded_json_with_context(content: &str) -> Option<String> {
-    let start = content
-        .char_indices()
-        .find_map(|(idx, ch)| (ch == '{').then_some(idx))?;
-    let mut iter = serde_json::Deserializer::from_str(&content[start..]).into_iter::<Value>();
-    let value = iter.next()?.ok()?;
-    let end = start + iter.byte_offset();
-    let summary = summarize_json_value(&value);
-    let prefix = content[..start].trim();
-    let suffix = content[end..].trim();
-    match (prefix.is_empty(), suffix.is_empty()) {
-        (true, true) => Some(summary),
-        (false, true) => Some(format!("{prefix} {summary}")),
-        (true, false) => Some(format!("{summary} {suffix}")),
-        (false, false) => Some(format!("{prefix} {summary} {suffix}")),
-    }
-}
-
-fn summarize_loose_structured_json(content: &str) -> Option<String> {
-    summarize_loose_review_json(content).or_else(|| summarize_loose_plan_json(content))
-}
-
-fn summarize_loose_review_json(content: &str) -> Option<String> {
-    if !content.contains("approved")
-        || !(content.contains("issues") || content.contains("suggestions"))
-    {
-        return None;
-    }
-    let approved = find_loose_bool_field(content, "approved")?;
-    let issues = extract_loose_string_array(content, "issues");
-    let suggestions = extract_loose_string_array(content, "suggestions");
-    let mut summary = if approved {
-        format!("approved - {} issue(s)", issues.len())
-    } else {
-        format!("needs changes - {} issue(s)", issues.len())
-    };
-
-    for issue in issues.iter().take(6) {
-        summary.push_str("\n  - ");
-        summary.push_str(&truncate_text(issue, 220));
-    }
-    if issues.len() > 6 {
-        summary.push_str(&format!("\n  … {} more issue(s)", issues.len() - 6));
-    }
-
-    if !suggestions.is_empty() {
-        summary.push_str("\n  suggestions:");
-        for suggestion in suggestions.iter().take(3) {
-            summary.push_str("\n  - ");
-            summary.push_str(&truncate_text(suggestion, 220));
-        }
-        if suggestions.len() > 3 {
-            summary.push_str(&format!(
-                "\n  … {} more suggestion(s)",
-                suggestions.len() - 3
-            ));
-        }
-    }
-
-    Some(summary)
-}
-
-fn summarize_loose_plan_json(content: &str) -> Option<String> {
-    if !content.contains("sub_tasks") {
-        return None;
-    }
-    let prompts = extract_loose_repeated_string_field(content, "prompt");
-    if prompts.is_empty() {
-        return Some("plan ready - sub-task(s)".to_string());
-    }
-
-    let mut summary = format!("plan ready - {} sub-task(s)", prompts.len());
-    for (idx, prompt) in prompts.iter().take(6).enumerate() {
-        summary.push_str(&format!("\n  {}. {}", idx + 1, truncate_text(prompt, 140)));
-    }
-    if prompts.len() > 6 {
-        summary.push_str(&format!("\n  … {} more", prompts.len() - 6));
-    }
-    Some(summary)
-}
-
-fn find_loose_bool_field(content: &str, key: &str) -> Option<bool> {
-    let idx = find_loose_key(content, key)?;
-    let after_key = &content[idx + key.len() + 2..];
-    let after_colon = after_key.split_once(':')?.1.trim_start();
-    if after_colon.starts_with("true") {
-        Some(true)
-    } else if after_colon.starts_with("false") {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-fn extract_loose_repeated_string_field(content: &str, key: &str) -> Vec<String> {
-    let mut rest = content;
-    let mut values = Vec::new();
-    while let Some(idx) = find_loose_key(rest, key) {
-        let after_key = &rest[idx + key.len() + 2..];
-        let Some((_, after_colon)) = after_key.split_once(':') else {
-            break;
-        };
-        let trimmed = after_colon.trim_start();
-        if let Some((value, consumed)) = extract_loose_string(trimmed) {
-            values.push(value);
-            rest = &trimmed[consumed..];
-        } else {
-            rest = trimmed;
-        }
-    }
-    values
-}
-
-fn extract_loose_string_array(content: &str, key: &str) -> Vec<String> {
-    let Some(idx) = find_loose_key(content, key) else {
-        return Vec::new();
-    };
-    let after_key = &content[idx + key.len() + 2..];
-    let Some((_, after_colon)) = after_key.split_once(':') else {
-        return Vec::new();
-    };
-    let Some(array_start) = after_colon.find('[') else {
-        return Vec::new();
-    };
-
-    let mut rest = &after_colon[array_start + 1..];
-    let mut values = Vec::new();
-    loop {
-        let trimmed = rest.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with(']') {
-            break;
-        }
-        if let Some((value, consumed)) = extract_loose_string(trimmed) {
-            values.push(value);
-            rest = &trimmed[consumed..];
-            continue;
-        }
-        if let Some(next_quote) = trimmed.find('"') {
-            rest = &trimmed[next_quote..];
-        } else {
-            break;
-        }
-    }
-    values
-}
-
-fn extract_loose_string(content: &str) -> Option<(String, usize)> {
-    let start = content.find('"')?;
-    let mut out = String::new();
-    let mut escape = false;
-    for (offset, ch) in content[start + 1..].char_indices() {
-        if escape {
-            out.push(ch);
-            escape = false;
-            continue;
-        }
-        match ch {
-            '\\' => escape = true,
-            '"' => {
-                let consumed = start + 1 + offset + ch.len_utf8();
-                return Some((normalize_loose_string(&out), consumed));
-            }
-            _ => out.push(ch),
-        }
-    }
-    (!out.trim().is_empty()).then(|| (normalize_loose_string(&out), content.len()))
-}
-
-fn normalize_loose_string(content: &str) -> String {
-    content.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn find_loose_key(content: &str, key: &str) -> Option<usize> {
-    content.find(&format!("\"{key}\""))
-}
-
-fn looks_like_actionable_stderr(lower: &str) -> bool {
-    [
-        "error",
-        "failed",
-        "failure",
-        "panic",
-        "unauthorized",
-        "authentication",
-        "not authenticated",
-        "forbidden",
-        "permission",
-        "denied",
-        "rate limit",
-        "api key",
-        "login",
-        "model not found",
-        "unknown model",
-        "invalid model",
-        "not found",
-        "模型不存在",
-        "1211",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
 fn is_ignorable_stdout_noise(line: &str) -> bool {
     let lower = line.trim().to_ascii_lowercase();
     lower.is_empty()
@@ -2162,23 +1638,6 @@ fn is_ignorable_stdout_noise(line: &str) -> bool {
         || lower.starts_with("trace ")
         || lower.contains("tracing::")
         || lower.contains("tokio-runtime-worker")
-}
-
-fn extract_text(value: &Value) -> Option<String> {
-    if let Some(text) = value.as_str().filter(|text| !text.trim().is_empty()) {
-        return Some(text.trim().to_string());
-    }
-    if let Some(array) = value.as_array() {
-        let parts = array.iter().filter_map(extract_text).collect::<Vec<_>>();
-        return (!parts.is_empty()).then(|| parts.join("\n"));
-    }
-    let object = value.as_object()?;
-    for key in ["text", "summary", "message", "content"] {
-        if let Some(text) = object.get(key).and_then(extract_text) {
-            return Some(text);
-        }
-    }
-    None
 }
 
 fn truncate_text(text: &str, max: usize) -> String {

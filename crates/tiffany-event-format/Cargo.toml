@@ -1,0 +1,13 @@
+[package]
+name = "tiffany-event-format"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Shared Tiffany event stream formatting helpers"
+
+[lib]
+name = "tiffany_event_format"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = "1"

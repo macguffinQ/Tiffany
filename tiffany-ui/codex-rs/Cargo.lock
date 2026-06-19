@@ -4049,6 +4049,7 @@ dependencies = [
  "tempfile",
  "textwrap 0.16.2",
  "thiserror 2.0.18",
+ "tiffany-event-format",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -13293,6 +13294,13 @@ dependencies = [
  "codex-config",
  "codex-tui",
  "supports-color 3.0.2",
+]
+
+[[package]]
+name = "tiffany-event-format"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

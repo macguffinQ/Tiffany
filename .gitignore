@@ -1,6 +1,8 @@
 # Build artifacts
 /target/
 /tiffany-ui/codex-rs/target/
+/crates/*/target/
+/crates/*/Cargo.lock
 **/*.rs.bk
 *.pdb
 
