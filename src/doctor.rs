@@ -267,6 +267,7 @@ pub fn run(config_path: &Path) -> DoctorReport {
 
     check_tiffany_ui(&mut builder, config_path);
     check_host_environment(&mut builder);
+    check_build_cache(&mut builder);
 
     if expanded_config_path.exists() {
         builder.ok(format!("config found: {}", expanded_config_path.display()));
@@ -797,6 +798,139 @@ fn check_host_environment(builder: &mut DoctorReportBuilder) {
     }
 }
 
+const LARGE_TARGET_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+fn check_build_cache(builder: &mut DoctorReportBuilder) {
+    let Some(repo_dir) = find_source_checkout_dir() else {
+        return;
+    };
+    check_build_cache_at(builder, &repo_dir, LARGE_TARGET_CACHE_BYTES);
+}
+
+fn find_source_checkout_dir() -> Option<PathBuf> {
+    let current = std::env::current_dir().ok();
+    if let Some(dir) = current.as_deref().and_then(find_source_checkout_ancestor) {
+        return Some(dir);
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if is_source_checkout_dir(&manifest_dir) {
+        Some(manifest_dir)
+    } else {
+        None
+    }
+}
+
+fn find_source_checkout_ancestor(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|path| is_source_checkout_dir(path))
+        .map(Path::to_path_buf)
+}
+
+fn is_source_checkout_dir(path: &Path) -> bool {
+    path.join("Cargo.toml").is_file() && path.join("scripts/tiffany-clean-targets").is_file()
+}
+
+fn check_build_cache_at(
+    builder: &mut DoctorReportBuilder,
+    repo_dir: &Path,
+    large_threshold_bytes: u64,
+) {
+    let shared_target = repo_dir.join("target");
+    let legacy_target = repo_dir.join("tiffany-ui/codex-rs/target");
+    let shared_size = path_size_bytes(&shared_target);
+    let legacy_size = path_size_bytes(&legacy_target);
+    if shared_size.is_none() && legacy_size.is_none() {
+        return;
+    }
+
+    builder.header("Build cache");
+    if let Some(size) = shared_size {
+        let message = format!(
+            "shared target: {} ({})",
+            format_bytes(size),
+            shared_target.display()
+        );
+        if size >= large_threshold_bytes {
+            builder.warn(message);
+        } else {
+            builder.ok(message);
+        }
+    } else {
+        builder.hint(format!(
+            "shared target not found: {}",
+            shared_target.display()
+        ));
+    }
+
+    if let Some(size) = legacy_size {
+        builder.warn(format!(
+            "legacy fork target: {} ({})",
+            format_bytes(size),
+            legacy_target.display()
+        ));
+        builder.hint("legacy fork-local target is rebuildable; run `./scripts/tiffany-clean-targets` to remove it");
+    }
+
+    if shared_size.unwrap_or(0) >= large_threshold_bytes || legacy_size.is_some() {
+        builder.hint("inspect build cache with `./scripts/tiffany-clean-targets --sizes`");
+        builder
+            .hint("preview safe cleanup with `./scripts/tiffany-clean-targets --dry-run --trim`");
+        builder.hint("trim rebuildable caches with `./scripts/tiffany-clean-targets --trim`");
+    }
+}
+
+fn path_size_bytes(path: &Path) -> Option<u64> {
+    if !path.exists() {
+        return None;
+    }
+    du_size_bytes(path).or_else(|| recursive_size_bytes(path).ok())
+}
+
+fn du_size_bytes(path: &Path) -> Option<u64> {
+    let output = Command::new("du").arg("-sk").arg(path).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let kib = stdout.split_whitespace().next()?.parse::<u64>().ok()?;
+    Some(kib.saturating_mul(1024))
+}
+
+fn recursive_size_bytes(path: &Path) -> std::io::Result<u64> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.is_file() {
+        return Ok(metadata.len());
+    }
+    if !metadata.is_dir() {
+        return Ok(0);
+    }
+
+    let mut total = 0u64;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        total = total.saturating_add(recursive_size_bytes(&entry.path())?);
+    }
+    Ok(total)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes_f >= GIB {
+        format!("{:.1} GiB", bytes_f / GIB)
+    } else if bytes_f >= MIB {
+        format!("{:.1} MiB", bytes_f / MIB)
+    } else if bytes_f >= KIB {
+        format!("{:.1} KiB", bytes_f / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 fn check_rust_tool(
     builder: &mut DoctorReportBuilder,
     binary: &str,
@@ -1241,6 +1375,55 @@ mod tests {
                 source: "CARGO".into(),
             }]
         );
+    }
+
+    #[test]
+    fn build_cache_check_reports_large_source_targets_without_required_issue() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname='fixture'\n").unwrap();
+        std::fs::create_dir_all(tmp.path().join("scripts")).unwrap();
+        std::fs::write(tmp.path().join("scripts/tiffany-clean-targets"), "").unwrap();
+        std::fs::create_dir_all(tmp.path().join("target")).unwrap();
+        std::fs::write(tmp.path().join("target/big.bin"), vec![0u8; 8]).unwrap();
+        std::fs::create_dir_all(tmp.path().join("tiffany-ui/codex-rs/target")).unwrap();
+        std::fs::write(
+            tmp.path().join("tiffany-ui/codex-rs/target/legacy.bin"),
+            vec![0u8; 4],
+        )
+        .unwrap();
+
+        let mut builder = DoctorReportBuilder::default();
+        check_build_cache_at(&mut builder, tmp.path(), 4);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 0);
+        assert!(rendered.contains("Build cache:"));
+        assert!(rendered.contains("shared target:"));
+        assert!(rendered.contains("legacy fork target:"));
+        assert!(rendered.contains("tiffany-clean-targets --sizes"));
+        assert!(rendered.contains("tiffany-clean-targets --dry-run --trim"));
+        assert!(rendered.contains("tiffany-clean-targets --trim"));
+    }
+
+    #[test]
+    fn build_cache_check_keeps_small_shared_target_informational() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname='fixture'\n").unwrap();
+        std::fs::create_dir_all(tmp.path().join("scripts")).unwrap();
+        std::fs::write(tmp.path().join("scripts/tiffany-clean-targets"), "").unwrap();
+        std::fs::create_dir_all(tmp.path().join("target")).unwrap();
+        std::fs::write(tmp.path().join("target/small.bin"), vec![0u8; 4]).unwrap();
+
+        let mut builder = DoctorReportBuilder::default();
+        check_build_cache_at(&mut builder, tmp.path(), 1024 * 1024);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 0);
+        assert!(rendered.contains("✓ shared target:"));
+        assert!(!rendered.contains("legacy fork target"));
+        assert!(!rendered.contains("tiffany-clean-targets --trim"));
     }
 
     #[test]
