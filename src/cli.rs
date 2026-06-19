@@ -186,13 +186,28 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                         );
                     }
                 }
-                crate::SessionsCmd::Show { id, raw, tail } => {
+                crate::SessionsCmd::Show {
+                    id,
+                    raw,
+                    tail,
+                    tree,
+                } => {
                     let uuid = uuid::Uuid::parse_str(&id)
                         .with_context(|| format!("invalid session id: {}", id))?;
                     let sessions = store.get_many(&[uuid])?;
                     if let Some(s) = sessions.into_iter().next() {
                         let path = store.log_path(uuid);
-                        if path.exists() {
+                        if tree {
+                            let all_sessions = store.list(10_000)?;
+                            println!(
+                                "{}",
+                                orchestrator::session_display::format_session_tree(
+                                    &s,
+                                    &all_sessions,
+                                    store.log_dir(),
+                                )
+                            );
+                        } else if path.exists() {
                             println!(
                                 "{}",
                                 orchestrator::session_display::format_session_log(

@@ -5,6 +5,7 @@ use crate::core::types::{Event, Session};
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::path::Path;
+use std::path::PathBuf;
 
 const EVENT_SUMMARY_MAX_CHARS: usize = 4_000;
 const RAW_LINE_MAX_CHARS: usize = 1_000;
@@ -121,6 +122,58 @@ pub fn format_session_header(session: &Session, log_path: &Path) -> String {
     )
 }
 
+pub fn format_session_tree(root: &Session, all_sessions: &[Session], log_dir: &Path) -> String {
+    let mut children = all_sessions
+        .iter()
+        .filter(|session| session.parent_session_ids.contains(&root.id))
+        .collect::<Vec<_>>();
+    children.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+
+    let mut parents = all_sessions
+        .iter()
+        .filter(|session| root.parent_session_ids.contains(&session.id))
+        .collect::<Vec<_>>();
+    parents.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+
+    let mut out = format!(
+        "Session tree\n{}\n  task: {}\n  state: {}\n  log: {}",
+        format_tree_session_line(root),
+        root.task_id,
+        session_state(root),
+        session_log_path(log_dir, root).display()
+    );
+
+    if !parents.is_empty() {
+        out.push_str("\n\nParents:");
+        for parent in parents {
+            out.push_str("\n  ");
+            out.push_str(&format_tree_session_line(parent));
+            out.push_str(&format!("  /session tree {}", short_session_id(parent)));
+        }
+    }
+
+    out.push_str(&format!("\n\nChildren ({}):", children.len()));
+    if children.is_empty() {
+        out.push_str("\n  (none)");
+    } else {
+        for (idx, child) in children.iter().enumerate() {
+            let branch = if idx + 1 == children.len() {
+                "└─"
+            } else {
+                "├─"
+            };
+            out.push_str(&format!(
+                "\n  {} {}  /log {} 120",
+                branch,
+                format_tree_session_line(child),
+                short_session_id(child)
+            ));
+        }
+    }
+
+    out
+}
+
 pub fn format_session_event(event: &Event) -> String {
     if event.kind == "heartbeat" {
         return format!("{} heartbeat", event.ts.format("%H:%M:%S"));
@@ -143,6 +196,48 @@ pub fn format_session_event_line(raw: &str) -> String {
         Ok(event) => format_session_event(&event),
         Err(_) => truncate_chars(raw, RAW_LINE_MAX_CHARS),
     }
+}
+
+fn format_tree_session_line(session: &Session) -> String {
+    format!(
+        "{} {} {:<12} {:<16} {}",
+        short_session_id(session),
+        session_state_icon(session),
+        session.role.as_str(),
+        truncate_chars(
+            if session.agent.trim().is_empty() {
+                "(agent)"
+            } else {
+                &session.agent
+            },
+            16
+        ),
+        session.started_at.format("%Y-%m-%d %H:%M:%S")
+    )
+}
+
+fn short_session_id(session: &Session) -> String {
+    session.id.to_string().chars().take(8).collect()
+}
+
+fn session_state(session: &Session) -> &'static str {
+    if session.ended_at.is_some() {
+        "done"
+    } else {
+        "running"
+    }
+}
+
+fn session_state_icon(session: &Session) -> &'static str {
+    if session.ended_at.is_some() {
+        "✓"
+    } else {
+        "●"
+    }
+}
+
+fn session_log_path(log_dir: &Path, session: &Session) -> PathBuf {
+    log_dir.join(format!("{}.jsonl", session.id))
 }
 
 fn format_imported_claude_event(event: &Event) -> Option<String> {
@@ -457,5 +552,27 @@ mod tests {
 
         assert!(!human.contains("system system"));
         assert_eq!(human.matches("final answer").count(), 1);
+    }
+
+    #[test]
+    fn formats_session_tree_with_children_and_parents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut root = Session::new(Uuid::new_v4(), "orchestrator", Role::Orchestrator);
+        root.ended_at = Some(Utc::now());
+        let mut worker = Session::new(Uuid::new_v4(), "claude-code", Role::Worker);
+        worker.parent_session_ids.push(root.id);
+        worker.ended_at = Some(Utc::now());
+
+        let tree = format_session_tree(&root, &[root.clone(), worker.clone()], tmp.path());
+
+        assert!(tree.contains("Session tree"));
+        assert!(tree.contains("orchestrator"));
+        assert!(tree.contains("Children (1):"));
+        assert!(tree.contains("worker"));
+        assert!(tree.contains("/log"));
+
+        let worker_tree = format_session_tree(&worker, &[root, worker.clone()], tmp.path());
+        assert!(worker_tree.contains("Parents:"));
+        assert!(worker_tree.contains("/session tree"));
     }
 }

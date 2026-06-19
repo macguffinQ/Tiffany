@@ -385,6 +385,9 @@ enum SessionsCmd {
         /// Only show the last N event lines
         #[arg(long)]
         tail: Option<usize>,
+        /// Show parent/child session links instead of event log
+        #[arg(long)]
+        tree: bool,
     },
     /// Grep across all session logs
     Grep { pattern: String },

@@ -174,8 +174,19 @@ pub(super) fn handle_slash_command_with_runtime(
             );
         }
         "session" | "show" | "s" => {
+            if args.first().copied() == Some("tree") {
+                push_system(
+                    input,
+                    format_session_tree_command(store, args.get(1).copied()),
+                );
+            } else {
+                let selector = args.first().copied();
+                push_system(input, format_session_detail(store, selector));
+            }
+        }
+        "tree" | "session-tree" => {
             let selector = args.first().copied();
-            push_system(input, format_session_detail(store, selector));
+            push_system(input, format_session_tree_command(store, selector));
         }
         "log" | "tail" => {
             let (selector, lines) = parse_log_args(&args);
@@ -540,6 +551,10 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
             description: "show one session summary",
         },
         SlashCommandDef {
+            name: "tree",
+            description: "show session parent/child tree",
+        },
+        SlashCommandDef {
             name: "log",
             description: "show session log tail",
         },
@@ -637,7 +652,17 @@ fn argument_candidates(
     ctx: &SlashArgContext,
 ) -> Vec<SlashArgCandidate> {
     match ctx.cmd.as_str() {
-        "session" | "show" | "s" if ctx.current_index == 0 => session_candidates(store, ctx),
+        "session" | "show" | "s" if ctx.current_index == 0 => {
+            let mut candidates = choice_candidates(ctx, 0, &[("tree", "show parent/child tree")]);
+            candidates.extend(session_candidates(store, ctx));
+            candidates
+        }
+        "session" | "show" | "s"
+            if ctx.current_index == 1 && ctx.args.first().map(String::as_str) == Some("tree") =>
+        {
+            session_candidates(store, ctx)
+        }
+        "tree" | "session-tree" if ctx.current_index == 0 => session_candidates(store, ctx),
         "log" | "tail" if ctx.current_index == 0 => session_candidates(store, ctx),
         "log" | "tail" if ctx.current_index == 1 => choice_candidates(
             ctx,
@@ -1157,6 +1182,8 @@ fn help_text() -> String {
      /import-cc [project]          Import Claude Code sessions into chat history\n\
      /resume last                  Restore the last terminal chat conversation\n\
      /session [id|prefix|last]     Show one session summary\n\
+     /session tree [id|prefix|last] Show parent/child session tree\n\
+     /tree [id|prefix|last]        Show parent/child session tree\n\
      /log [id|prefix|last] [n]     Show session log tail\n\
      /trace [on|off|full|compact] Control live trace in the chat\n\
      /context [compact|full|off|clear] Control remembered conversation context\n\
@@ -3118,6 +3145,19 @@ fn format_session_detail(store: &SessionStore, selector: Option<&str>) -> String
     }
 }
 
+fn format_session_tree_command(store: &SessionStore, selector: Option<&str>) -> String {
+    let session = match resolve_session(store, selector) {
+        Ok(session) => session,
+        Err(err) => return err,
+    };
+    match store.list(10_000) {
+        Ok(sessions) => {
+            crate::session_display::format_session_tree(&session, &sessions, store.log_dir())
+        }
+        Err(err) => format!("Could not list sessions for tree: {err:#}"),
+    }
+}
+
 fn format_log_tail(store: &SessionStore, selector: Option<&str>, lines: usize) -> String {
     let session = match resolve_session(store, selector) {
         Ok(s) => s,
@@ -3458,6 +3498,47 @@ mod tests {
         assert!(complete_slash_argument(&store, &cfg, &mut input));
         assert_eq!(input.buffer, format!("/session {} ", session.id));
         assert_eq!(input.cursor, input.buffer.len());
+    }
+
+    #[test]
+    fn completes_session_tree_argument_from_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let session = Session::new(uuid::Uuid::new_v4(), "orchestrator", Role::Orchestrator);
+        let prefix = session.id.to_string()[..8].to_string();
+        store.finalize(&session).unwrap();
+
+        let mut input = InputState {
+            buffer: format!("/session tree {}", prefix),
+            ..InputState::default()
+        };
+        input.cursor = input.buffer.len();
+
+        let cfg = test_config();
+        assert!(complete_slash_argument(&store, &cfg, &mut input));
+        assert_eq!(input.buffer, format!("/session tree {} ", session.id));
+    }
+
+    #[test]
+    fn session_tree_command_shows_child_workers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let mut root = Session::new(uuid::Uuid::new_v4(), "orchestrator", Role::Orchestrator);
+        root.ended_at = Some(chrono::Utc::now());
+        let mut worker = Session::new(uuid::Uuid::new_v4(), "claude-code", Role::Worker);
+        worker.parent_session_ids.push(root.id);
+        worker.ended_at = Some(chrono::Utc::now());
+        store.finalize(&root).unwrap();
+        store.finalize(&worker).unwrap();
+
+        let tree = format_session_tree_command(&store, Some(&root.id.to_string()[..8]));
+
+        assert!(tree.contains("Session tree"));
+        assert!(tree.contains("Children (1):"));
+        assert!(tree.contains("claude-code"));
+        assert!(tree.contains("/log"));
     }
 
     #[test]

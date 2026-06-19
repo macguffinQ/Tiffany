@@ -1284,6 +1284,8 @@ fn terminal_help() -> String {
      /import-cc [project]          Import Claude Code sessions into chat history\n\
      /resume last                  Restore the last terminal chat conversation\n\
      /session [id|prefix|last]     Show one session summary\n\
+     /session tree [id|prefix|last] Show parent/child session tree\n\
+     /tree [id|prefix|last]        Show parent/child session tree\n\
      /log [id|prefix|last] [n]     Show session log tail\n\
      /trace [on|off|full|compact] Configure captured trace verbosity\n\
      /context [compact|full|off|clear] Control remembered conversation context\n\
