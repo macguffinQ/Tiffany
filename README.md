@@ -61,7 +61,7 @@ The legacy [`src/tui`](src/tui/) path remains only as a compatibility bridge for
 
 Development entrypoints:
 
-- `./scripts/tiffany-dev` - run the tiffany-loop orchestrator in tiffany-loop orchestration mode, using the local debug binary and waiting for input.
+- `./scripts/tiffany-dev` - run the tiffany-loop orchestrator in tiffany-loop orchestration mode, reusing `./target/debug/orchestrator` and `./target/debug/tiffany` after the first build, then waiting for input.
 - `./scripts/tiffany-dev --help` - explain the source-checkout entrypoints without building or launching the UI.
 - `./scripts/tiffany-dev setup` - run the local first-run setup wizard without installing binaries.
 - `./scripts/tiffany-dev config ...` - run the local orchestrator config command directly. It does not launch the TUI or require a UI login; use it for scriptable provider setup before opening the TUI.
@@ -74,6 +74,8 @@ Development entrypoints:
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist-cache|--dist|--debug` - inspect build-cache size, find large artifacts, keep final dist binaries while removing dist internals, or remove incremental/release/debug build outputs when `target/` grows too large.
 
 Direct Cargo commands inside `tiffany-ui/codex-rs` are also redirected to the root `./target` through the fork's Cargo config. If an older checkout already has `tiffany-ui/codex-rs/target`, it is a legacy duplicate cache and can be removed with `./scripts/tiffany-clean-targets`.
+
+For source-checkout development, `./scripts/tiffany-dev` builds missing debug binaries once and then execs the cached binary directly for faster repeat startup. Set `TIFFANY_DEV_CARGO_RUN=1` only when you specifically want Cargo's `cargo run` wrapper.
 
 tiffany-loop keeps fork state separate from upstream UI source. The fork uses `TIFFANY_HOME`, defaulting to `~/.tiffany`, and maps UI-internal config reads to `~/.tiffany/config.toml` instead of the upstream default config directory. SQLite state defaults to the same root through `TIFFANY_SQLITE_HOME`. Override with `TIFFANY_HOME=/path/to/tiffany-home`.
 

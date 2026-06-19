@@ -69,7 +69,7 @@ provider 配置、角色路由、事件流和 runtime 执行。`orchestrator tui
 
 开发入口：
 
-- `./scripts/tiffany-dev`：默认进入 tiffany-loop orchestrator 的 tiffany-loop orchestration mode，使用本工程 debug binary，打开后等待输入。
+- `./scripts/tiffany-dev`：默认进入 tiffany-loop orchestrator 的 tiffany-loop orchestration mode，首次缺失时构建 `./target/debug/orchestrator` 和 `./target/debug/tiffany`，之后复用 debug binary 直接启动，打开后等待输入。
 - `./scripts/tiffany-dev --help`：只显示源码 checkout 的入口说明，不构建、不启动 UI。
 - `./scripts/tiffany-dev setup`：不安装二进制，直接运行本工程首次配置向导。
 - `./scripts/tiffany-dev config ...`：直接执行本工程 orchestrator config 命令，不会启动 TUI，也不要求 UI 登录；适合进 TUI 前先脚本化配置 provider。
@@ -82,6 +82,8 @@ provider 配置、角色路由、事件流和 runtime 执行。`orchestrator tui
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--incremental|--dist-cache|--dist|--debug`：查看构建缓存大小、定位大文件，保留最终 dist 二进制但删除 dist 中间缓存，或清理 incremental/release/debug 构建产物，避免 `target/` 膨胀。
 
 直接进入 `tiffany-ui/codex-rs` 执行 Cargo 命令时，也会通过 fork 的 Cargo 配置重定向到根目录 `./target`。旧 checkout 如果已经有 `tiffany-ui/codex-rs/target`，那是重复缓存，可以用 `./scripts/tiffany-clean-targets` 删除。
+
+源码开发时，`./scripts/tiffany-dev` 默认复用已构建的 debug binary，避免每次启动都走 `cargo run`。只有明确需要 Cargo wrapper 时再设置 `TIFFANY_DEV_CARGO_RUN=1`。
 
 tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.tiffany`，tiffany-loop 内部配置读取会被映射到 `~/.tiffany/config.toml`，不会读写上游默认配置目录。SQLite 状态库默认也通过 `TIFFANY_SQLITE_HOME` 指到同一目录。需要多套配置时可以用 `TIFFANY_HOME=/path/to/tiffany-home` 覆盖。
 

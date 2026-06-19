@@ -72,6 +72,9 @@ rm -f "$fmt_log"
 
 echo "checking tiffany-loop CLI help..."
 "$repo_dir/scripts/tiffany-dev" --help >/dev/null 2>&1
+if [[ "$mode" == "smoke" ]]; then
+  "$repo_dir/scripts/tiffany-dev" -- --help >/dev/null 2>&1
+fi
 
 echo "checking orchestrator bridge..."
 "$binary_dir/tiffany" orchestrator \

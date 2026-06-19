@@ -32,8 +32,8 @@ tiffany-dev - run tiffany-loop from this source checkout
 
 Usage:
   ./scripts/tiffany-dev
-      Build ./target/debug/orchestrator when needed, then open the local
-      tiffany-loop TUI in orchestrator mode.
+      Build ./target/debug/orchestrator and ./target/debug/tiffany when needed,
+      then open the local tiffany-loop TUI in orchestrator mode.
 
   ./scripts/tiffany-dev orchestrator ["prompt"...]
       Open the local TUI and route input through the orchestrator runtime.
@@ -55,6 +55,8 @@ Environment:
   TIFFANY_SQLITE_HOME       UI SQLite root, default: $TIFFANY_HOME
   TIFFANY_ORCHESTRATOR_BIN  Orchestrator binary used by tiffany orchestrator
   TIFFANY_CARGO_TARGET_DIR  shared Cargo target dir, default: ./target
+  TIFFANY_DEV_CARGO_RUN=1   use cargo run for the tiffany binary instead of
+                            reusing ./target/debug/tiffany
   CARGO                     Cargo executable, default: cargo
 EOF
 }
@@ -80,10 +82,30 @@ run_orchestrator_cli() {
   exec "$orchestrator_bin" "$@"
 }
 
+ensure_tiffany_bin() {
+  tiffany_bin="$target_dir/debug/tiffany"
+  if [[ "${TIFFANY_DEV_CARGO_RUN:-0}" == "1" ]]; then
+    return
+  fi
+
+  if [[ ! -x "$tiffany_bin" ]]; then
+    (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" build -p tiffany-cli --bin tiffany)
+  fi
+}
+
+run_tiffany() {
+  ensure_tiffany_bin
+  if [[ "${TIFFANY_DEV_CARGO_RUN:-0}" == "1" ]]; then
+    cd "$repo_dir/tiffany-ui/codex-rs"
+    exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$@"
+  fi
+
+  exec "$tiffany_bin" "$@"
+}
+
 if [[ "$#" == "0" ]]; then
   ensure_orchestrator_bin
-  cd "$repo_dir/tiffany-ui/codex-rs"
-  exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- orchestrator --bin "$orchestrator_bin"
+  run_tiffany orchestrator --bin "$orchestrator_bin"
 fi
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
@@ -116,22 +138,19 @@ if [[ "${1:-}" == "orchestrator" || "${1:-}" == "orch" || "${1:-}" == "team" ]];
   if [[ "$has_bin_arg" == "0" ]]; then
     ensure_orchestrator_bin
 
-    cd "$repo_dir/tiffany-ui/codex-rs"
     if [[ "$#" == "0" ]]; then
-      exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$subcommand" --bin "$orchestrator_bin"
+      run_tiffany "$subcommand" --bin "$orchestrator_bin"
     fi
     if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-      exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$subcommand" "$@"
+      run_tiffany "$subcommand" "$@"
     fi
     if [[ "${1:-}" == "--" ]]; then
       shift
     fi
-    exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$subcommand" --bin "$orchestrator_bin" "$@"
+    run_tiffany "$subcommand" --bin "$orchestrator_bin" "$@"
   fi
 
-  cd "$repo_dir/tiffany-ui/codex-rs"
-  exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$subcommand" "$@"
+  run_tiffany "$subcommand" "$@"
 fi
 
-cd "$repo_dir/tiffany-ui/codex-rs"
-exec "$cargo_bin" run -p tiffany-cli --bin tiffany -- "$@"
+run_tiffany "$@"
