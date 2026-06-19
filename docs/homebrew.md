@@ -47,9 +47,10 @@ Name: HOMEBREW_TAP_TOKEN
 
 After that, pushing a tag like `v0.1.11` will:
 
-1. Build the macOS Apple Silicon release archive used by Homebrew.
-2. Publish the GitHub Release.
-3. Update `macguffinQ/homebrew-tap` with a `tiffany-loop` formula that installs both
+1. Run `./scripts/tiffany-release-preflight --quick` on the tagged commit.
+2. Build the macOS Apple Silicon release archive used by Homebrew.
+3. Publish the GitHub Release.
+4. Update `macguffinQ/homebrew-tap` with a `tiffany-loop` formula that installs both
    `orchestrator` and `tiffany`.
 
 The current release matrix publishes a prebuilt `aarch64-apple-darwin` archive.

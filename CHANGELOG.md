@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - Added a consolidated release preflight script for local quick and full checks.
 - Added a `tiffany-clean-targets --trim` mode for pruning rebuildable caches
   while keeping compiled deps and final binaries.
+- Added release workflow preflight gating before publishing tagged builds.
 
 ## [0.1.11] - 2026-06-19
 

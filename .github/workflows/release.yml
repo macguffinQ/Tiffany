@@ -9,8 +9,37 @@ permissions:
   contents: write
 
 jobs:
+  preflight:
+    name: Release preflight
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tiffany-release-preflight-${{ runner.os }}-workspace-crates-v1
+          cache-workspace-crates: true
+          workspaces: |
+            . -> target
+            tiffany-ui/codex-rs -> ../../target
+
+      - name: Run preflight
+        run: ./scripts/tiffany-release-preflight --quick
+
   build:
     name: Build ${{ matrix.target }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: "0"
