@@ -252,7 +252,7 @@ Source checkout for contributors:
 ```bash
 git clone https://github.com/macguffinQ/Tiffany.git ~/code/orchestrator
 cd ~/code/orchestrator
-./scripts/tiffany-build
+./scripts/tiffany-build     # defaults to target/dev-small
 ./scripts/tiffany-dev setup
 ./scripts/tiffany-dev
 ```
@@ -625,10 +625,11 @@ Agent Teams (CC's experimental multi-agent feature) already does shared task lis
 
 ```bash
 # Build
-cargo build              # debug, ~30s incremental
+cargo build              # normal debug profile
 cargo build --release    # release, ~5-8min first time
-./scripts/tiffany-build   # orchestrator + tiffany-loop UI
+./scripts/tiffany-build   # orchestrator + tiffany-loop UI, defaults to dev-small
 ./scripts/tiffany-build --small --locked
+./scripts/tiffany-build --dev --locked
 ./scripts/tiffany-build --release --locked
 ./scripts/tiffany-build --fast-release --locked
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache

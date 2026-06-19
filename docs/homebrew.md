@@ -112,3 +112,10 @@ tar -tzf "/tmp/${asset}" | head
 ## Formula template
 
 See `packaging/homebrew/tiffany-loop.rb`. It is a source-build template; the release workflow generates the published formula with the current tag, archive URLs, and checksums.
+
+The release preflight checks the template syntax when Ruby is available:
+
+```bash
+ruby -c packaging/homebrew/tiffany-loop.rb
+./scripts/tiffany-release-preflight --quick
+```

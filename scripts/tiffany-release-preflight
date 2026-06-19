@@ -10,7 +10,7 @@ Usage: ./scripts/tiffany-release-preflight [--quick|--full] [--tag vX.Y.Z]
 Runs the release preflight checks from this checkout.
 
 Modes:
-  --quick  Format, tests, examples, locked build, and open-source audit.
+  --quick  Format, tests, examples, locked build, formula syntax, and open-source audit.
   --full   Quick checks plus Tiffany dist/fork-specific checks for release tags.
 
 Options:
@@ -116,6 +116,16 @@ step "locked root build"
 
 step "open-source audit"
 "$repo_dir/scripts/open-source-audit"
+
+formula_template="$repo_dir/packaging/homebrew/tiffany-loop.rb"
+if [[ -f "$formula_template" ]]; then
+  step "homebrew formula template"
+  if command -v ruby >/dev/null 2>&1; then
+    ruby -c "$formula_template"
+  else
+    echo "ruby unavailable; skipped formula syntax check"
+  fi
+fi
 
 if [[ "$mode" == "full" ]]; then
   step "tiffany fork targeted format"

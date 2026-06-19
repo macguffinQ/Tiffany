@@ -165,7 +165,7 @@ tiffany-loop
 ```bash
 git clone https://github.com/macguffinQ/Tiffany.git ~/code/orchestrator
 cd ~/code/orchestrator
-./scripts/tiffany-build
+./scripts/tiffany-build     # 默认构建到 target/dev-small
 ./scripts/tiffany-dev setup
 ./scripts/tiffany-dev
 ```
@@ -488,9 +488,11 @@ AGENTS.md > CLAUDE.md > orchestrator history > Claude Code prior sessions
 
 ```bash
 # 构建
-cargo build
+cargo build                # 普通 debug profile
 cargo build --release
-./scripts/tiffany-build
+./scripts/tiffany-build      # orchestrator + tiffany-loop UI，默认 dev-small
+./scripts/tiffany-build --small --locked
+./scripts/tiffany-build --dev --locked
 ./scripts/tiffany-build --release --locked
 ./scripts/tiffany-build --fast-release --locked
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache

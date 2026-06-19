@@ -83,18 +83,24 @@ User task
 ## Building
 
 ```bash
-cargo build --release
+./scripts/tiffany-build --locked
+./scripts/tiffany-build --dev --locked
 ./scripts/tiffany-build --fast-release --locked
 ```
 
-The build scripts use a shared Cargo target directory. The root release binary
-lands at `target/release/orchestrator` for a normal release build, and the
-primary UI binary lands next to it as `target/release/tiffany-loop`, with
-`target/release/tiffany` kept as a compatibility alias. Fast
-distributable builds use `target/tiffany-dist/`. The final binaries are small
-relative to the build cache; use `./scripts/tiffany-build --fast-release --locked
---prune-dist-cache` or `./scripts/tiffany-clean-targets --dist-cache` when you
-want to keep the runnable dist binaries but remove rebuildable dist internals.
+The build scripts use a shared Cargo target directory. Source-checkout builds
+default to the smaller `dev-small` profile, so `./scripts/tiffany-build --locked`
+writes local runnable binaries to `target/dev-small/`. Use
+`./scripts/tiffany-build --dev --locked` only when you need Cargo's normal debug
+profile and full debug symbols in `target/debug/`.
+
+Normal release builds use `target/release/`. Fast distributable builds use
+`target/tiffany-dist/` and install the root `orchestrator` binary next to the
+primary `tiffany-loop` UI and the compatibility `tiffany` alias. The final
+binaries are small relative to the build cache; use
+`./scripts/tiffany-build --fast-release --locked --prune-dist-cache` or
+`./scripts/tiffany-clean-targets --dist-cache` when you want to keep the runnable
+dist binaries but remove rebuildable dist internals.
 
 ## Terminal chat
 

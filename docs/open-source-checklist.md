@@ -7,10 +7,10 @@ Use this before making the repository public.
 - [x] Create the public repository.
 - [x] Add the real repository URL to `Cargo.toml`.
 - [x] Confirm `LICENSE` holder text is correct.
-- [ ] Review `README.md` for public-facing accuracy.
+- [x] Review `README.md` and `README.zh-CN.md` for public-facing install and development accuracy.
 - [x] Add preview-stage and non-affiliation language.
 - [x] Preserve Codex fork license and notice files.
-- [ ] Run:
+- [ ] Run full release preflight before publishing the next tag:
 
 ```bash
 ./scripts/tiffany-release-preflight --full --tag v0.1.11
@@ -20,14 +20,14 @@ Use this before making the repository public.
 - [ ] Review all files under `~/.orchestrator` before sharing logs or examples.
 - [ ] Review all files under `~/.tiffany` before sharing UI history, logs, or config.
 - [ ] Confirm no API keys, private prompts, session logs, database files, or generated worktrees are committed.
-- [ ] Run a final secret scan before pushing. `./scripts/open-source-audit` covers common local-state, large-file, and secret patterns. If you run manual scans, investigate every match:
+- [x] Run a final secret scan before pushing. `./scripts/open-source-audit` covers common local-state, large-file, and secret patterns. If you run manual scans, investigate every match:
 
 ```bash
 git grep -nE 'sk-[A-Za-z0-9_-]{20,}|ANTHROPIC_API_KEY|OPENAI_API_KEY|GITHUB_TOKEN|BEGIN (RSA|OPENSSH|PRIVATE) KEY' -- . ':!Cargo.lock'
 find . -path './target' -prune -o -path './tiffany-ui/codex-rs/target' -prune -o -type f -size +50M -print
 ```
 
-- [ ] Push CI workflow and verify it passes on GitHub.
+- [x] Push CI workflow and verify it passes on GitHub.
 
 ## Recommended
 
