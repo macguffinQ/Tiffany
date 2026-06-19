@@ -4,7 +4,9 @@ use crate::config::{self, Config, RoleConfig};
 use crate::runtime;
 use crate::tiffany_install;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -581,13 +583,108 @@ fn check_host_environment(builder: &mut DoctorReportBuilder) {
         std::env::consts::ARCH
     ));
 
-    check_version_command(builder, "rustc", &["--version"], "source builds", false);
-    check_version_command(builder, "cargo", &["--version"], "source builds", false);
+    check_rust_tool(builder, "rustc", "RUSTC", &["--version"], "source builds");
+    check_rust_tool(builder, "cargo", "CARGO", &["--version"], "source builds");
 
     if cfg!(target_os = "macos") {
         check_homebrew(builder);
         check_xcode(builder);
     }
+}
+
+fn check_rust_tool(
+    builder: &mut DoctorReportBuilder,
+    binary: &str,
+    env_var: &str,
+    args: &[&str],
+    description: &str,
+) {
+    let candidates =
+        rust_tool_candidates(binary, env_var, std::env::var_os(env_var), home::home_dir());
+    let mut failures = Vec::new();
+
+    for candidate in candidates {
+        match command_summary(&candidate.command, args) {
+            Ok(summary) if summary.success => {
+                builder.ok(format!(
+                    "{binary}: {} ({description}, {})",
+                    summary.first_line,
+                    candidate.source_label()
+                ));
+                return;
+            }
+            Ok(summary) => failures.push(format!(
+                "{}: {}",
+                candidate.source_label(),
+                summary.short_failure()
+            )),
+            Err(err) => failures.push(format!("{}: {err}", candidate.source_label())),
+        }
+    }
+
+    builder.warn(format!("{binary}: not found ({description})"));
+    builder.hint(format!(
+        "install Rust with rustup, or export PATH=\"$HOME/.cargo/bin:$PATH\" before running tiffany-loop"
+    ));
+    if let Some(last_failure) = failures
+        .iter()
+        .find(|failure| !failure.contains("No such file") && !failure.contains("not found"))
+    {
+        builder.hint(format!("{binary} check detail: {last_failure}"));
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RustToolCandidate {
+    command: String,
+    source: String,
+}
+
+impl RustToolCandidate {
+    fn source_label(&self) -> String {
+        match self.source.as_str() {
+            "PATH" => "PATH".to_string(),
+            source => format!("{source}: {}", self.command),
+        }
+    }
+}
+
+fn rust_tool_candidates(
+    binary: &str,
+    env_var: &str,
+    env_value: Option<OsString>,
+    home_dir: Option<PathBuf>,
+) -> Vec<RustToolCandidate> {
+    let mut candidates = Vec::new();
+    if let Some(value) = env_value.filter(|value| !value.is_empty()) {
+        candidates.push(RustToolCandidate {
+            command: PathBuf::from(value).to_string_lossy().to_string(),
+            source: env_var.to_string(),
+        });
+    }
+
+    candidates.push(RustToolCandidate {
+        command: binary.to_string(),
+        source: "PATH".to_string(),
+    });
+
+    if let Some(home) = home_dir {
+        candidates.push(RustToolCandidate {
+            command: home
+                .join(".cargo")
+                .join("bin")
+                .join(binary)
+                .to_string_lossy()
+                .to_string(),
+            source: "~/.cargo/bin".to_string(),
+        });
+    }
+
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|candidate| seen.insert(candidate.command.clone()))
+        .collect()
 }
 
 fn check_homebrew(builder: &mut DoctorReportBuilder) {
@@ -663,7 +760,7 @@ fn check_xcode(builder: &mut DoctorReportBuilder) {
             let developer_dir = summary.stdout.trim();
             builder.ok(format!("xcode developer dir: {developer_dir}"));
             if developer_dir.contains("/Applications/Xcode-beta.app/") {
-                builder.hint("using Xcode beta developer dir");
+                builder.hint("using Xcode beta developer dir; if source builds fail, switch back with `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`");
             } else if Path::new("/Applications/Xcode-beta.app/Contents/Developer").exists() {
                 builder.hint("Xcode beta is installed; select it with `sudo xcode-select -s /Applications/Xcode-beta.app/Contents/Developer` when you intentionally want the beta toolchain");
             }
@@ -853,6 +950,48 @@ mod tests {
             Some("0.1.7")
         );
         assert_eq!(parse_homebrew_tiffany_version("other 1.0\n"), None);
+    }
+
+    #[test]
+    fn rust_tool_candidates_include_env_path_and_cargo_home() {
+        let candidates = rust_tool_candidates(
+            "cargo",
+            "CARGO",
+            Some(OsString::from("/opt/rust/bin/cargo")),
+            Some(PathBuf::from("/home/alice")),
+        );
+
+        assert_eq!(
+            candidates,
+            vec![
+                RustToolCandidate {
+                    command: "/opt/rust/bin/cargo".into(),
+                    source: "CARGO".into(),
+                },
+                RustToolCandidate {
+                    command: "cargo".into(),
+                    source: "PATH".into(),
+                },
+                RustToolCandidate {
+                    command: "/home/alice/.cargo/bin/cargo".into(),
+                    source: "~/.cargo/bin".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn rust_tool_candidates_deduplicate_env_matching_path() {
+        let candidates =
+            rust_tool_candidates("cargo", "CARGO", Some(OsString::from("cargo")), None);
+
+        assert_eq!(
+            candidates,
+            vec![RustToolCandidate {
+                command: "cargo".into(),
+                source: "CARGO".into(),
+            }]
+        );
     }
 
     #[test]
