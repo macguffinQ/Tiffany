@@ -82,12 +82,13 @@ pub(super) fn progress_line(
         } => Some((
             "●",
             YELLOW,
-            format!(
-                "{} · {} · {} · {} started",
+            format_worker_lifecycle_line(
                 role,
-                runtime,
-                provider_model_label(provider.as_deref(), model),
-                short_task_id(task_id)
+                "started",
+                Some(runtime.as_str()),
+                Some(provider_model_label(provider.as_deref(), model)),
+                task_id,
+                None,
             ),
         )),
         RunProgress::WorkerOutput {
@@ -108,22 +109,26 @@ pub(super) fn progress_line(
                 Some((
                     "✓",
                     GREEN,
-                    format!(
-                        "{} · {} done · {}",
+                    format_worker_lifecycle_line(
                         role,
-                        short_task_id(task_id),
-                        format_duration_ms(*duration_ms)
+                        "done",
+                        None,
+                        None,
+                        task_id,
+                        Some(format_duration_ms(*duration_ms)),
                     ),
                 ))
             } else {
                 Some((
                     "✗",
                     RED,
-                    format!(
-                        "{} · {} failed · {}",
+                    format_worker_lifecycle_line(
                         role,
-                        short_task_id(task_id),
-                        format_duration_ms(*duration_ms)
+                        "failed",
+                        None,
+                        None,
+                        task_id,
+                        Some(format_duration_ms(*duration_ms)),
                     ),
                 ))
             }
@@ -131,7 +136,7 @@ pub(super) fn progress_line(
         RunProgress::Reviewing { task_id } => Some((
             "●",
             YELLOW,
-            format!("reviewing — {}", short_task_id(task_id)),
+            format_review_lifecycle_line("checking worker output", task_id, None),
         )),
         RunProgress::ReviewResult {
             task_id,
@@ -142,16 +147,16 @@ pub(super) fn progress_line(
                 Some((
                     "✓",
                     GREEN,
-                    format!("review approved — {}", short_task_id(task_id)),
+                    format_review_lifecycle_line("passed", task_id, None),
                 ))
             } else {
                 Some((
                     "●",
                     YELLOW,
-                    format!(
-                        "review needs fixes — {} issue(s), {}",
-                        issues,
-                        short_task_id(task_id)
+                    format_review_lifecycle_line(
+                        "needs fixes",
+                        task_id,
+                        Some(format!("{} issue(s)", issues)),
                     ),
                 ))
             }
@@ -279,6 +284,47 @@ fn worker_output_title(role: &str, agent: &str) -> String {
         (_, false, _) => agent.to_string(),
         _ => "worker".to_string(),
     }
+}
+
+fn format_worker_lifecycle_line(
+    role: &str,
+    action: &str,
+    runtime: Option<&str>,
+    provider_model: Option<String>,
+    task_id: &uuid::Uuid,
+    duration: Option<String>,
+) -> String {
+    let mut parts = vec![format!("{role} {action}")];
+    if let Some(runtime) = runtime
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != role.trim())
+    {
+        parts.push(runtime.to_string());
+    }
+    if let Some(provider_model) = provider_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(provider_model.to_string());
+    }
+    parts.push(short_task_id(task_id));
+    if let Some(duration) = duration {
+        parts.push(duration);
+    }
+    format!("worker  {}", parts.join(" · "))
+}
+
+fn format_review_lifecycle_line(
+    action: &str,
+    task_id: &uuid::Uuid,
+    suffix: Option<String>,
+) -> String {
+    let mut parts = vec![action.to_string(), short_task_id(task_id)];
+    if let Some(suffix) = suffix {
+        parts.push(suffix);
+    }
+    format!("review  {}", parts.join(" · "))
 }
 
 fn provider_model_label(provider: Option<&str>, model: &str) -> String {
@@ -665,6 +711,87 @@ mod tests {
         assert_eq!(line.0, "↳");
         assert!(line.2.contains("codex"));
         assert!(line.2.contains("模型不存在"));
+    }
+
+    #[test]
+    fn lifecycle_lines_match_tiffany_waterfall_style() {
+        let task_id = uuid::Uuid::nil();
+        let input = InputState::default();
+
+        let started = progress_line(
+            &RunProgress::WorkerStarted {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                runtime: "claude-code".into(),
+                model: "MiniMax-M3".into(),
+                provider: Some("minimax".into()),
+                prompt: "do the task".into(),
+            },
+            0,
+            &input,
+        )
+        .expect("worker start line");
+        assert_eq!(
+            started.2,
+            "worker  worker-cc started · claude-code · minimax/MiniMax-M3 · 00000000"
+        );
+
+        let done = progress_line(
+            &RunProgress::WorkerDone {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                duration_ms: 1_250,
+                ok: true,
+            },
+            0,
+            &input,
+        )
+        .expect("worker done line");
+        assert_eq!(done.2, "worker  worker-cc done · 00000000 · 1.2s");
+
+        let failed = progress_line(
+            &RunProgress::WorkerDone {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                duration_ms: 42,
+                ok: false,
+            },
+            0,
+            &input,
+        )
+        .expect("worker failed line");
+        assert_eq!(failed.2, "worker  worker-cc failed · 00000000 · 42ms");
+
+        let reviewing =
+            progress_line(&RunProgress::Reviewing { task_id }, 0, &input).expect("reviewing line");
+        assert_eq!(reviewing.2, "review  checking worker output · 00000000");
+
+        let passed = progress_line(
+            &RunProgress::ReviewResult {
+                task_id,
+                approved: true,
+                issues: 0,
+            },
+            0,
+            &input,
+        )
+        .expect("review passed line");
+        assert_eq!(passed.2, "review  passed · 00000000");
+
+        let needs_fixes = progress_line(
+            &RunProgress::ReviewResult {
+                task_id,
+                approved: false,
+                issues: 3,
+            },
+            0,
+            &input,
+        )
+        .expect("review needs fixes line");
+        assert_eq!(needs_fixes.2, "review  needs fixes · 00000000 · 3 issue(s)");
     }
 
     #[test]
