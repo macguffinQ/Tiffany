@@ -266,7 +266,8 @@ pub(super) fn handle_slash_command_with_runtime(
             let msg = match what {
                 "process" | "trace" => export_process_capture(input, target),
                 "transcript" | "chat" => export_transcript(&input.transcript, target),
-                _ => "Usage: /export process|transcript [file|clipboard]".into(),
+                "session" | "run" => export_session_command(store, args.get(1..).unwrap_or(&[])),
+                _ => "Usage: /export process|transcript|session [target]".into(),
             };
             push_system(input, msg);
         }
@@ -967,13 +968,63 @@ fn argument_candidates(
             &[
                 ("process", "export process capture"),
                 ("transcript", "export chat transcript"),
+                ("session", "export persisted session log"),
             ],
         ),
-        "export" if ctx.current_index == 1 => choice_candidates(
-            ctx,
-            1,
-            &[("file", "save to file"), ("clipboard", "copy to clipboard")],
-        ),
+        "export"
+            if ctx.current_index == 1
+                && matches!(
+                    ctx.args.first().map(String::as_str),
+                    Some("process" | "trace" | "transcript" | "chat")
+                ) =>
+        {
+            choice_candidates(
+                ctx,
+                1,
+                &[("file", "save to file"), ("clipboard", "copy to clipboard")],
+            )
+        }
+        "export"
+            if ctx.current_index == 1
+                && matches!(
+                    ctx.args.first().map(String::as_str),
+                    Some("session" | "run")
+                ) =>
+        {
+            let mut candidates = choice_candidates(
+                ctx,
+                1,
+                &[
+                    ("last", "export latest session"),
+                    ("markdown", "save latest session as Markdown"),
+                    ("html", "save latest session as HTML"),
+                    ("clipboard", "copy latest session Markdown"),
+                ],
+            );
+            candidates.extend(session_candidates(store, ctx));
+            candidates
+        }
+        "export"
+            if ctx.current_index == 2
+                && matches!(
+                    ctx.args.first().map(String::as_str),
+                    Some("session" | "run")
+                )
+                && ctx
+                    .args
+                    .get(1)
+                    .is_some_and(|arg| !is_session_export_target(arg)) =>
+        {
+            choice_candidates(
+                ctx,
+                2,
+                &[
+                    ("markdown", "save as Markdown"),
+                    ("html", "save as HTML"),
+                    ("clipboard", "copy Markdown to clipboard"),
+                ],
+            )
+        }
         "result" | "final" => choice_candidates(ctx, 0, &[("text", "show selectable plain text")]),
         "copy" => choice_candidates(
             ctx,
@@ -1247,6 +1298,7 @@ fn help_text() -> String {
      /process clear-filter         Clear process event filter\n\
      /process save                 Save captured process\n\
      /export process [target]      Export process or transcript\n\
+     /export session [id] [target] Export session as Markdown/HTML or clipboard\n\
      /grep <text>                  Search session logs\n\
      /queue [clear|remove n|promote n|pause|resume|edit n text] Manage queued messages\n\
      /retry                        Re-run the last task prompt\n\
@@ -3278,6 +3330,99 @@ fn format_grep(store: &SessionStore, pattern: &str, limit: usize) -> String {
     }
 }
 
+fn export_session_command(store: &SessionStore, args: &[&str]) -> String {
+    let (selector, target) = parse_session_export_args(args);
+    let target = match parse_session_export_target(target) {
+        Ok(target) => target,
+        Err(err) => return err,
+    };
+    let session = match resolve_session(store, selector) {
+        Ok(session) => session,
+        Err(err) => return err,
+    };
+
+    match target {
+        SessionExportCommandTarget::MarkdownFile => {
+            match crate::session_export::export_session_to_file(
+                store,
+                &session,
+                crate::session_export::SessionExportFormat::Markdown,
+            ) {
+                Ok(export) => format!(
+                    "Exported session {} Markdown to:\n  {}",
+                    crate::session_export::short_session_id(&export.session),
+                    export.path.display()
+                ),
+                Err(err) => format!("Session export failed: {err:#}"),
+            }
+        }
+        SessionExportCommandTarget::HtmlFile => {
+            match crate::session_export::export_session_to_file(
+                store,
+                &session,
+                crate::session_export::SessionExportFormat::Html,
+            ) {
+                Ok(export) => format!(
+                    "Exported session {} HTML to:\n  {}",
+                    crate::session_export::short_session_id(&export.session),
+                    export.path.display()
+                ),
+                Err(err) => format!("Session export failed: {err:#}"),
+            }
+        }
+        SessionExportCommandTarget::Clipboard => {
+            match crate::session_export::render_session_markdown(store, &session) {
+                Ok(body) => match copy_to_clipboard(&body) {
+                    Ok(()) => format!(
+                        "Copied session {} Markdown to clipboard ({} bytes).",
+                        crate::session_export::short_session_id(&session),
+                        body.len()
+                    ),
+                    Err(err) => format!("Session clipboard copy failed: {err}"),
+                },
+                Err(err) => format!("Session export failed: {err:#}"),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionExportCommandTarget {
+    MarkdownFile,
+    HtmlFile,
+    Clipboard,
+}
+
+fn parse_session_export_args<'a>(args: &'a [&'a str]) -> (Option<&'a str>, &'a str) {
+    match args {
+        [] => (None, "markdown"),
+        [only] if is_session_export_target(only) => (None, only),
+        [selector] => (Some(selector), "markdown"),
+        [selector, target, ..] => (Some(selector), target),
+    }
+}
+
+fn is_session_export_target(value: &str) -> bool {
+    matches!(
+        value,
+        "markdown" | "md" | "file" | "disk" | "html" | "clipboard" | "cb"
+    )
+}
+
+fn parse_session_export_target(
+    value: &str,
+) -> std::result::Result<SessionExportCommandTarget, String> {
+    match value {
+        "markdown" | "md" | "file" | "disk" => Ok(SessionExportCommandTarget::MarkdownFile),
+        "html" => Ok(SessionExportCommandTarget::HtmlFile),
+        "clipboard" | "cb" => Ok(SessionExportCommandTarget::Clipboard),
+        other => Err(format!(
+            "Unknown session export target: {}\nUse `markdown`, `html`, or `clipboard`.",
+            other
+        )),
+    }
+}
+
 fn resolve_session(
     store: &SessionStore,
     selector: Option<&str>,
@@ -3609,6 +3754,73 @@ mod tests {
         assert!(flow.contains("worker says hello"));
         assert!(flow.contains("/tree"));
         assert!(flow.contains("/log"));
+    }
+
+    #[test]
+    fn export_session_command_saves_markdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let mut session = Session::new(uuid::Uuid::new_v4(), "worker-cc", Role::Worker);
+        session.ended_at = Some(chrono::Utc::now());
+        store.finalize(&session).unwrap();
+        store
+            .append(&Event {
+                session_id: session.id,
+                task_id: session.task_id,
+                ts: chrono::Utc::now(),
+                kind: "assistant".into(),
+                payload: serde_json::json!({"text": "final answer"}),
+            })
+            .unwrap();
+
+        let msg = export_session_command(&store, &[]);
+
+        assert!(msg.contains("Exported session"));
+        assert!(msg.contains(".md"));
+        let path = msg.lines().last().unwrap().trim();
+        let body = std::fs::read_to_string(path).unwrap();
+        assert!(body.contains("# Tiffany session"));
+        assert!(body.contains("final answer"));
+    }
+
+    #[test]
+    fn export_session_command_saves_html_for_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let mut session = Session::new(uuid::Uuid::new_v4(), "worker-codex", Role::Worker);
+        session.ended_at = Some(chrono::Utc::now());
+        store.finalize(&session).unwrap();
+        store
+            .append(&Event {
+                session_id: session.id,
+                task_id: session.task_id,
+                ts: chrono::Utc::now(),
+                kind: "assistant".into(),
+                payload: serde_json::json!({"text": "use <xml>"}),
+            })
+            .unwrap();
+
+        let msg = export_session_command(&store, &[&session.id.to_string()[..8], "html"]);
+
+        assert!(msg.contains("HTML"));
+        assert!(msg.contains(".html"));
+        let path = msg.lines().last().unwrap().trim();
+        let body = std::fs::read_to_string(path).unwrap();
+        assert!(body.contains("&lt;xml&gt;"));
+        assert!(!body.contains("use <xml>"));
+    }
+
+    #[test]
+    fn export_session_command_reports_bad_selector() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+
+        let msg = export_session_command(&store, &["missing"]);
+
+        assert!(msg.contains("Session not found: missing"));
     }
 
     #[test]

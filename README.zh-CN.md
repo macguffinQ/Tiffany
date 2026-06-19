@@ -241,6 +241,7 @@ orchestrator sessions show <id|prefix|last>          # 默认人类可读
 orchestrator sessions show <id|prefix|last> --raw    # 原始 JSONL
 orchestrator sessions show <id|prefix|last> --tree   # 父子 run 树
 orchestrator sessions show <id|prefix|last> --flow   # 总控/worker 可读瀑布流
+orchestrator sessions export <id|prefix|last> --format html
 orchestrator sessions grep "rate limit" --limit 10
 ```
 
@@ -335,6 +336,7 @@ behavior:
 | `orchestrator acp` | 启动 Agent Client Protocol stdio server |
 | `orchestrator sessions list` | 列出历史会话，显示角色、父子关系提示和可复制打开命令 |
 | `orchestrator sessions show <id|prefix|last>` | 查看人类可读的总控或 worker 会话日志，`--raw` 保留原始 JSONL，`--tree` 显示父子关系，`--flow` 显示可读瀑布流 |
+| `orchestrator sessions export <id|prefix|last> --format markdown\|html` | 导出可读会话报告为 Markdown 或 HTML |
 | `orchestrator sessions grep <pattern> --limit 10` | 搜索会话日志，显示可读摘要和可复制打开命令 |
 | `orchestrator sessions import-cc` | 导入 Claude Code 历史会话 |
 | `orchestrator config` | 查看和修改 orchestrator 配置 |
@@ -570,13 +572,13 @@ cargo run -- config
 - 已 vendor tiffany-loop TUI 源码快照：`third_party/openai-codex/codex-rs/tui`
 - `orchestrator tui` 在安装了 `tiffany-loop` 时默认进入 tiffany-loop UI
 - Release/Homebrew 同时安装 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`
+- Session 导出为 Markdown/HTML
 
 计划中：
 
 - fork adapter 稳定后删除旧的局部复制 TUI 模块
 - 更完整的 token 级最终答案流式输出
 - 后台任务和 attach
-- Session 导出为 Markdown/HTML
 - 成本预算告警
 - VS Code 扩展
 

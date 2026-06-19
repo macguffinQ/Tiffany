@@ -5,12 +5,14 @@ use orchestrator::config::Config;
 use orchestrator::core::types::{Role, Session, Task, TaskStatus};
 use orchestrator::pipeline::orchestrator::Orchestrator;
 use orchestrator::roles::ab_judge::AbJudge;
+use orchestrator::session_export::SessionExportFormat;
 use orchestrator::tiffany_events::{TiffanyProgressEvent, TiffanyTextProgressFormatter};
 use orchestrator::tiffany_install;
 use orchestrator::{adapters, cc_config, mux, roles, runtime, storage};
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
@@ -257,6 +259,55 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                             },
                         )
                     );
+                }
+                crate::SessionsCmd::Export {
+                    id,
+                    format,
+                    out,
+                    clipboard,
+                } => {
+                    let session = store.resolve_selector(id.as_deref().unwrap_or("last"))?;
+                    let format = match format {
+                        crate::SessionExportFormatArg::Markdown => SessionExportFormat::Markdown,
+                        crate::SessionExportFormatArg::Html => SessionExportFormat::Html,
+                    };
+                    if clipboard {
+                        let body = orchestrator::session_export::render_session_markdown(
+                            &store, &session,
+                        )?;
+                        copy_to_clipboard_cli(&body)?;
+                        println!(
+                            "Copied session {} Markdown to clipboard ({} bytes).",
+                            orchestrator::session_export::short_session_id(&session),
+                            body.len()
+                        );
+                    } else if let Some(path) = out {
+                        let body = match format {
+                            SessionExportFormat::Markdown => {
+                                orchestrator::session_export::render_session_markdown(
+                                    &store, &session,
+                                )?
+                            }
+                            SessionExportFormat::Html => {
+                                orchestrator::session_export::render_session_html(&store, &session)?
+                            }
+                        };
+                        write_session_export(&path, &body)?;
+                        println!(
+                            "Exported session {} to {}",
+                            orchestrator::session_export::short_session_id(&session),
+                            path.display()
+                        );
+                    } else {
+                        let export = orchestrator::session_export::export_session_to_file(
+                            &store, &session, format,
+                        )?;
+                        println!(
+                            "Exported session {} to {}",
+                            orchestrator::session_export::short_session_id(&export.session),
+                            export.path.display()
+                        );
+                    }
                 }
                 crate::SessionsCmd::ImportCc { project } => {
                     use orchestrator::cc_session_import;
@@ -3874,6 +3925,51 @@ fn default_binary_for_role_runtime(runtime: roles::cli_subprocess::RoleCliRuntim
     }
 }
 
+fn write_session_export(path: &Path, body: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+    }
+    std::fs::write(path, body).with_context(|| format!("writing {}", path.display()))
+}
+
+fn copy_to_clipboard_cli(text: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("starting pbcopy")?;
+
+    #[cfg(target_os = "windows")]
+    let mut child = Command::new("clip")
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("starting clip")?;
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg("xclip -selection clipboard || xsel --clipboard --input || wl-copy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("starting xclip/xsel/wl-copy")?;
+
+    {
+        let mut stdin = child.stdin.take().context("clipboard stdin unavailable")?;
+        stdin
+            .write_all(text.as_bytes())
+            .context("writing clipboard data")?;
+    }
+    let status = child.wait().context("waiting for clipboard command")?;
+    if status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!("clipboard command exited with {status}");
+    }
+}
+
 pub async fn build_orchestrator(
     cfg: &Config,
     no_critic: bool,
@@ -4595,6 +4691,16 @@ mod tests {
             "config provider setup custom --type openai --key <redacted> --endpoint https://llm.example.com/v1"
         );
         assert!(!preview.contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn write_session_export_creates_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("session.md");
+
+        write_session_export(&path, "body").unwrap();
+
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "body");
     }
 
     #[test]

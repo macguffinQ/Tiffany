@@ -338,6 +338,7 @@ orchestrator sessions show <id|prefix|last>          # human-readable by default
 orchestrator sessions show <id|prefix|last> --raw    # original JSONL
 orchestrator sessions show <id|prefix|last> --tree   # parent/child run tree
 orchestrator sessions show <id|prefix|last> --flow   # readable orchestration/worker waterfall
+orchestrator sessions export <id|prefix|last> --format html
 orchestrator sessions grep "rate limit" --limit 10
 
 # 11. See everything the orchestrator loaded
@@ -434,6 +435,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `orchestrator acp` | Run an Agent Client Protocol server over stdio |
 | `orchestrator sessions list` | List recent sessions with role labels, parent/child hints, and copyable open commands |
 | `orchestrator sessions show <id|prefix|last>` | Show a human-readable orchestration or worker session log (`--raw` keeps JSONL, `--tree` shows parent/child links, `--flow` shows the readable run waterfall) |
+| `orchestrator sessions export <id|prefix|last> --format markdown\|html` | Export a readable session report to Markdown or HTML |
 | `orchestrator sessions grep <pattern> --limit 10` | Search session logs and print readable event summaries with copyable open commands |
 | `orchestrator sessions import-cc` | Import your existing CC sessions from `~/.claude/projects/<slug>/sessions/` |
 | `orchestrator config` | Inspect and edit orchestrator configuration |
@@ -765,11 +767,11 @@ orchestrator/
 - [x] Native tiffany-loop adapter inside the tiffany-loop TUI app/session layer
 - [x] Make the tiffany-loop UI the default `orchestrator tui` command path when `tiffany-loop` is installed
 - [x] Release/Homebrew packaging installs `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias
+- [x] Session export (markdown / HTML)
 - [ ] Remove copied partial TUI modules after the fork adapter is stable
 - [ ] Full-token streaming final responses in terminal chat
 - [ ] Background task mode (`orchestrator run --detach` + `orchestrator attach`)
 - [ ] CC agent invocation from orchestrator (`--agent reviewer`)
-- [ ] Session export (markdown / HTML)
 - [ ] Cost budget alerts
 - [ ] VS Code extension
 

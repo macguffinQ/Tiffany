@@ -173,6 +173,12 @@ pub(crate) enum EventsFormat {
     Text,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum SessionExportFormatArg {
+    Markdown,
+    Html,
+}
+
 #[derive(Subcommand)]
 enum ConfigCmd {
     /// Show all loaded config (default)
@@ -410,6 +416,20 @@ enum SessionsCmd {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+    /// Export one session as Markdown or HTML
+    Export {
+        /// Session UUID, short prefix, last, or .
+        id: Option<String>,
+        /// Output format
+        #[arg(long, value_enum, default_value_t = SessionExportFormatArg::Markdown)]
+        format: SessionExportFormatArg,
+        /// Write to this file instead of the default exports directory
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Copy Markdown to the clipboard instead of writing a file
+        #[arg(long, conflicts_with = "out")]
+        clipboard: bool,
+    },
     /// Import Claude Code sessions into orchestrator session log
     ImportCc {
         /// Only import sessions from this project (default: current dir)
@@ -557,6 +577,29 @@ mod tests {
                 assert_eq!(limit, 5);
             }
             _ => panic!("unexpected sessions grep command"),
+        }
+    }
+
+    #[test]
+    fn sessions_export_defaults_to_markdown_file() {
+        let cli = Cli::parse_from(["orchestrator", "sessions", "export"]);
+
+        match cli.cmd {
+            Cmd::Sessions {
+                action:
+                    SessionsCmd::Export {
+                        id,
+                        format,
+                        out,
+                        clipboard,
+                    },
+            } => {
+                assert_eq!(id, None);
+                assert_eq!(format, SessionExportFormatArg::Markdown);
+                assert_eq!(out, None);
+                assert!(!clipboard);
+            }
+            _ => panic!("unexpected sessions export command"),
         }
     }
 
