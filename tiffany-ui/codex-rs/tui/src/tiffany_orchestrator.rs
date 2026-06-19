@@ -1641,6 +1641,9 @@ fn humanize_jsonish(content: &str) -> String {
             return format!("{}: {}", prefix.trim(), summary);
         }
     }
+    if let Some(summary) = summarize_loose_structured_json(trimmed) {
+        return summary;
+    }
     if let Some(summary) = summarize_jsonish_lines(trimmed) {
         return summary;
     }
@@ -1937,7 +1940,7 @@ fn summarize_jsonish_line(line: &str) -> Option<String> {
             ));
         }
     }
-    summarize_embedded_json_with_context(line)
+    summarize_embedded_json_with_context(line).or_else(|| summarize_loose_structured_json(line))
 }
 
 fn push_unique_summary_line(out: &mut Vec<String>, line: String) {
@@ -1966,6 +1969,164 @@ fn summarize_embedded_json_with_context(content: &str) -> Option<String> {
         (true, false) => Some(format!("{summary} {suffix}")),
         (false, false) => Some(format!("{prefix} {summary} {suffix}")),
     }
+}
+
+fn summarize_loose_structured_json(content: &str) -> Option<String> {
+    summarize_loose_review_json(content).or_else(|| summarize_loose_plan_json(content))
+}
+
+fn summarize_loose_review_json(content: &str) -> Option<String> {
+    if !content.contains("approved")
+        || !(content.contains("issues") || content.contains("suggestions"))
+    {
+        return None;
+    }
+    let approved = find_loose_bool_field(content, "approved")?;
+    let issues = extract_loose_string_array(content, "issues");
+    let suggestions = extract_loose_string_array(content, "suggestions");
+    let mut summary = if approved {
+        format!("approved - {} issue(s)", issues.len())
+    } else {
+        format!("needs changes - {} issue(s)", issues.len())
+    };
+
+    for issue in issues.iter().take(6) {
+        summary.push_str("\n  - ");
+        summary.push_str(&truncate_text(issue, 220));
+    }
+    if issues.len() > 6 {
+        summary.push_str(&format!("\n  … {} more issue(s)", issues.len() - 6));
+    }
+
+    if !suggestions.is_empty() {
+        summary.push_str("\n  suggestions:");
+        for suggestion in suggestions.iter().take(3) {
+            summary.push_str("\n  - ");
+            summary.push_str(&truncate_text(suggestion, 220));
+        }
+        if suggestions.len() > 3 {
+            summary.push_str(&format!(
+                "\n  … {} more suggestion(s)",
+                suggestions.len() - 3
+            ));
+        }
+    }
+
+    Some(summary)
+}
+
+fn summarize_loose_plan_json(content: &str) -> Option<String> {
+    if !content.contains("sub_tasks") {
+        return None;
+    }
+    let prompts = extract_loose_repeated_string_field(content, "prompt");
+    if prompts.is_empty() {
+        return Some("plan ready - sub-task(s)".to_string());
+    }
+
+    let mut summary = format!("plan ready - {} sub-task(s)", prompts.len());
+    for (idx, prompt) in prompts.iter().take(6).enumerate() {
+        summary.push_str(&format!("\n  {}. {}", idx + 1, truncate_text(prompt, 140)));
+    }
+    if prompts.len() > 6 {
+        summary.push_str(&format!("\n  … {} more", prompts.len() - 6));
+    }
+    Some(summary)
+}
+
+fn find_loose_bool_field(content: &str, key: &str) -> Option<bool> {
+    let idx = find_loose_key(content, key)?;
+    let after_key = &content[idx + key.len() + 2..];
+    let after_colon = after_key.split_once(':')?.1.trim_start();
+    if after_colon.starts_with("true") {
+        Some(true)
+    } else if after_colon.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn extract_loose_repeated_string_field(content: &str, key: &str) -> Vec<String> {
+    let mut rest = content;
+    let mut values = Vec::new();
+    while let Some(idx) = find_loose_key(rest, key) {
+        let after_key = &rest[idx + key.len() + 2..];
+        let Some((_, after_colon)) = after_key.split_once(':') else {
+            break;
+        };
+        let trimmed = after_colon.trim_start();
+        if let Some((value, consumed)) = extract_loose_string(trimmed) {
+            values.push(value);
+            rest = &trimmed[consumed..];
+        } else {
+            rest = trimmed;
+        }
+    }
+    values
+}
+
+fn extract_loose_string_array(content: &str, key: &str) -> Vec<String> {
+    let Some(idx) = find_loose_key(content, key) else {
+        return Vec::new();
+    };
+    let after_key = &content[idx + key.len() + 2..];
+    let Some((_, after_colon)) = after_key.split_once(':') else {
+        return Vec::new();
+    };
+    let Some(array_start) = after_colon.find('[') else {
+        return Vec::new();
+    };
+
+    let mut rest = &after_colon[array_start + 1..];
+    let mut values = Vec::new();
+    loop {
+        let trimmed = rest.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with(']') {
+            break;
+        }
+        if let Some((value, consumed)) = extract_loose_string(trimmed) {
+            values.push(value);
+            rest = &trimmed[consumed..];
+            continue;
+        }
+        if let Some(next_quote) = trimmed.find('"') {
+            rest = &trimmed[next_quote..];
+        } else {
+            break;
+        }
+    }
+    values
+}
+
+fn extract_loose_string(content: &str) -> Option<(String, usize)> {
+    let start = content.find('"')?;
+    let mut out = String::new();
+    let mut escape = false;
+    for (offset, ch) in content[start + 1..].char_indices() {
+        if escape {
+            out.push(ch);
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' => escape = true,
+            '"' => {
+                let consumed = start + 1 + offset + ch.len_utf8();
+                return Some((normalize_loose_string(&out), consumed));
+            }
+            _ => out.push(ch),
+        }
+    }
+    (!out.trim().is_empty()).then(|| (normalize_loose_string(&out), content.len()))
+}
+
+fn normalize_loose_string(content: &str) -> String {
+    content.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn find_loose_key(content: &str, key: &str) -> Option<usize> {
+    content.find(&format!("\"{key}\""))
 }
 
 fn looks_like_actionable_stderr(lower: &str) -> bool {
@@ -2532,6 +2693,71 @@ mod tests {
         assert!(reviewer_visible.contains("return a concise result"));
         assert!(!is_redundant_role_output(&reviewer.role, &reviewer_visible));
         assert!(!reviewer_visible.contains('{'));
+    }
+
+    #[test]
+    fn humanizes_truncated_role_json_without_raw_leakage() {
+        let critic = TiffanyProgressEvent {
+            role: "critic".to_string(),
+            status: "output".to_string(),
+            message: "critic output".to_string(),
+            task_id: None,
+            agent: None,
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: Some(
+                "critic>\n  {\"approved\": false, \"issues\": [\"Self-contradictory: delegated despite direct-answer instruction\",\n  \"Unnecessary delegation"
+                    .to_string(),
+            ),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+
+        let visible = visible_content(&critic).expect("visible critic output");
+
+        assert!(visible.contains("needs changes - 2 issue(s)"));
+        assert!(visible.contains("Self-contradictory"));
+        assert!(visible.contains("Unnecessary delegation"));
+        assert!(!visible.contains('{'));
+        assert!(!visible.contains("\"issues\""));
+        assert!(!visible.contains("critic>"));
+    }
+
+    #[test]
+    fn humanizes_truncated_planner_json_without_raw_leakage() {
+        let planner = TiffanyProgressEvent {
+            role: "planner".to_string(),
+            status: "output".to_string(),
+            message: "planner output".to_string(),
+            task_id: None,
+            agent: None,
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: Some(
+                "planner>\n  {\"sub_tasks\": [{\"prompt\": \"Answer in Chinese and keep the result concise"
+                    .to_string(),
+            ),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+
+        let visible = visible_content(&planner).expect("visible planner output");
+
+        assert!(visible.contains("plan ready - 1 sub-task(s)"));
+        assert!(visible.contains("Answer in Chinese"));
+        assert!(!visible.contains('{'));
+        assert!(!visible.contains("\"sub_tasks\""));
+        assert!(!visible.contains("planner>"));
     }
 
     #[cfg(unix)]
