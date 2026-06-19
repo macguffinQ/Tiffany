@@ -251,22 +251,34 @@ fn visible_worker_output_line(
         PROGRESS_OUTPUT_EXPANDED_LIMIT
     };
     let display = visible_worker_output_display(content, max)?;
-    let role = format!("worker:{}:{}:{}", short_task_id(task_id), role, agent);
+    let scope = format!("worker:{}:{}:{}", short_task_id(task_id), role, agent);
     let dedupe_display =
         visible_worker_output_dedupe_display(content).unwrap_or_else(|| display.clone());
-    if output_was_already_visible(input, &role, &dedupe_display) {
+    if output_was_already_visible(input, &scope, &dedupe_display) {
         return None;
     }
+    let source = worker_output_title(role, agent);
     Some((
         "↳",
         DIM,
         format_agent_output_block(
-            agent,
+            &source,
             Some(&short_task_id(task_id)),
             &display,
             input.history_folded,
         ),
     ))
+}
+
+fn worker_output_title(role: &str, agent: &str) -> String {
+    let role = role.trim();
+    let agent = agent.trim();
+    match (role.is_empty(), agent.is_empty(), role == agent) {
+        (false, false, false) => format!("{role} · {agent}"),
+        (false, _, _) => role.to_string(),
+        (_, false, _) => agent.to_string(),
+        _ => "worker".to_string(),
+    }
 }
 
 fn provider_model_label(provider: Option<&str>, model: &str) -> String {
@@ -543,6 +555,7 @@ mod tests {
 
         let line = progress_line(&first, 0, &input).expect("visible worker output");
         assert_eq!(line.0, "↳");
+        assert!(line.2.contains("worker-cc"));
         assert!(line.2.contains("claude-code"));
         assert!(line.2.contains("useful summary"));
 
