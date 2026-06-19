@@ -103,6 +103,9 @@ fn collect_text_parts(value: &Value) -> Vec<String> {
     let Some(object) = value.as_object() else {
         return Vec::new();
     };
+    if let Some(summary) = summarize_inline_tool_object(object) {
+        return vec![summary];
+    }
 
     let mut parts = Vec::new();
     for key in [
@@ -200,7 +203,7 @@ pub fn normalize_output_summary(display: &str) -> String {
     match parts.next() {
         Some(
             "assistant" | "event" | "result" | "final" | "final_answer" | "task_complete"
-            | "turn_complete",
+            | "turn_complete" | "tool" | "tool_use" | "tool_result" | "exec",
         ) => body.trim().to_string(),
         _ => trimmed.to_string(),
     }
@@ -366,6 +369,9 @@ fn summarize_json_value(value: &Value) -> String {
         if let Some(summary) = summarize_review_object(object) {
             return summary;
         }
+        if let Some(summary) = summarize_inline_tool_object(object) {
+            return summary;
+        }
         if let Some(summary) = summarize_tool_object(object) {
             return summary;
         }
@@ -499,17 +505,83 @@ fn summarize_tool_object(object: &Map<String, Value>) -> Option<String> {
         .or_else(|| object.get("tool"))
         .and_then(Value::as_str)
         .and_then(|name| non_empty(name).map(|text| sanitize_text(&text, 80)))?;
-    let command = object
-        .get("input")
-        .and_then(|input| input.get("command").or_else(|| input.get("cmd")))
-        .or_else(|| object.get("command"))
-        .or_else(|| object.get("cmd"))
-        .and_then(value_to_text);
+    let detail = tool_detail_text(object);
 
-    Some(match command {
-        Some(command) => format!("tool {name}: {}", sanitize_text(&command, 160)),
+    Some(match detail {
+        Some(detail) => format!("tool {name}: {}", sanitize_text(&detail, 160)),
         None => format!("tool {name}"),
     })
+}
+
+fn summarize_inline_tool_object(object: &Map<String, Value>) -> Option<String> {
+    match object.get("type").and_then(Value::as_str) {
+        Some("tool_use") => summarize_tool_object(object),
+        Some("tool_result") => summarize_tool_result_object(object),
+        _ => None,
+    }
+}
+
+fn summarize_tool_result_object(object: &Map<String, Value>) -> Option<String> {
+    let content = object
+        .get("content")
+        .and_then(tool_result_content_text)
+        .or_else(|| object.get("result").and_then(value_to_text))
+        .unwrap_or_default();
+    let prefix = if object
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        "tool error"
+    } else {
+        "tool result"
+    };
+    if content.trim().is_empty() {
+        Some(prefix.to_string())
+    } else {
+        Some(format!("{prefix}: {}", sanitize_text(content.trim(), 220)))
+    }
+}
+
+fn tool_result_content_text(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str().and_then(non_empty) {
+        return Some(text);
+    }
+    let text = collect_text_parts(value).join("\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn tool_detail_text(object: &Map<String, Value>) -> Option<String> {
+    for key in ["command", "cmd", "file_path", "path", "url", "query"] {
+        if let Some(text) = object.get(key).and_then(value_to_text) {
+            return Some(text);
+        }
+    }
+
+    let input = object
+        .get("input")
+        .or_else(|| object.get("parameters"))
+        .or_else(|| object.get("args"))?;
+    if let Some(text) = input.as_str().and_then(non_empty) {
+        return Some(text);
+    }
+    let input = input.as_object()?;
+    for key in ["command", "cmd", "file_path", "path", "url", "query"] {
+        if let Some(text) = input.get(key).and_then(value_to_text) {
+            return Some(text);
+        }
+    }
+    match (
+        input.get("pattern").and_then(value_to_text),
+        input
+            .get("path")
+            .or_else(|| input.get("file_path"))
+            .and_then(value_to_text),
+    ) {
+        (Some(pattern), Some(path)) => Some(format!("{pattern} in {path}")),
+        (Some(pattern), None) => Some(pattern),
+        _ => None,
+    }
 }
 
 fn value_array_texts(value: Option<&Value>) -> Vec<String> {
@@ -889,6 +961,42 @@ mod tests {
         let text = format_runtime_output("claude-code", "assistant", &payload, 200);
 
         assert_eq!(text, "claude-code assistant: Working on it");
+        assert!(!text.contains('{'));
+    }
+
+    #[test]
+    fn formats_nested_tool_use_and_result_blocks() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    { "type": "tool_use", "name": "Bash", "input": { "command": "cargo test" } },
+                    { "type": "tool_result", "content": "tests passed", "is_error": false }
+                ]
+            }
+        })
+        .to_string();
+
+        let summary = summarize_cli_stream_line(&line, 500).unwrap();
+
+        assert_eq!(summary.kind, "assistant");
+        assert!(summary.text.contains("tool Bash: cargo test"));
+        assert!(summary.text.contains("tool result: tests passed"));
+        assert!(!summary.text.contains('{'));
+    }
+
+    #[test]
+    fn formats_runtime_tool_payloads_without_raw_json() {
+        let payload = serde_json::json!({
+            "type": "tool_use",
+            "name": "Read",
+            "input": { "file_path": "README.md" }
+        });
+
+        let text = format_runtime_output("claude-code", "tool_use", &payload, 200);
+
+        assert_eq!(text, "claude-code tool_use: tool Read: README.md");
+        assert_eq!(normalize_output_summary(&text), "tool Read: README.md");
         assert!(!text.contains('{'));
     }
 

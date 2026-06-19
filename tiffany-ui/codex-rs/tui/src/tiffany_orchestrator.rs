@@ -2543,12 +2543,18 @@ fn strip_runtime_prefix(line: &str) -> String {
         "claude-code assistant: ",
         "claude-code result: ",
         "claude-code final_answer: ",
+        "claude-code tool_use: ",
+        "claude-code tool_result: ",
         "claude assistant: ",
         "claude result: ",
         "claude final_answer: ",
+        "claude tool_use: ",
+        "claude tool_result: ",
         "codex assistant: ",
         "codex result: ",
         "codex final_answer: ",
+        "codex tool_use: ",
+        "codex tool_result: ",
     ] {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
             return rest.to_string();
@@ -2563,7 +2569,17 @@ fn strip_runtime_prefix(line: &str) -> String {
         if matches!(runtime, Some("claude" | "claude-code" | "codex"))
             && matches!(
                 kind,
-                Some("assistant" | "result" | "final" | "final_answer" | "task_complete")
+                Some(
+                    "assistant"
+                        | "result"
+                        | "final"
+                        | "final_answer"
+                        | "task_complete"
+                        | "tool"
+                        | "tool_use"
+                        | "tool_result"
+                        | "exec"
+                )
             )
         {
             return rest.to_string();
@@ -3343,6 +3359,32 @@ mod tests {
         assert_eq!(
             output_title(&event),
             "worker output · claude-code · 12345678"
+        );
+    }
+
+    #[test]
+    fn strips_runtime_prefix_for_tool_output() {
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            message: "claude output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: Some("claude-code tool_use: tool Bash: cargo test".to_string()),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+
+        assert_eq!(
+            visible_content(&event).as_deref(),
+            Some("tool Bash: cargo test")
         );
     }
 

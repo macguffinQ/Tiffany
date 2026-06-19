@@ -452,7 +452,18 @@ fn compact_worker_label(label: &str) -> String {
     let mut parts = label.split_whitespace().collect::<Vec<_>>();
     if matches!(
         parts.last().copied(),
-        Some("assistant" | "result" | "final" | "final_answer" | "task_complete" | "turn_complete")
+        Some(
+            "assistant"
+                | "result"
+                | "final"
+                | "final_answer"
+                | "task_complete"
+                | "turn_complete"
+                | "tool"
+                | "tool_use"
+                | "tool_result"
+                | "exec"
+        )
     ) {
         parts.pop();
     }
@@ -1094,6 +1105,16 @@ mod tests {
         assert!(line.contains("claude-code"));
         assert!(line.contains("Working on it"));
         assert!(!line.contains('{'));
+
+        let line = format_run_event(&RunProgress::WorkerOutput {
+            task_id,
+            agent: "claude-code".into(),
+            role: "worker-cc".into(),
+            content: "claude-code tool_use: tool Bash: cargo test".into(),
+        });
+
+        assert!(line.contains("claude-code: tool Bash: cargo test"));
+        assert!(!line.contains("tool_use"));
 
         let line = format_run_event(&RunProgress::RoleOutput {
             role: "diagnostic".into(),
