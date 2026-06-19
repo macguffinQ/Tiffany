@@ -394,7 +394,12 @@ enum SessionsCmd {
         flow: bool,
     },
     /// Grep across all session logs
-    Grep { pattern: String },
+    Grep {
+        pattern: String,
+        /// Only show the first N readable unique hits
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
     /// Import Claude Code sessions into orchestrator session log
     ImportCc {
         /// Only import sessions from this project (default: current dir)
@@ -521,5 +526,27 @@ mod tests {
                 action: SessionsCmd::Show { id: None, .. }
             }
         ));
+    }
+
+    #[test]
+    fn sessions_grep_accepts_limit() {
+        let cli = Cli::parse_from([
+            "orchestrator",
+            "sessions",
+            "grep",
+            "rate limit",
+            "--limit",
+            "5",
+        ]);
+
+        match cli.cmd {
+            Cmd::Sessions {
+                action: SessionsCmd::Grep { pattern, limit },
+            } => {
+                assert_eq!(pattern, "rate limit");
+                assert_eq!(limit, 5);
+            }
+            _ => panic!("unexpected sessions grep command"),
+        }
     }
 }

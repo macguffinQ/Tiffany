@@ -29,6 +29,11 @@ pub struct SessionListRenderOptions {
     pub action_style: SessionListActionStyle,
 }
 
+pub struct SessionGrepRenderOptions {
+    pub limit: usize,
+    pub action_style: SessionListActionStyle,
+}
+
 pub fn format_session_log(
     session: &Session,
     log_path: &Path,
@@ -251,6 +256,74 @@ pub fn format_session_tree(root: &Session, all_sessions: &[Session], log_dir: &P
     out
 }
 
+pub fn format_session_grep(
+    pattern: &str,
+    hits: Vec<(Session, Event)>,
+    options: SessionGrepRenderOptions,
+) -> String {
+    if hits.is_empty() {
+        return format!("No session log hits for {:?}.", pattern);
+    }
+
+    let raw_total = hits.len();
+    let mut seen = HashSet::new();
+    let mut readable_hits = Vec::new();
+    for (session, event) in hits {
+        if is_low_value_human_event(&event) {
+            continue;
+        }
+        if let Some(key) = human_event_dedupe_key(&event) {
+            let session_scoped_key = format!("{}:{key}", session.id);
+            if !seen.insert(session_scoped_key) {
+                continue;
+            }
+        }
+        readable_hits.push((session, format_session_event(&event)));
+    }
+
+    let readable_total = readable_hits.len();
+    let limit = options.limit.max(1);
+    let mut out = format!(
+        "{} raw hit(s), {} readable unique hit(s) for {:?} (showing up to {})",
+        raw_total, readable_total, pattern, limit
+    );
+
+    for (session, line) in readable_hits.iter().take(limit) {
+        let short = short_session_id(session);
+        out.push_str(&format!(
+            "\n  {} {:<12} {:<16} {}",
+            short,
+            session.role.as_str(),
+            truncate_chars(
+                if session.agent.trim().is_empty() {
+                    "(agent)"
+                } else {
+                    &session.agent
+                },
+                16,
+            ),
+            format_session_grep_action(&short, options.action_style),
+        ));
+        out.push('\n');
+        out.push_str(&indent_block(line, "    "));
+    }
+
+    if readable_total > limit {
+        out.push_str(&format!(
+            "\n  ... {} more readable hit(s); refine the pattern or increase --limit",
+            readable_total - limit
+        ));
+    }
+    if raw_total > 0 && readable_total == 0 {
+        out.push_str(&format!(
+            "\nOnly low-value hits were hidden; use `{}` to inspect raw JSONL.",
+            format_session_grep_raw_hint(options.action_style)
+        ));
+    }
+
+    out
+}
+
 pub fn format_session_flow(
     selected: &Session,
     all_sessions: &[Session],
@@ -463,6 +536,22 @@ fn format_session_list_actions(short: &str, action_style: SessionListActionStyle
         SessionListActionStyle::Cli => {
             format!("orchestrator sessions show {short} --flow --tail 120")
         }
+    }
+}
+
+fn format_session_grep_action(short: &str, action_style: SessionListActionStyle) -> String {
+    match action_style {
+        SessionListActionStyle::Slash => format!("/run-flow {short} 120"),
+        SessionListActionStyle::Cli => {
+            format!("orchestrator sessions show {short} --flow --tail 120")
+        }
+    }
+}
+
+fn format_session_grep_raw_hint(action_style: SessionListActionStyle) -> &'static str {
+    match action_style {
+        SessionListActionStyle::Slash => "/log <id> 120",
+        SessionListActionStyle::Cli => "orchestrator sessions show <id> --raw",
     }
 }
 
@@ -878,6 +967,97 @@ mod tests {
         assert!(list.contains("--tree"));
         assert!(list.contains("--raw"));
         assert!(!list.contains("/run-flow"));
+    }
+
+    #[test]
+    fn formats_cli_session_grep_with_shell_actions() {
+        let session = Session::new(Uuid::new_v4(), "claude-code", Role::Worker);
+        let event = Event {
+            session_id: session.id,
+            task_id: session.task_id,
+            ts: Utc::now(),
+            kind: "assistant".into(),
+            payload: serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "content": [{ "type": "text", "text": "rate limit happened" }]
+                }
+            }),
+        };
+
+        let grep = format_session_grep(
+            "rate",
+            vec![(session.clone(), event)],
+            SessionGrepRenderOptions {
+                limit: 20,
+                action_style: SessionListActionStyle::Cli,
+            },
+        );
+
+        assert!(grep.contains("1 raw hit(s), 1 readable unique hit(s)"));
+        assert!(grep.contains("orchestrator sessions show"));
+        assert!(grep.contains("--flow --tail 120"));
+        assert!(grep.contains("rate limit happened"));
+        assert!(!grep.contains(&session.id.to_string()));
+        assert!(!grep.contains("/run-flow"));
+    }
+
+    #[test]
+    fn formats_slash_session_grep_with_run_flow_action() {
+        let session = Session::new(Uuid::new_v4(), "claude-code", Role::Worker);
+        let event = Event {
+            session_id: session.id,
+            task_id: session.task_id,
+            ts: Utc::now(),
+            kind: "assistant".into(),
+            payload: serde_json::json!({"text": "worker output visible"}),
+        };
+
+        let grep = format_session_grep(
+            "worker",
+            vec![(session, event)],
+            SessionGrepRenderOptions {
+                limit: 20,
+                action_style: SessionListActionStyle::Slash,
+            },
+        );
+
+        assert!(grep.contains("/run-flow"));
+        assert!(!grep.contains("orchestrator sessions show"));
+        assert!(grep.contains("worker output visible"));
+    }
+
+    #[test]
+    fn session_grep_limit_reports_hidden_readable_hits() {
+        let session = Session::new(Uuid::new_v4(), "claude-code", Role::Worker);
+        let first = Event {
+            session_id: session.id,
+            task_id: session.task_id,
+            ts: Utc::now(),
+            kind: "assistant".into(),
+            payload: serde_json::json!({"text": "first match"}),
+        };
+        let second = Event {
+            session_id: session.id,
+            task_id: session.task_id,
+            ts: Utc::now(),
+            kind: "assistant".into(),
+            payload: serde_json::json!({"text": "second match"}),
+        };
+
+        let grep = format_session_grep(
+            "match",
+            vec![(session.clone(), first), (session, second)],
+            SessionGrepRenderOptions {
+                limit: 1,
+                action_style: SessionListActionStyle::Cli,
+            },
+        );
+
+        assert!(grep.contains("showing up to 1"));
+        assert!(grep.contains("first match"));
+        assert!(!grep.contains("second match"));
+        assert!(grep.contains("1 more readable hit(s)"));
     }
 
     #[test]

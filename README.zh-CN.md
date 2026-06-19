@@ -198,7 +198,7 @@ orchestrator sessions show <id|prefix|last>          # 默认人类可读
 orchestrator sessions show <id|prefix|last> --raw    # 原始 JSONL
 orchestrator sessions show <id|prefix|last> --tree   # 父子 run 树
 orchestrator sessions show <id|prefix|last> --flow   # 总控/worker 可读瀑布流
-orchestrator sessions grep "rate limit"
+orchestrator sessions grep "rate limit" --limit 10
 ```
 
 ## 配置
@@ -288,7 +288,7 @@ behavior:
 | `orchestrator acp` | 启动 Agent Client Protocol stdio server |
 | `orchestrator sessions list` | 列出历史会话，显示角色、父子关系提示和可复制打开命令 |
 | `orchestrator sessions show <id|prefix|last>` | 查看人类可读的总控或 worker 会话日志，`--raw` 保留原始 JSONL，`--tree` 显示父子关系，`--flow` 显示可读瀑布流 |
-| `orchestrator sessions grep <pattern>` | 搜索会话日志并显示可读摘要 |
+| `orchestrator sessions grep <pattern> --limit 10` | 搜索会话日志，显示可读摘要和可复制打开命令 |
 | `orchestrator sessions import-cc` | 导入 Claude Code 历史会话 |
 | `orchestrator config` | 查看和修改 orchestrator 配置 |
 | `orchestrator status` | 查看两个安装命令、配置根目录、桥接命令、mux 和日志路径 |

@@ -292,7 +292,7 @@ orchestrator sessions show <id|prefix|last>          # human-readable by default
 orchestrator sessions show <id|prefix|last> --raw    # original JSONL
 orchestrator sessions show <id|prefix|last> --tree   # parent/child run tree
 orchestrator sessions show <id|prefix|last> --flow   # readable orchestration/worker waterfall
-orchestrator sessions grep "rate limit"
+orchestrator sessions grep "rate limit" --limit 10
 
 # 10. See everything the orchestrator loaded
 orchestrator config
@@ -384,7 +384,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `orchestrator acp` | Run an Agent Client Protocol server over stdio |
 | `orchestrator sessions list` | List recent sessions with role labels, parent/child hints, and copyable open commands |
 | `orchestrator sessions show <id|prefix|last>` | Show a human-readable orchestration or worker session log (`--raw` keeps JSONL, `--tree` shows parent/child links, `--flow` shows the readable run waterfall) |
-| `orchestrator sessions grep <pattern>` | Search session logs and print readable event summaries |
+| `orchestrator sessions grep <pattern> --limit 10` | Search session logs and print readable event summaries with copyable open commands |
 | `orchestrator sessions import-cc` | Import your existing CC sessions from `~/.claude/projects/<slug>/sessions/` |
 | `orchestrator config` | Inspect and edit orchestrator configuration |
 | `orchestrator status` | Show the installed command pair, config roots, bridge command, mux, and logs |

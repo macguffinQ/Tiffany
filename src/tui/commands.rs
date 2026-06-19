@@ -3250,24 +3250,14 @@ fn format_log_tail(store: &SessionStore, selector: Option<&str>, lines: usize) -
 
 fn format_grep(store: &SessionStore, pattern: &str, limit: usize) -> String {
     match store.grep(pattern) {
-        Ok(hits) if hits.is_empty() => format!("No session log hits for {:?}.", pattern),
-        Ok(hits) => {
-            let total = hits.len();
-            let mut out = format!("Search hits for {:?} (showing up to {}):", pattern, limit);
-            for (session, event) in hits.into_iter().take(limit) {
-                out.push('\n');
-                out.push_str(&format!(
-                    "  {} {} {}",
-                    session_id8(&session),
-                    event.kind,
-                    humanize_jsonish(&event.payload.to_string(), 180)
-                ));
-            }
-            if total > limit {
-                out.push_str(&format!("\n  ... {} more hit(s)", total - limit));
-            }
-            out
-        }
+        Ok(hits) => crate::session_display::format_session_grep(
+            pattern,
+            hits,
+            crate::session_display::SessionGrepRenderOptions {
+                limit,
+                action_style: crate::session_display::SessionListActionStyle::Slash,
+            },
+        ),
         Err(e) => format!("Search failed: {:#}", e),
     }
 }
