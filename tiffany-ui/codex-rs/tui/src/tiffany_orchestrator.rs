@@ -1311,7 +1311,7 @@ fn visible_content(event: &TiffanyProgressEvent) -> Option<String> {
     if cleaned.is_empty() {
         return None;
     }
-    let display = humanize_jsonish(&cleaned);
+    let display = strip_final_heading(&humanize_jsonish(&cleaned));
     if is_low_value_output(&display) {
         return None;
     }
@@ -1348,7 +1348,7 @@ fn final_output_candidate(content: &str) -> Option<String> {
     ] {
         if let Some(idx) = lower.find(marker) {
             let result = content[idx + marker.len()..].trim();
-            let result = humanize_jsonish(result);
+            let result = strip_final_heading(&humanize_jsonish(result));
             if !result.trim().is_empty() {
                 return Some(result);
             }
@@ -1475,6 +1475,33 @@ fn humanize_jsonish(content: &str) -> String {
     }
     if let Some(summary) = summarize_embedded_json_with_context(trimmed) {
         return summary;
+    }
+    trimmed.to_string()
+}
+
+fn strip_final_heading(content: &str) -> String {
+    let trimmed = content.trim();
+    for heading in [
+        "final result",
+        "final answer",
+        "final_result",
+        "final_answer",
+    ] {
+        if trimmed.eq_ignore_ascii_case(heading) {
+            return String::new();
+        }
+        if trimmed
+            .get(..heading.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(heading))
+        {
+            let rest = &trimmed[heading.len()..];
+            if let Some(rest) = rest.strip_prefix(':') {
+                return rest.trim_start().to_string();
+            }
+            if rest.starts_with('\n') || rest.starts_with("\r\n") {
+                return rest.trim_start().to_string();
+            }
+        }
     }
     trimmed.to_string()
 }
@@ -2024,6 +2051,26 @@ mod tests {
     }
 
     #[test]
+    fn strips_redundant_final_heading_from_worker_output() {
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            message: "claude output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            content: Some("Final result\n你好！\n我可以帮你写代码。".to_string()),
+            approved: None,
+            issues: None,
+            count: None,
+        };
+
+        assert_eq!(
+            visible_content(&event).as_deref(),
+            Some("你好！\n我可以帮你写代码。")
+        );
+    }
+
+    #[test]
     fn extracts_final_result_from_worker_result_output() {
         assert_eq!(
             final_output_candidate("claude-code result: 完成\n- ok").as_deref(),
@@ -2031,6 +2078,10 @@ mod tests {
         );
         assert_eq!(
             final_output_candidate(r#"claude-code result: {"result":"完成并验证"}"#).as_deref(),
+            Some("完成并验证")
+        );
+        assert_eq!(
+            final_output_candidate("claude-code result: Final answer:\n完成并验证").as_deref(),
             Some("完成并验证")
         );
     }
