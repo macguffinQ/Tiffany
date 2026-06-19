@@ -7,6 +7,7 @@ use orchestrator::pipeline::orchestrator::Orchestrator;
 use orchestrator::tiffany_events::TiffanyProgressEvent;
 use orchestrator::tiffany_install;
 use orchestrator::{adapters, cc_config, mux, roles, runtime, storage};
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -547,6 +548,7 @@ fn print_status(config_path: &Path) -> Result<()> {
                 "worker:       {}",
                 runtime::default_worker_role(&cfg.roles).unwrap_or_else(|| "(none)".to_string())
             );
+            println!("health:       {}", status_config_health(&cfg));
             true
         }
         Err(err) => {
@@ -584,6 +586,81 @@ fn status_name_summary(mut names: Vec<String>, limit: usize) -> String {
         String::new()
     };
     format!("{} ({})", names.len(), shown.join(", ") + &suffix)
+}
+
+fn status_config_health(cfg: &Config) -> String {
+    let issues = status_config_issues(cfg);
+    if issues.is_empty() {
+        "ok".to_string()
+    } else {
+        format!(
+            "{} issue(s): {}",
+            issues.len(),
+            status_issue_summary(issues, 3)
+        )
+    }
+}
+
+fn status_config_issues(cfg: &Config) -> Vec<String> {
+    let mut issues = Vec::new();
+    if cfg.providers.is_empty() {
+        issues.push("no providers".to_string());
+    }
+    if cfg.models.is_empty() {
+        issues.push("no models".to_string());
+    }
+    if cfg.roles.is_empty() {
+        issues.push("no roles".to_string());
+    }
+
+    for (provider_name, provider) in &cfg.providers {
+        if provider.kind != "ollama"
+            && provider
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+        {
+            issues.push(format!("{provider_name} api key missing"));
+        }
+    }
+
+    let model_ids = cfg
+        .models
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect::<HashSet<_>>();
+    for model in &cfg.models {
+        if !cfg.providers.contains_key(&model.provider) {
+            issues.push(format!("{} provider {} missing", model.id, model.provider));
+        }
+    }
+    for (role_name, role) in &cfg.roles {
+        if !model_ids.contains(role.model.as_str()) {
+            issues.push(format!("{role_name} model {} missing", role.model));
+        }
+        if !cfg.runtimes.contains_key(&role.runtime) {
+            issues.push(format!("{role_name} runtime {} missing", role.runtime));
+        }
+    }
+    if runtime::default_worker_role(&cfg.roles).is_none() {
+        issues.push("no default worker".to_string());
+    }
+
+    issues.sort();
+    issues.dedup();
+    issues
+}
+
+fn status_issue_summary(issues: Vec<String>, limit: usize) -> String {
+    let shown = issues.iter().take(limit).cloned().collect::<Vec<_>>();
+    let suffix = if issues.len() > shown.len() {
+        format!("; +{}", issues.len() - shown.len())
+    } else {
+        String::new()
+    };
+    shown.join("; ") + &suffix
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3952,5 +4029,59 @@ mod tests {
             ),
             "4 (critic, planner, reviewer, +1)"
         );
+    }
+
+    #[test]
+    fn status_config_health_reports_ok_for_wired_config() {
+        let mut cfg = config_with_models();
+        cfg.providers
+            .insert("anthropic".to_string(), provider("anthropic"));
+        cfg.providers
+            .insert("openai".to_string(), provider("openai"));
+        cfg.roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "sonnet".to_string(),
+                runtime: "claude-code".to_string(),
+                agent_teams: true,
+            },
+        );
+
+        assert_eq!(status_config_health(&cfg), "ok");
+    }
+
+    #[test]
+    fn status_config_health_reports_internal_config_gaps() {
+        let mut cfg = Config::default();
+        cfg.providers.insert(
+            "openai".to_string(),
+            ProviderConfig {
+                kind: "openai".to_string(),
+                api_key: Some(String::new()),
+                base_url: None,
+            },
+        );
+        cfg.models.push(ModelConfig {
+            id: "gpt".to_string(),
+            provider: "missing-provider".to_string(),
+            name: "gpt-test".to_string(),
+        });
+        cfg.roles.insert(
+            "planner".to_string(),
+            RoleConfig {
+                model: "missing-model".to_string(),
+                runtime: "missing-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        let issues = status_config_issues(&cfg);
+
+        assert!(issues.contains(&"openai api key missing".to_string()));
+        assert!(issues.contains(&"gpt provider missing-provider missing".to_string()));
+        assert!(issues.contains(&"planner model missing-model missing".to_string()));
+        assert!(issues.contains(&"planner runtime missing-runtime missing".to_string()));
+        assert!(issues.contains(&"no default worker".to_string()));
+        assert!(status_config_health(&cfg).contains("issue(s):"));
     }
 }

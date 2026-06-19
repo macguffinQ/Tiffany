@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
 - Added actionable `orchestrator doctor` next steps for first-run setup and repair.
 - Added concise `orchestrator status` next/check actions for first-run launch guidance.
 - Added provider/model/role/default-worker summaries to `orchestrator status`.
+- Added a lightweight internal config health line to `orchestrator status`.
 
 ## [0.1.11] - 2026-06-19
 
