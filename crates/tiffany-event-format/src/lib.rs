@@ -11,8 +11,24 @@ pub struct AgentEventSummary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisibleAgentOutputKind {
     Final,
+    ToolCall,
+    ToolResult,
+    Stderr,
     Actionable,
     Normal,
+}
+
+impl VisibleAgentOutputKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Final => "final",
+            Self::ToolCall => "tool call",
+            Self::ToolResult => "tool result",
+            Self::Stderr => "stderr",
+            Self::Actionable => "alert",
+            Self::Normal => "output",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -199,32 +215,79 @@ pub fn clean_visible_agent_output(content: &str, max: usize) -> Option<String> {
 }
 
 pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOutput> {
-    if let Some(final_output) = final_output_candidate(content, max) {
-        let display = sanitize_text(&normalize_output_summary(&final_output), max);
-        let display = strip_known_final_heading(&display);
-        let display = display.trim().to_string();
-        if display.is_empty() {
-            return None;
+    let hinted_kind = visible_output_kind_hint(content);
+    let hinted_tool_event = matches!(
+        hinted_kind,
+        Some(VisibleAgentOutputKind::ToolCall | VisibleAgentOutputKind::ToolResult)
+    );
+    if !hinted_tool_event {
+        if let Some(final_output) = final_output_candidate(content, max) {
+            let display = sanitize_text(&normalize_output_summary(&final_output), max);
+            let display = strip_known_final_heading(&display);
+            let display = display.trim().to_string();
+            if display.is_empty() {
+                return None;
+            }
+            return Some(VisibleAgentOutput {
+                kind: VisibleAgentOutputKind::Final,
+                dedupe_key: sanitize_text(&normalize_output_summary(&display), max),
+                display,
+            });
         }
-        return Some(VisibleAgentOutput {
-            kind: VisibleAgentOutputKind::Final,
-            dedupe_key: sanitize_text(&normalize_output_summary(&display), max),
-            display,
-        });
     }
 
     let display = clean_visible_agent_output(content, max)?;
-    let kind = if looks_like_actionable_output(&display) {
-        VisibleAgentOutputKind::Actionable
-    } else {
-        VisibleAgentOutputKind::Normal
-    };
+    let kind = hinted_kind.unwrap_or_else(|| {
+        if looks_like_actionable_output(&display) {
+            VisibleAgentOutputKind::Actionable
+        } else {
+            VisibleAgentOutputKind::Normal
+        }
+    });
     let dedupe_key = sanitize_text(&normalize_output_summary(&display), max);
     Some(VisibleAgentOutput {
         kind,
         display,
         dedupe_key,
     })
+}
+
+fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
+    let prefix = content.trim_start().split_once(": ")?.0;
+    if prefix_is_stderr(prefix) {
+        return Some(VisibleAgentOutputKind::Stderr);
+    }
+    let kind = runtime_output_kind_from_prefix(prefix)?;
+    match kind {
+        "tool"
+        | "tool_use"
+        | "exec"
+        | "local_shell_call"
+        | "function_call"
+        | "custom_tool_call"
+        | "tool_search_call"
+        | "web_search_call"
+        | "image_generation_call"
+        | "mcp_tool_call" => Some(VisibleAgentOutputKind::ToolCall),
+        "tool_result"
+        | "function_call_output"
+        | "custom_tool_call_output"
+        | "tool_search_output" => Some(VisibleAgentOutputKind::ToolResult),
+        _ => None,
+    }
+}
+
+fn prefix_is_stderr(prefix: &str) -> bool {
+    let mut parts = prefix.split_whitespace();
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("stderr"), None, None) => true,
+        (Some(runtime), Some("stderr"), None)
+            if matches!(runtime, "agent" | "claude" | "claude-code" | "codex") =>
+        {
+            true
+        }
+        _ => false,
+    }
 }
 
 pub fn strip_runtime_output_prefix(line: &str) -> String {
@@ -1534,9 +1597,23 @@ mod tests {
             500,
         )
         .expect("actionable error");
-        assert_eq!(error.kind, VisibleAgentOutputKind::Actionable);
+        assert_eq!(error.kind, VisibleAgentOutputKind::Stderr);
         assert!(error.display.contains("模型不存在"));
         assert!(!error.display.contains('{'));
+
+        let tool_call =
+            visible_agent_output("codex local_shell_call: tool shell: cargo test --all", 500)
+                .expect("tool call");
+        assert_eq!(tool_call.kind, VisibleAgentOutputKind::ToolCall);
+        assert_eq!(tool_call.kind.label(), "tool call");
+        assert_eq!(tool_call.display, "tool shell: cargo test --all");
+
+        let tool_result =
+            visible_agent_output("claude-code tool_result: tool result: tests passed", 500)
+                .expect("tool result");
+        assert_eq!(tool_result.kind, VisibleAgentOutputKind::ToolResult);
+        assert_eq!(tool_result.kind.label(), "tool result");
+        assert_eq!(tool_result.display, "tool result: tests passed");
 
         let normal =
             visible_agent_output("claude assistant: useful summary", 500).expect("normal output");

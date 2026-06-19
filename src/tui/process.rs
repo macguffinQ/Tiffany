@@ -433,19 +433,40 @@ fn summarize_trace_body(body: &str) -> (&'static str, String) {
 
 fn summarize_worker_output(output: &str) -> String {
     let output = output.trim();
+    let (kind, output) = if let Some((kind, rest)) = output.split_once(" · ") {
+        let kind = kind.trim();
+        if matches!(
+            kind,
+            "tool call" | "tool result" | "stderr" | "alert" | "output"
+        ) {
+            (Some(kind), rest.trim())
+        } else {
+            (None, output)
+        }
+    } else {
+        (None, output)
+    };
     let Some((id, content)) = output.split_once(' ') else {
         return humanize_jsonish(output, 140);
     };
     if let Some((agent, content)) = content.split_once(": ") {
-        return format!(
+        let summary = format!(
             "{} {}: {}",
             id,
             compact_worker_label(agent),
             summarize_worker_content(content.trim(), 130)
                 .unwrap_or_else(|| humanize_jsonish(content.trim(), 130))
         );
+        return match kind {
+            Some(kind) => format!("{kind} · {summary}"),
+            None => summary,
+        };
     }
-    format!("{}: {}", id, humanize_jsonish(content.trim(), 130))
+    let summary = format!("{}: {}", id, humanize_jsonish(content.trim(), 130));
+    match kind {
+        Some(kind) => format!("{kind} · {summary}"),
+        None => summary,
+    }
 }
 
 fn compact_worker_label(label: &str) -> String {
@@ -1009,6 +1030,7 @@ mod tests {
             content: "codex local_shell_call: tool shell: cargo test --all".into(),
         });
 
+        assert!(line.contains("worker  tool call"));
         assert!(line.contains("worker-codex: tool shell: cargo test --all"));
         assert!(!line.contains("local_shell_call"));
 

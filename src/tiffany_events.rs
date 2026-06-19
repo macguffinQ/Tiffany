@@ -421,8 +421,9 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
         } => {
             let output = visible_non_final_agent_output(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
             Some(format!(
-                "↳ worker   {} · {agent}\n{}",
+                "↳ worker   {} · {agent} · {}\n{}",
                 short_id(task_id),
+                output.kind.label(),
                 indent_block(&output.display, "  ")
             ))
         }
@@ -518,10 +519,12 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
             content,
             ..
         } => {
-            let display = compact_output_summary(content, 160)?;
+            let output = visible_non_final_agent_output(content, 160)?;
+            let display = compact_output_summary(&output.display, 160)?;
             Some(format!(
-                "worker output  {} {agent}: {display}",
-                short_id(task_id)
+                "worker  {} · {} {agent}: {display}",
+                output.kind.label(),
+                short_id(task_id),
             ))
         }
         RunProgress::RoleOutput { role, content } => {
@@ -532,7 +535,9 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
             ) {
                 return None;
             }
-            let display = compact_output_summary(content, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)?;
+            let output = visible_non_final_agent_output(content, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)?;
+            let display =
+                compact_output_summary(&output.display, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)?;
             Some(format!("{}  {display}", compact_role_label(role)))
         }
         RunProgress::WorkerDone {
@@ -583,10 +588,8 @@ fn visible_non_final_agent_output(
     (output.kind != agent_events::VisibleAgentOutputKind::Final).then_some(output)
 }
 
-fn compact_output_summary(content: &str, max: usize) -> Option<String> {
-    let output = visible_non_final_agent_output(content, max)?;
-    let summary = output
-        .display
+fn compact_output_summary(display: &str, max: usize) -> Option<String> {
+    let summary = display
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -692,6 +695,33 @@ mod tests {
 
         assert!(formatter.format(&first).is_some());
         assert!(formatter.format(&duplicate).is_none());
+    }
+
+    #[test]
+    fn text_formatter_labels_worker_output_kind() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+
+        let line = format_text_progress_event(&RunProgress::WorkerOutput {
+            task_id,
+            agent: "worker-codex".into(),
+            role: "worker-codex".into(),
+            content: "codex local_shell_call: tool shell: cargo test --all".into(),
+        })
+        .expect("tool call line");
+
+        assert!(line.contains("12345678 · worker-codex · tool call"));
+        assert!(line.contains("tool shell: cargo test --all"));
+
+        let compact = format_compact_progress_event(&RunProgress::WorkerOutput {
+            task_id,
+            agent: "worker-codex".into(),
+            role: "worker-codex".into(),
+            content: "codex local_shell_call: tool shell: cargo test --all".into(),
+        })
+        .expect("compact tool call line");
+
+        assert!(compact.contains("worker  tool call · 12345678 worker-codex"));
+        assert!(compact.contains("tool shell: cargo test --all"));
     }
 
     #[test]

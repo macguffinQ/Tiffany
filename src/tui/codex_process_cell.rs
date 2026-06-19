@@ -151,35 +151,44 @@ fn visible_worker_output_line(
     } else {
         PROGRESS_OUTPUT_EXPANDED_LIMIT
     };
-    let display = visible_worker_output_display(content, max)?;
+    let output = visible_worker_output_display(content, max)?;
     let scope = format!("worker:{}:{}:{}", short_task_id(task_id), role, agent);
     let dedupe_display =
-        visible_worker_output_dedupe_display(content).unwrap_or_else(|| display.clone());
+        visible_worker_output_dedupe_display(content).unwrap_or_else(|| output.display.clone());
     if output_was_already_visible(input, &scope, &dedupe_display) {
         return None;
     }
-    let source = worker_output_title(role, agent);
+    let source = worker_output_title(role, agent, output.kind);
     Some((
         "↳",
         DIM,
         format_agent_output_block(
             &source,
             Some(&short_task_id(task_id)),
-            &display,
+            &output.display,
             input.history_folded,
         ),
     ))
 }
 
-fn worker_output_title(role: &str, agent: &str) -> String {
+fn worker_output_title(
+    role: &str,
+    agent: &str,
+    kind: agent_events::VisibleAgentOutputKind,
+) -> String {
     let role = role.trim();
     let agent = agent.trim();
-    match (role.is_empty(), agent.is_empty(), role == agent) {
+    let mut title = match (role.is_empty(), agent.is_empty(), role == agent) {
         (false, false, false) => format!("{role} · {agent}"),
         (false, _, _) => role.to_string(),
         (_, false, _) => agent.to_string(),
         _ => "worker".to_string(),
+    };
+    if !matches!(kind, agent_events::VisibleAgentOutputKind::Normal) {
+        title.push_str(" · ");
+        title.push_str(kind.label());
     }
+    title
 }
 
 fn visible_role_output_line(
@@ -248,18 +257,32 @@ fn format_agent_output_block(
     out
 }
 
-fn visible_worker_output_display(content: &str, max: usize) -> Option<String> {
+struct VisibleWorkerOutputDisplay {
+    kind: agent_events::VisibleAgentOutputKind,
+    display: String,
+}
+
+fn visible_worker_output_display(content: &str, max: usize) -> Option<VisibleWorkerOutputDisplay> {
     if let Some(final_output) = agent_events::visible_agent_output(content, FINAL_OUTPUT_MAX_CHARS)
         .filter(|output| output.kind == agent_events::VisibleAgentOutputKind::Final)
     {
-        return Some(format_captured_final_result(&final_output.display));
+        return Some(VisibleWorkerOutputDisplay {
+            kind: final_output.kind,
+            display: format_captured_final_result(&final_output.display),
+        });
     }
 
     let output = agent_events::visible_agent_output(content, max)?;
     if worker_output_is_final_like_display(&output.display) {
-        return Some(format_captured_final_result(&output.display));
+        return Some(VisibleWorkerOutputDisplay {
+            kind: agent_events::VisibleAgentOutputKind::Final,
+            display: format_captured_final_result(&output.display),
+        });
     }
-    Some(output.display)
+    Some(VisibleWorkerOutputDisplay {
+        kind: output.kind,
+        display: output.display,
+    })
 }
 
 fn visible_worker_output_dedupe_display(content: &str) -> Option<String> {
@@ -500,7 +523,28 @@ mod tests {
 
         assert_eq!(line.0, "↳");
         assert!(line.2.contains("codex"));
+        assert!(line.2.contains("stderr"));
         assert!(line.2.contains("模型不存在"));
+    }
+
+    #[test]
+    fn labels_worker_tool_calls_in_history() {
+        let task_id = uuid::Uuid::nil();
+        let line = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "worker-codex".into(),
+                role: "worker-codex".into(),
+                content: "codex local_shell_call: tool shell: cargo test --all".into(),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("tool call should be visible");
+
+        assert_eq!(line.0, "↳");
+        assert!(line.2.contains("worker-codex · tool call"));
+        assert!(line.2.contains("tool shell: cargo test --all"));
     }
 
     #[test]
