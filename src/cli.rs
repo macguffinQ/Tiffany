@@ -575,7 +575,7 @@ fn print_status(config_path: &Path) -> Result<()> {
         tiffany_ready,
         tiffany_install::legacy_tui_forced(),
     ) {
-        println!("{:<13}{}", format!("{}:", action.label), action.command);
+        println!("{:<14}{}", format!("{}:", action.label), action.command);
     }
     Ok(())
 }
@@ -677,6 +677,7 @@ fn status_issue_summary(issues: &[String], limit: usize) -> String {
 
 fn status_issue_categories(issues: &[String]) -> Vec<String> {
     let mut provider_auth = Vec::new();
+    let mut provider_links = Vec::new();
     let mut config_basics = Vec::new();
     let mut role_wiring = Vec::new();
     let mut other = Vec::new();
@@ -684,6 +685,8 @@ fn status_issue_categories(issues: &[String]) -> Vec<String> {
     for issue in issues {
         if let Some(provider) = issue.strip_suffix(" api key missing") {
             provider_auth.push(provider.to_string());
+        } else if is_missing_provider_link(issue) {
+            provider_links.push(issue.clone());
         } else if issue == "no providers" || issue == "no models" || issue == "no roles" {
             config_basics.push(issue.clone());
         } else if issue.contains(" model ")
@@ -703,6 +706,12 @@ fn status_issue_categories(issues: &[String]) -> Vec<String> {
             "provider auth missing for {}: {}",
             provider_auth.len(),
             status_join_limited(&provider_auth, 4)
+        ));
+    }
+    if !provider_links.is_empty() {
+        categories.push(format!(
+            "model provider links: {}",
+            status_join_limited(&provider_links, 3)
         ));
     }
     if !config_basics.is_empty() {
@@ -731,10 +740,28 @@ fn status_join_limited(items: &[String], limit: usize) -> String {
     shown.join(", ") + &suffix
 }
 
+fn is_missing_provider_link(issue: &str) -> bool {
+    issue.contains(" provider ") && issue.ends_with(" missing")
+}
+
+fn is_provider_setup_issue(issue: &str) -> bool {
+    issue == "no providers"
+        || issue.ends_with(" api key missing")
+        || is_missing_provider_link(issue)
+}
+
+fn is_role_setup_issue(issue: &str) -> bool {
+    issue == "no models"
+        || issue == "no roles"
+        || issue == "no default worker"
+        || issue.contains(" model ")
+        || issue.contains(" runtime ")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StatusAction {
     label: &'static str,
-    command: &'static str,
+    command: String,
 }
 
 fn status_actions(
@@ -747,11 +774,11 @@ fn status_actions(
         return vec![
             StatusAction {
                 label: "next",
-                command: "orchestrator setup",
+                command: "orchestrator setup".into(),
             },
             StatusAction {
                 label: "check",
-                command: "orchestrator doctor",
+                command: "orchestrator doctor".into(),
             },
         ];
     }
@@ -760,80 +787,65 @@ fn status_actions(
         return vec![
             StatusAction {
                 label: "next",
-                command: "unset ORCHESTRATOR_LEGACY_TUI, then run `orchestrator tui`",
+                command: "unset ORCHESTRATOR_LEGACY_TUI, then run `orchestrator tui`".into(),
             },
             StatusAction {
                 label: "check",
-                command: "orchestrator doctor",
+                command: "orchestrator doctor".into(),
             },
         ];
     }
 
     if !config_issues.is_empty() {
+        let mut actions = Vec::new();
         if config_issues
             .iter()
-            .all(|issue| issue.ends_with(" api key missing"))
+            .any(|issue| is_provider_setup_issue(issue))
         {
-            return vec![
-                StatusAction {
-                    label: "next",
-                    command: "tiffany-loop then /provider, or `orchestrator config provider setup <provider> --env <ENV_NAME>`",
-                },
-                StatusAction {
-                    label: "check",
-                    command: "orchestrator doctor",
-                },
-            ];
+            actions.push(StatusAction {
+                label: "fix provider",
+                command: "tiffany-loop then /provider, or `orchestrator config provider setup <provider> --env <ENV_NAME>`".into(),
+            });
         }
-        if config_issues.iter().any(|issue| {
-            issue.contains(" model ")
-                || issue.contains(" runtime ")
-                || issue == "no default worker"
-                || issue == "no roles"
-        }) {
-            return vec![
-                StatusAction {
-                    label: "next",
-                    command: "tiffany-loop then /role, or `orchestrator roles register <role> --model <model-id> --runtime <runtime-id>`",
-                },
-                StatusAction {
-                    label: "check",
-                    command: "orchestrator doctor",
-                },
-            ];
+        if config_issues.iter().any(|issue| is_role_setup_issue(issue)) {
+            actions.push(StatusAction {
+                label: "fix role",
+                command: "tiffany-loop then /role, or `orchestrator roles register <role> --model <model-id> --runtime <runtime-id>`".into(),
+            });
         }
-        return vec![
-            StatusAction {
+        if actions.is_empty() {
+            actions.push(StatusAction {
                 label: "next",
-                command: "orchestrator setup, or `tiffany-loop` then /provider + /role",
-            },
-            StatusAction {
-                label: "check",
-                command: "orchestrator doctor",
-            },
-        ];
+                command: "orchestrator setup, or `tiffany-loop` then /provider + /role".into(),
+            });
+        }
+        actions.push(StatusAction {
+            label: "check",
+            command: "orchestrator doctor".into(),
+        });
+        return actions;
     }
 
     if tiffany_ready {
         vec![
             StatusAction {
                 label: "next",
-                command: "tiffany-loop",
+                command: "tiffany-loop".into(),
             },
             StatusAction {
                 label: "check",
-                command: "orchestrator doctor",
+                command: "orchestrator doctor".into(),
             },
         ]
     } else {
         vec![
             StatusAction {
                 label: "next",
-                command: "install tiffany-loop or run `./scripts/tiffany-dev` from source",
+                command: "install tiffany-loop or run `./scripts/tiffany-dev` from source".into(),
             },
             StatusAction {
                 label: "check",
-                command: "orchestrator doctor",
+                command: "orchestrator doctor".into(),
             },
         ]
     }
@@ -4081,11 +4093,11 @@ mod tests {
             vec![
                 StatusAction {
                     label: "next",
-                    command: "orchestrator setup",
+                    command: "orchestrator setup".into(),
                 },
                 StatusAction {
                     label: "check",
-                    command: "orchestrator doctor",
+                    command: "orchestrator doctor".into(),
                 },
             ]
         );
@@ -4098,11 +4110,11 @@ mod tests {
             vec![
                 StatusAction {
                     label: "next",
-                    command: "tiffany-loop",
+                    command: "tiffany-loop".into(),
                 },
                 StatusAction {
                     label: "check",
-                    command: "orchestrator doctor",
+                    command: "orchestrator doctor".into(),
                 },
             ]
         );
@@ -4114,7 +4126,7 @@ mod tests {
 
         assert_eq!(actions[0].label, "next");
         assert!(actions[0].command.contains("ORCHESTRATOR_LEGACY_TUI"));
-        assert_eq!(actions[1].command, "orchestrator doctor");
+        assert_eq!(actions[1].command, "orchestrator doctor".to_string());
     }
 
     #[test]
@@ -4124,7 +4136,7 @@ mod tests {
         assert_eq!(actions[0].label, "next");
         assert!(actions[0].command.contains("install tiffany-loop"));
         assert!(actions[0].command.contains("./scripts/tiffany-dev"));
-        assert_eq!(actions[1].command, "orchestrator doctor");
+        assert_eq!(actions[1].command, "orchestrator doctor".to_string());
     }
 
     #[test]
@@ -4132,10 +4144,10 @@ mod tests {
         let issues = vec!["planner model missing-model missing".to_string()];
         let actions = status_actions(true, &issues, true, false);
 
-        assert_eq!(actions[0].label, "next");
+        assert_eq!(actions[0].label, "fix role");
         assert!(actions[0].command.contains("/role"));
         assert!(actions[0].command.contains("orchestrator roles register"));
-        assert_eq!(actions[1].command, "orchestrator doctor");
+        assert_eq!(actions[1].command, "orchestrator doctor".to_string());
     }
 
     #[test]
@@ -4146,11 +4158,27 @@ mod tests {
         ];
         let actions = status_actions(true, &issues, true, false);
 
-        assert_eq!(actions[0].label, "next");
+        assert_eq!(actions[0].label, "fix provider");
         assert!(actions[0].command.contains("/provider"));
         assert!(actions[0].command.contains("config provider setup"));
         assert!(!actions[0].command.contains("orchestrator setup"));
-        assert_eq!(actions[1].command, "orchestrator doctor");
+        assert_eq!(actions[1].command, "orchestrator doctor".to_string());
+    }
+
+    #[test]
+    fn status_actions_split_mixed_provider_and_role_repairs() {
+        let issues = vec![
+            "google api key missing".to_string(),
+            "gpt4o provider openai missing".to_string(),
+            "worker-cc runtime claude-code missing".to_string(),
+        ];
+        let actions = status_actions(true, &issues, true, false);
+
+        assert_eq!(actions[0].label, "fix provider");
+        assert!(actions[0].command.contains("/provider"));
+        assert_eq!(actions[1].label, "fix role");
+        assert!(actions[1].command.contains("/role"));
+        assert_eq!(actions[2].command, "orchestrator doctor".to_string());
     }
 
     #[test]
@@ -4225,6 +4253,7 @@ mod tests {
         let health = status_config_health(&cfg);
         assert!(health.contains("issue(s):"));
         assert!(health.contains("provider auth missing for 1: openai"));
+        assert!(health.contains("model provider links:"));
         assert!(health.contains("role/model wiring:"));
     }
 
@@ -4235,12 +4264,14 @@ mod tests {
             "google api key missing".to_string(),
             "minimax api key missing".to_string(),
             "openai api key missing".to_string(),
+            "gpt4o provider openai missing".to_string(),
             "worker-cc runtime claude-code missing".to_string(),
         ];
 
         let summary = status_issue_summary(&issues, 3);
 
         assert!(summary.contains("provider auth missing for 4: anthropic, google, minimax, openai"));
+        assert!(summary.contains("model provider links: gpt4o provider openai missing"));
         assert!(summary.contains("role/model wiring: worker-cc runtime claude-code missing"));
     }
 }
