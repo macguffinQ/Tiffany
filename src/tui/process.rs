@@ -814,9 +814,26 @@ fn process_event_is_important(line: &str) -> bool {
         || body.starts_with("Done:")
         || body.starts_with("Failed:")
         || compact_process_body_view(body).is_some_and(|(kind, _)| kind != "worker")
-        || body.starts_with("worker  ")
+        || compact_worker_event_is_important(body)
         || body.starts_with("error  ")
         || body == "Cancelled by user"
+}
+
+fn compact_worker_event_is_important(body: &str) -> bool {
+    let Some(worker) = body.strip_prefix("worker  ") else {
+        return false;
+    };
+    let worker = worker.trim_start();
+    if matches!(
+        worker.split_once(" · ").map(|(kind, _)| kind),
+        Some("tool call" | "tool result" | "stderr" | "alert")
+    ) {
+        return true;
+    }
+    worker.contains(" started ·")
+        || worker.contains(" done ·")
+        || worker.contains(" failed ·")
+        || worker.contains(" cancelled ·")
 }
 
 fn format_process_for_copy(input: &InputState) -> String {
@@ -1157,6 +1174,7 @@ mod tests {
         ];
 
         let formatted = format_process_summary(&input);
+        let full = format_process_capture(&input, 20);
 
         assert!(formatted.contains("Process summary"));
         assert!(formatted.contains("plan  planning work"));
@@ -1164,6 +1182,25 @@ mod tests {
         assert!(formatted.contains("done  1 sub-task(s) completed"));
         assert!(!formatted.contains("incremental log line"));
         assert!(formatted.contains("/process full"));
+        assert!(full.contains("incremental log line"));
+    }
+
+    #[test]
+    fn process_summary_keeps_worker_tools_and_alerts() {
+        let mut input = InputState::default();
+        input.run_events = vec![
+            "10:00:00  worker  output · abcdef12 claude-code: incremental log line".into(),
+            "10:00:01  worker  tool call · abcdef12 claude-code: tool Bash: cargo test".into(),
+            "10:00:02  worker  stderr · abcdef12 worker-codex: API Error: model not found".into(),
+            "10:00:03  worker  worker-cc done · abcdef12 · 1.2s".into(),
+        ];
+
+        let formatted = format_process_summary(&input);
+
+        assert!(formatted.contains("tool call · abcdef12 claude-code"));
+        assert!(formatted.contains("stderr · abcdef12 worker-codex"));
+        assert!(formatted.contains("worker  worker-cc done"));
+        assert!(!formatted.contains("incremental log line"));
     }
 
     #[test]
