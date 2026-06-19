@@ -43,6 +43,14 @@ impl DoctorReport {
             }
         }
 
+        let next_steps = self.next_steps();
+        if !next_steps.is_empty() {
+            out.push_str("\nNext steps:\n");
+            for (idx, step) in next_steps.iter().enumerate() {
+                out.push_str(&format!("{}. {step}\n", idx + 1));
+            }
+        }
+
         out.push('\n');
         if self.issue_count == 0 {
             out.push_str("✓ all required checks passed");
@@ -53,6 +61,91 @@ impl DoctorReport {
             ));
         }
         out
+    }
+
+    fn next_steps(&self) -> Vec<String> {
+        let mut steps = Vec::new();
+        if self.issue_count == 0 {
+            steps.push(
+                "Start the UI with `tiffany orchestrator` or `./scripts/tiffany-dev` from source."
+                    .to_string(),
+            );
+            return steps;
+        }
+
+        let messages = self
+            .lines
+            .iter()
+            .map(|line| line.message.as_str())
+            .collect::<Vec<_>>();
+
+        if messages.iter().any(|message| {
+            message.contains("config missing") || message.contains("config parse/load failed")
+        }) {
+            push_unique(
+                &mut steps,
+                "Run `orchestrator setup` to create providers, models, roles, and local paths.",
+            );
+        }
+        if messages.iter().any(|message| {
+            message.contains("tiffany binary not found")
+                || message.contains("ORCHESTRATOR_LEGACY_TUI")
+                || message.contains("not resolvable")
+        }) {
+            push_unique(
+                &mut steps,
+                "Install `tiffany-loop` or run `./scripts/tiffany-dev` from a source checkout.",
+            );
+        }
+        if messages.iter().any(|message| {
+            message.contains("api key missing")
+                || message.contains("provider `")
+                || message.contains("provider auth")
+        }) {
+            push_unique(
+                &mut steps,
+                "Configure provider auth with `/provider` in the TUI or `orchestrator config provider setup <provider>`.",
+            );
+        }
+        if messages.iter().any(|message| {
+            message.contains("missing role config")
+                || message.contains("no worker role")
+                || message.contains("model `")
+                || message.contains("runtime `")
+        }) {
+            push_unique(
+                &mut steps,
+                "Register roles with `/role` in the TUI or `orchestrator roles register <role> --model <model-id> --runtime <runtime-id>`.",
+            );
+        }
+        if messages.iter().any(|message| {
+            message.contains("not found on PATH")
+                || message.contains("claude: not found")
+                || message.contains("codex: not found")
+        }) {
+            push_unique(
+                &mut steps,
+                "Install the selected worker CLI (`claude` or `codex`) or update role runtime bindings.",
+            );
+        }
+
+        if steps.is_empty() {
+            steps.push("Fix the ✗ lines above, then rerun `orchestrator doctor`.".to_string());
+        } else {
+            push_unique(
+                &mut steps,
+                "Rerun `orchestrator doctor` until required checks pass.",
+            );
+        }
+        steps.truncate(4);
+        steps
+    }
+}
+
+fn push_unique(steps: &mut Vec<String>, step: impl Into<String>) {
+    let step = step.into();
+    if !steps.iter().any(|existing| existing == &step) {
+        steps.push(step);
     }
 }
 
@@ -922,7 +1015,49 @@ mod tests {
         assert!(rendered.contains("✓ config parsed"));
         assert!(rendered.contains("✗ openai: api key missing"));
         assert!(rendered.contains("hint: export OPENAI_API_KEY"));
+        assert!(rendered.contains("Next steps:"));
+        assert!(rendered.contains("Configure provider auth with `/provider`"));
         assert!(rendered.contains("1 issue(s) found"));
+    }
+
+    #[test]
+    fn report_with_no_required_issues_suggests_launching_ui() {
+        let report = DoctorReport {
+            lines: vec![DoctorLine {
+                level: DoctorLevel::Ok,
+                message: "config parsed".into(),
+            }],
+            issue_count: 0,
+        };
+
+        let rendered = report.render_text();
+
+        assert!(rendered.contains("Next steps:"));
+        assert!(rendered.contains("tiffany orchestrator"));
+        assert!(rendered.contains("all required checks passed"));
+    }
+
+    #[test]
+    fn report_next_steps_prioritize_config_and_roles() {
+        let report = DoctorReport {
+            lines: vec![
+                DoctorLine {
+                    level: DoctorLevel::Fail,
+                    message: "config missing: /tmp/config.yaml".into(),
+                },
+                DoctorLine {
+                    level: DoctorLevel::Fail,
+                    message: "planner: missing role config".into(),
+                },
+            ],
+            issue_count: 2,
+        };
+
+        let rendered = report.render_text();
+
+        assert!(rendered.contains("Run `orchestrator setup`"));
+        assert!(rendered.contains("Register roles with `/role`"));
+        assert!(rendered.contains("Rerun `orchestrator doctor`"));
     }
 
     #[test]
