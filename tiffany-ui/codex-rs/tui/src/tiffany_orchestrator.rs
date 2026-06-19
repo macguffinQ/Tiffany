@@ -739,6 +739,7 @@ fn emit_doctor_output(app_event_tx: &AppEventSender, output: std::process::Outpu
         ("✓", TIFFANY_BLUE, "ready")
     };
     let mut lines = vec![status_line(symbol, color, "doctor", message)];
+    lines.extend(doctor_repair_lines(&text));
     let mut emitted_body = false;
     for line in text.lines() {
         let line = line.trim_end();
@@ -752,6 +753,105 @@ fn emit_doctor_output(app_event_tx: &AppEventSender, output: std::process::Outpu
         lines.push(body_line("no output", true));
     }
     emit_lines(app_event_tx, lines);
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DoctorRepairAction {
+    command: &'static str,
+    detail: &'static str,
+}
+
+fn doctor_repair_lines(text: &str) -> Vec<Line<'static>> {
+    doctor_repair_actions(text)
+        .into_iter()
+        .map(|action| {
+            Line::from(vec![
+                Span::styled(
+                    "  repair",
+                    Style::default()
+                        .fg(TIFFANY_BLUE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    action.command,
+                    Style::default()
+                        .fg(TIFFANY_SOFT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(action.detail, Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect()
+}
+
+fn doctor_repair_actions(text: &str) -> Vec<DoctorRepairAction> {
+    let lower = text.to_ascii_lowercase();
+    let mut actions = Vec::new();
+
+    if lower.contains("config missing") || lower.contains("config parse/load failed") {
+        push_doctor_action(
+            &mut actions,
+            "orchestrator setup",
+            "create providers, models, roles, and local paths",
+        );
+    }
+    if lower.contains("api key missing")
+        || lower.contains("api key env")
+        || lower.contains("provider `")
+        || lower.contains("provider auth")
+        || lower.contains("401")
+        || lower.contains("403")
+    {
+        push_doctor_action(
+            &mut actions,
+            "/provider",
+            "configure provider auth or endpoint",
+        );
+    }
+    if lower.contains("missing role config")
+        || lower.contains("no worker role")
+        || lower.contains("model `")
+        || lower.contains("runtime `")
+        || lower.contains("model not found")
+        || lower.contains("unknown model")
+        || lower.contains("invalid model")
+        || lower.contains("1211")
+        || text.contains("模型不存在")
+    {
+        push_doctor_action(&mut actions, "/role", "fix role model/runtime binding");
+    }
+    if lower.contains("not found on path")
+        || lower.contains("claude: not found")
+        || lower.contains("codex: not found")
+    {
+        push_doctor_action(
+            &mut actions,
+            "install runtime",
+            "install claude/codex or change the role runtime",
+        );
+    }
+    if actions.is_empty() && lower.contains("all required checks passed") {
+        push_doctor_action(
+            &mut actions,
+            "tiffany orchestrator",
+            "start an orchestration run",
+        );
+    }
+
+    actions
+}
+
+fn push_doctor_action(
+    actions: &mut Vec<DoctorRepairAction>,
+    command: &'static str,
+    detail: &'static str,
+) {
+    if actions.iter().any(|action| action.command == command) {
+        return;
+    }
+    actions.push(DoctorRepairAction { command, detail });
 }
 
 fn doctor_line_is_dim(line: &str) -> bool {
@@ -1834,6 +1934,30 @@ mod tests {
         assert!(!doctor_line_is_dim("✗ openai: api key missing"));
         assert!(!doctor_line_is_dim("⚠ 3 issue(s) found"));
         assert!(!doctor_line_is_dim("✓ config parsed"));
+    }
+
+    #[test]
+    fn doctor_repair_lines_summarize_actionable_fixes() {
+        let lines = doctor_repair_lines(
+            "✗ google: api key missing\n\
+             ✗ planner: missing role config\n\
+             ✗ codex: `codex` not found on PATH\n\
+             ✗ worker-codex stderr: [1211] 模型不存在",
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("repair  /provider  configure provider auth or endpoint"));
+        assert!(text.contains("repair  /role  fix role model/runtime binding"));
+        assert!(text.contains("repair  install runtime  install claude/codex"));
+        assert_eq!(text.matches("/role").count(), 1);
+    }
+
+    #[test]
+    fn doctor_repair_lines_suggest_launch_when_ready() {
+        let lines = doctor_repair_lines("✓ all required checks passed");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("repair  tiffany orchestrator  start an orchestration run"));
     }
 
     #[test]

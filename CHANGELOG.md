@@ -22,6 +22,8 @@ All notable changes to this project will be documented in this file.
   the TUI when provider, model, role, or runtime wiring is unhealthy.
 - Added native `/doctor` support in the tiffany-loop orchestrator TUI, routing
   diagnostics through the orchestrator bridge with issue-aware status styling.
+- Added concise repair hints to the TUI `/doctor` output so provider, role,
+  runtime, and ready-state diagnostics point at the next command to run.
 
 ## [0.1.11] - 2026-06-19
 
