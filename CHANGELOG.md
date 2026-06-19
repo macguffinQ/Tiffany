@@ -18,6 +18,8 @@ All notable changes to this project will be documented in this file.
 - Added concise `orchestrator status` next/check actions for first-run launch guidance.
 - Added provider/model/role/default-worker summaries to `orchestrator status`.
 - Added a lightweight internal config health line to `orchestrator status`.
+- Made `orchestrator status` prefer setup/doctor repair guidance before launching
+  the TUI when provider, model, role, or runtime wiring is unhealthy.
 
 ## [0.1.11] - 2026-06-19
 

@@ -523,7 +523,7 @@ fn print_status(config_path: &Path) -> Result<()> {
         tiffany_install::launch_command_preview(config_path)
     );
 
-    let config_loaded = match Config::load(config_path) {
+    let (config_loaded, config_healthy) = match Config::load(config_path) {
         Ok(cfg) => {
             println!("db:           {}", cfg.behavior.db_path.display());
             println!("logs:         {}", cfg.behavior.session_log_dir.display());
@@ -548,12 +548,16 @@ fn print_status(config_path: &Path) -> Result<()> {
                 "worker:       {}",
                 runtime::default_worker_role(&cfg.roles).unwrap_or_else(|| "(none)".to_string())
             );
-            println!("health:       {}", status_config_health(&cfg));
-            true
+            let config_issues = status_config_issues(&cfg);
+            println!(
+                "health:       {}",
+                status_config_health_from_issues(&config_issues)
+            );
+            (true, config_issues.is_empty())
         }
         Err(err) => {
             println!("config load:  {err:#}");
-            false
+            (false, false)
         }
     };
     if mux::zellij::in_zellij() {
@@ -565,6 +569,7 @@ fn print_status(config_path: &Path) -> Result<()> {
 
     for action in status_actions(
         config_loaded,
+        config_healthy,
         tiffany_ready,
         tiffany_install::legacy_tui_forced(),
     ) {
@@ -588,8 +593,12 @@ fn status_name_summary(mut names: Vec<String>, limit: usize) -> String {
     format!("{} ({})", names.len(), shown.join(", ") + &suffix)
 }
 
+#[cfg(test)]
 fn status_config_health(cfg: &Config) -> String {
-    let issues = status_config_issues(cfg);
+    status_config_health_from_issues(&status_config_issues(cfg))
+}
+
+fn status_config_health_from_issues(issues: &[String]) -> String {
     if issues.is_empty() {
         "ok".to_string()
     } else {
@@ -653,7 +662,7 @@ fn status_config_issues(cfg: &Config) -> Vec<String> {
     issues
 }
 
-fn status_issue_summary(issues: Vec<String>, limit: usize) -> String {
+fn status_issue_summary(issues: &[String], limit: usize) -> String {
     let shown = issues.iter().take(limit).cloned().collect::<Vec<_>>();
     let suffix = if issues.len() > shown.len() {
         format!("; +{}", issues.len() - shown.len())
@@ -671,6 +680,7 @@ struct StatusAction {
 
 fn status_actions(
     config_loaded: bool,
+    config_healthy: bool,
     tiffany_ready: bool,
     legacy_tui_forced: bool,
 ) -> Vec<StatusAction> {
@@ -692,6 +702,19 @@ fn status_actions(
             StatusAction {
                 label: "next",
                 command: "unset ORCHESTRATOR_LEGACY_TUI, then run `orchestrator tui`",
+            },
+            StatusAction {
+                label: "check",
+                command: "orchestrator doctor",
+            },
+        ];
+    }
+
+    if !config_healthy {
+        return vec![
+            StatusAction {
+                label: "next",
+                command: "orchestrator setup, or `tiffany orchestrator` then /provider + /role",
             },
             StatusAction {
                 label: "check",
@@ -3963,7 +3986,7 @@ mod tests {
     #[test]
     fn status_actions_send_missing_config_to_setup() {
         assert_eq!(
-            status_actions(false, true, false),
+            status_actions(false, false, true, false),
             vec![
                 StatusAction {
                     label: "next",
@@ -3980,7 +4003,7 @@ mod tests {
     #[test]
     fn status_actions_launch_tiffany_when_ready() {
         assert_eq!(
-            status_actions(true, true, false),
+            status_actions(true, true, true, false),
             vec![
                 StatusAction {
                     label: "next",
@@ -3996,7 +4019,7 @@ mod tests {
 
     #[test]
     fn status_actions_explain_legacy_tui_override() {
-        let actions = status_actions(true, true, true);
+        let actions = status_actions(true, true, true, true);
 
         assert_eq!(actions[0].label, "next");
         assert!(actions[0].command.contains("ORCHESTRATOR_LEGACY_TUI"));
@@ -4005,11 +4028,21 @@ mod tests {
 
     #[test]
     fn status_actions_explain_missing_tiffany_binary() {
-        let actions = status_actions(true, false, false);
+        let actions = status_actions(true, true, false, false);
 
         assert_eq!(actions[0].label, "next");
         assert!(actions[0].command.contains("install tiffany-loop"));
         assert!(actions[0].command.contains("./scripts/tiffany-dev"));
+        assert_eq!(actions[1].command, "orchestrator doctor");
+    }
+
+    #[test]
+    fn status_actions_repair_unhealthy_config_before_launch() {
+        let actions = status_actions(true, false, true, false);
+
+        assert_eq!(actions[0].label, "next");
+        assert!(actions[0].command.contains("orchestrator setup"));
+        assert!(actions[0].command.contains("/provider + /role"));
         assert_eq!(actions[1].command, "orchestrator doctor");
     }
 
