@@ -19,6 +19,16 @@ pub struct SessionFlowRenderOptions {
     pub tail_per_session: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionListActionStyle {
+    Slash,
+    Cli,
+}
+
+pub struct SessionListRenderOptions {
+    pub action_style: SessionListActionStyle,
+}
+
 pub fn format_session_log(
     session: &Session,
     log_path: &Path,
@@ -127,6 +137,20 @@ pub fn format_session_header(session: &Session, log_path: &Path) -> String {
 }
 
 pub fn format_session_list(display_sessions: &[Session], all_sessions: &[Session]) -> String {
+    format_session_list_with_options(
+        display_sessions,
+        all_sessions,
+        SessionListRenderOptions {
+            action_style: SessionListActionStyle::Slash,
+        },
+    )
+}
+
+pub fn format_session_list_with_options(
+    display_sessions: &[Session],
+    all_sessions: &[Session],
+    options: SessionListRenderOptions,
+) -> String {
     if all_sessions.is_empty() {
         return "No sessions yet.".to_string();
     }
@@ -157,10 +181,21 @@ pub fn format_session_list(display_sessions: &[Session], all_sessions: &[Session
         let children = child_counts.get(&session.id).copied().unwrap_or(0);
         out.push('\n');
         out.push_str("  ");
-        out.push_str(&format_session_list_row(session, children));
+        out.push_str(&format_session_list_row(
+            session,
+            children,
+            options.action_style,
+        ));
     }
 
-    out.push_str("\n\nOpen: /tree <id> for parent/child links; /log <id> 120 for readable events.");
+    out.push_str(match options.action_style {
+        SessionListActionStyle::Slash => {
+            "\n\nOpen: /run-flow <id> 120 for the run waterfall; /tree <id> for links; /log <id> 120 for readable events."
+        }
+        SessionListActionStyle::Cli => {
+            "\n\nOpen: orchestrator sessions show <id> --flow --tail 120; add --tree for links or --raw for JSONL."
+        }
+    });
     out
 }
 
@@ -397,10 +432,14 @@ fn format_flow_session_events(
     out
 }
 
-fn format_session_list_row(session: &Session, child_count: usize) -> String {
+fn format_session_list_row(
+    session: &Session,
+    child_count: usize,
+    action_style: SessionListActionStyle,
+) -> String {
     let short = short_session_id(session);
     format!(
-        "{:<8} {:<9} {:<12} {:<16} {:<13} {:<14} /tree {}  /log {} 120",
+        "{:<8} {:<9} {:<12} {:<16} {:<13} {:<14} {}",
         short,
         format!("{} {}", session_state_icon(session), session_state(session)),
         session.role.as_str(),
@@ -414,9 +453,17 @@ fn format_session_list_row(session: &Session, child_count: usize) -> String {
         ),
         session.started_at.format("%m-%d %H:%M"),
         format_session_relation(session, child_count),
-        short,
-        short
+        format_session_list_actions(&short, action_style),
     )
+}
+
+fn format_session_list_actions(short: &str, action_style: SessionListActionStyle) -> String {
+    match action_style {
+        SessionListActionStyle::Slash => format!("/run-flow {short} 120  /tree {short}"),
+        SessionListActionStyle::Cli => {
+            format!("orchestrator sessions show {short} --flow --tail 120")
+        }
+    }
 }
 
 fn format_session_relation(session: &Session, child_count: usize) -> String {
@@ -810,6 +857,27 @@ mod tests {
         assert!(list.contains("parent="));
         assert!(list.contains("/tree"));
         assert!(list.contains("/log"));
+        assert!(list.contains("/run-flow"));
+    }
+
+    #[test]
+    fn formats_cli_session_list_with_shell_commands() {
+        let mut session = Session::new(Uuid::new_v4(), "claude-code", Role::Worker);
+        session.ended_at = Some(Utc::now());
+
+        let list = format_session_list_with_options(
+            &[session.clone()],
+            &[session],
+            SessionListRenderOptions {
+                action_style: SessionListActionStyle::Cli,
+            },
+        );
+
+        assert!(list.contains("orchestrator sessions show"));
+        assert!(list.contains("--flow --tail 120"));
+        assert!(list.contains("--tree"));
+        assert!(list.contains("--raw"));
+        assert!(!list.contains("/run-flow"));
     }
 
     #[test]

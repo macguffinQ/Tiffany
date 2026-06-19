@@ -179,7 +179,14 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                         .collect::<Vec<_>>();
                     println!(
                         "{}",
-                        orchestrator::session_display::format_session_list(&shown, &sessions)
+                        orchestrator::session_display::format_session_list_with_options(
+                            &shown,
+                            &sessions,
+                            orchestrator::session_display::SessionListRenderOptions {
+                                action_style:
+                                    orchestrator::session_display::SessionListActionStyle::Cli,
+                            },
+                        )
                     );
                 }
                 crate::SessionsCmd::Show {
