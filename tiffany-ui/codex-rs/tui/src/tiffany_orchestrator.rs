@@ -1673,13 +1673,7 @@ fn emit_event_lines(
         return;
     }
 
-    let title = event_title(event);
-    let mut lines = vec![status_line(
-        status_symbol(event),
-        status_color(event),
-        &event.role,
-        &title,
-    )];
+    let mut lines = vec![waterfall_status_line(event)];
     lines.extend(event_detail_lines(event));
 
     emit_lines(app_event_tx, lines);
@@ -1734,27 +1728,44 @@ fn status_color(event: &TiffanyProgressEvent) -> Color {
     }
 }
 
+fn waterfall_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
+    let color = status_color(event);
+    Line::from(vec![
+        Span::styled(
+            status_symbol(event),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            "step",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("{:<11}", stage_label(event)),
+            Style::default().fg(TIFFANY_SOFT),
+        ),
+        Span::raw(" "),
+        Span::styled(event_title(event), Style::default()),
+    ])
+}
+
+fn stage_label(event: &TiffanyProgressEvent) -> &'static str {
+    match event.role.as_str() {
+        "planner" => "01 planner",
+        "critic" => "02 critic",
+        "worker" => "03 worker",
+        "reviewer" => "04 reviewer",
+        "orchestrator" => "05 result",
+        _ => "00 event",
+    }
+}
+
 fn event_title(event: &TiffanyProgressEvent) -> String {
     if event.role == "worker" && event.status == "running" && event.task_id.is_some() {
-        let role = event
-            .worker_role
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| event.agent.as_deref().unwrap_or("worker"));
-        let runtime = event
-            .runtime
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .or(event.agent.as_deref())
-            .unwrap_or("runtime");
-        let route = match provider_model_label(event) {
-            Some(model) => format!("{role} · {runtime} · {model}"),
-            None => format!("{role} · {runtime}"),
-        };
-        if let Some(id) = short_task_id(event.task_id.as_deref()) {
-            return format!("{route} · {id}");
-        }
-        return route;
+        return format!("started {}", worker_role_label(event));
     }
     if event.role == "worker"
         && matches!(event.status.as_str(), "done" | "failed")
@@ -1787,7 +1798,7 @@ fn event_title(event: &TiffanyProgressEvent) -> String {
         return title;
     }
 
-    let mut title = event.message.clone();
+    let mut title = normalize_event_message(&event.message);
     if let Some(agent) = event.agent.as_deref()
         && !title.contains(agent)
     {
@@ -1820,7 +1831,6 @@ fn event_title(event: &TiffanyProgressEvent) -> String {
 }
 
 fn output_title(event: &TiffanyProgressEvent) -> String {
-    let label = output_label(event);
     let suffix = match event.role.as_str() {
         "planner" => "plan",
         "critic" => "critique",
@@ -1828,7 +1838,12 @@ fn output_title(event: &TiffanyProgressEvent) -> String {
         "worker" => "output",
         _ => "details",
     };
-    format!("{label} {suffix}")
+    if event.role == "worker" {
+        let label = output_label(event);
+        format!("{} · {label} {suffix}", stage_label(event))
+    } else {
+        format!("{} · {suffix}", stage_label(event))
+    }
 }
 
 fn output_label(event: &TiffanyProgressEvent) -> String {
@@ -1862,8 +1877,8 @@ fn event_detail_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>> {
         return Vec::new();
     }
     let mut lines = Vec::new();
-    if let Some(model) = provider_model_label(event) {
-        lines.push(body_line(&format!("model: {model}"), true));
+    if let Some(route) = worker_route_label(event) {
+        lines.push(meta_line("route", &route));
     }
     if let Some(prompt) = event
         .task_prompt
@@ -1871,12 +1886,51 @@ fn event_detail_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        lines.push(body_line(
-            &format!("task: {}", truncate_text(prompt, 180)),
-            false,
-        ));
+        lines.push(meta_line("task", &truncate_text(prompt, 180)));
     }
     lines
+}
+
+fn worker_role_label(event: &TiffanyProgressEvent) -> String {
+    event
+        .worker_role
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| event.agent.as_deref().map(str::trim))
+        .filter(|value| !value.is_empty())
+        .unwrap_or("worker")
+        .to_string()
+}
+
+fn worker_route_label(event: &TiffanyProgressEvent) -> Option<String> {
+    if event.role != "worker" {
+        return None;
+    }
+    let role = worker_role_label(event);
+    let runtime = event
+        .runtime
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            event
+                .agent
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
+    let mut parts = vec![role];
+    if let Some(runtime) = runtime {
+        parts.push(runtime.to_string());
+    }
+    if let Some(model) = provider_model_label(event) {
+        parts.push(model);
+    }
+    if let Some(id) = short_task_id(event.task_id.as_deref()) {
+        parts.push(id.to_string());
+    }
+    Some(parts.join(" · "))
 }
 
 fn provider_model_label(event: &TiffanyProgressEvent) -> Option<String> {
@@ -1896,6 +1950,10 @@ fn provider_model_label(event: &TiffanyProgressEvent) -> Option<String> {
             None => model.to_string(),
         },
     )
+}
+
+fn normalize_event_message(message: &str) -> String {
+    message.replace(" - ", " · ")
 }
 
 fn format_duration_ms(duration_ms: u64) -> String {
@@ -2154,6 +2212,19 @@ fn body_line(line: &str, dim: bool) -> Line<'static> {
     ])
 }
 
+fn meta_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("  ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(
+            format!("{label:<6}"),
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(value.to_string(), Style::default().fg(Color::DarkGray)),
+    ])
+}
+
 fn next_line(command: &str, detail: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
@@ -2373,11 +2444,82 @@ mod tests {
 
         let lines = output_event_lines(&event, "done");
 
-        assert_eq!(line_text(&lines[0]), "↳ claude-code · 12345678 output");
+        assert_eq!(
+            line_text(&lines[0]),
+            "↳ 03 worker · claude-code · 12345678 output"
+        );
         assert_eq!(line_text(&lines[1]), "  │ done");
         assert_eq!(lines[0].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[0].spans[2].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[1].spans[0].style.fg, Some(TIFFANY_DARK));
+    }
+
+    #[test]
+    fn status_lines_render_ordered_waterfall_steps() {
+        let planner = TiffanyProgressEvent {
+            role: "planner".to_string(),
+            status: "running".to_string(),
+            message: "planning".to_string(),
+            task_id: None,
+            agent: None,
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: None,
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+        let worker = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "running".to_string(),
+            message: "worker-cc started".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: Some("claude-code".to_string()),
+            model: Some("MiniMax-M3".to_string()),
+            provider: Some("minimax".to_string()),
+            task_prompt: None,
+            content: None,
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+        let reviewer = TiffanyProgressEvent {
+            role: "reviewer".to_string(),
+            status: "warning".to_string(),
+            message: "review needs fixes - 2 issue(s)".to_string(),
+            task_id: Some("87654321-0000-0000-0000-000000000000".to_string()),
+            agent: None,
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: None,
+            approved: Some(false),
+            issues: Some(2),
+            count: None,
+            duration_ms: None,
+        };
+
+        assert_eq!(
+            line_text(&waterfall_status_line(&planner)),
+            "● step  01 planner  planning"
+        );
+        assert_eq!(
+            line_text(&waterfall_status_line(&worker)),
+            "● step  03 worker   started worker-cc"
+        );
+        assert_eq!(
+            line_text(&waterfall_status_line(&reviewer)),
+            "⚠ step  04 reviewer review needs fixes · 2 issue(s) · 87654321"
+        );
     }
 
     #[test]
@@ -2405,7 +2547,7 @@ mod tests {
         let lines = output_event_lines(&event, &visible);
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-        assert!(text.contains("↳ critic critique"));
+        assert!(text.contains("↳ 02 critic · critique"));
         assert!(text.contains("needs changes"));
         assert!(text.contains("missing test"));
         assert!(!text.contains("critic:"));
@@ -2437,7 +2579,7 @@ mod tests {
 
         assert_eq!(
             line_text(&lines[0]),
-            "↳ worker-cc · claude-code · 12345678 output"
+            "↳ 03 worker · worker-cc · claude-code · 12345678 output"
         );
     }
 
@@ -2461,18 +2603,14 @@ mod tests {
             duration_ms: None,
         };
 
-        let mut lines = vec![status_line(
-            status_symbol(&event),
-            status_color(&event),
-            &event.role,
-            &event_title(&event),
-        )];
+        let mut lines = vec![waterfall_status_line(&event)];
         lines.extend(event_detail_lines(&event));
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-        assert!(text.contains("worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"));
-        assert!(text.contains("model: minimax/MiniMax-M3"));
-        assert!(text.contains("task: 回答用户的问题"));
+        assert!(text.contains("03 worker"));
+        assert!(text.contains("started worker-cc"));
+        assert!(text.contains("route worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"));
+        assert!(text.contains("task  回答用户的问题"));
     }
 
     #[test]
@@ -2630,6 +2768,10 @@ mod tests {
 
         assert_eq!(visible_content(&event).as_deref(), Some("done"));
         assert_eq!(output_label(&event), "claude-code · 12345678");
+        assert_eq!(
+            output_title(&event),
+            "03 worker · claude-code · 12345678 output"
+        );
     }
 
     #[test]

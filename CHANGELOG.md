@@ -26,6 +26,8 @@ All notable changes to this project will be documented in this file.
   runtime, and ready-state diagnostics point at the next command to run.
 - Improved TUI `/provider` and `/role` command output with status rows and
   next-step hints instead of raw CLI tables.
+- Reworked orchestrator progress display into ordered waterfall step lines with
+  route/task metadata for worker activity.
 
 ## [0.1.11] - 2026-06-19
 
