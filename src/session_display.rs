@@ -3,6 +3,7 @@
 use crate::agent_events;
 use crate::core::types::{Event, Session};
 use anyhow::{Context, Result};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::path::PathBuf;
@@ -378,6 +379,9 @@ pub fn format_session_event(event: &Event) -> String {
     if let Some(line) = format_imported_claude_event(event) {
         return line;
     }
+    if let Some(line) = format_orchestration_event(event) {
+        return line;
+    }
 
     let ts = event.ts.format("%H:%M:%S").to_string();
     let summary = agent_events::summarize_event_payload(&event.payload, EVENT_SUMMARY_MAX_CHARS);
@@ -615,6 +619,249 @@ fn session_log_path(log_dir: &Path, session: &Session) -> PathBuf {
     log_dir.join(format!("{}.jsonl", session.id))
 }
 
+fn format_orchestration_event(event: &Event) -> Option<String> {
+    let label = orchestration_label(&event.kind)?;
+    let ts = event.ts.format("%H:%M:%S").to_string();
+    let payload = &event.payload;
+    let status = payload_str(payload, "status");
+    let summary = match (event.kind.as_str(), status) {
+        (_, Some("output")) => orchestration_output_summary(&event.kind, payload)?,
+        ("planner", _) => planner_event_summary(payload),
+        ("critic", _) => critic_event_summary(payload),
+        ("worker", _) => worker_event_summary(payload),
+        ("reviewer", _) => reviewer_event_summary(payload),
+        ("orchestrator", _) => orchestrator_event_summary(payload),
+        _ => return None,
+    };
+
+    Some(format_multiline_log_event(&ts, label, &summary))
+}
+
+fn orchestration_label(kind: &str) -> Option<&'static str> {
+    match kind {
+        "planner" => Some("plan"),
+        "critic" => Some("critic"),
+        "worker" => Some("worker"),
+        "reviewer" => Some("review"),
+        "orchestrator" => Some("orchestrator"),
+        _ => None,
+    }
+}
+
+fn orchestration_output_summary(kind: &str, payload: &Value) -> Option<String> {
+    let content = payload_str(payload, "content")?.trim();
+    if content.is_empty() {
+        return None;
+    }
+    let display = agent_events::normalize_output_summary(&agent_events::humanize_jsonish(
+        content,
+        EVENT_SUMMARY_MAX_CHARS,
+    ));
+    let display = strip_role_prefix(kind, &display);
+    if kind == "worker" {
+        let mut parts = Vec::new();
+        if let Some(label) = worker_output_label(payload) {
+            parts.push(label);
+        }
+        if let Some(id) = payload_short_id(payload, "task_id") {
+            parts.push(id);
+        }
+        if parts.is_empty() {
+            Some(display)
+        } else if display.trim().is_empty() {
+            Some(parts.join(" · "))
+        } else {
+            Some(format!("{}: {}", parts.join(" · "), display.trim()))
+        }
+    } else {
+        Some(display)
+    }
+}
+
+fn planner_event_summary(payload: &Value) -> String {
+    let message = normalized_payload_message(payload, "planning");
+    if message.starts_with("plan ready") {
+        return message;
+    }
+    message
+}
+
+fn critic_event_summary(payload: &Value) -> String {
+    if payload_str(payload, "status").is_none() && payload_bool(payload, "approved").is_some() {
+        return agent_events::summarize_event_payload(payload, EVENT_SUMMARY_MAX_CHARS);
+    }
+    match payload_str(payload, "status") {
+        Some("running") => normalized_payload_message(payload, "checking plan"),
+        Some("done") if payload_bool(payload, "approved") == Some(true) => "plan approved".into(),
+        Some("warning") => {
+            let issues = payload_issue_count(payload, "issues").unwrap_or(0);
+            format!("plan needs changes · {issues} issue(s)")
+        }
+        _ => normalized_payload_message(payload, "critic event"),
+    }
+}
+
+fn worker_event_summary(payload: &Value) -> String {
+    let status = payload_str(payload, "status");
+    let message = normalized_payload_message(payload, "worker event");
+    if status == Some("running") && payload.get("task_id").is_none() {
+        return message;
+    }
+
+    let role = payload_str(payload, "worker_role")
+        .or_else(|| payload_str(payload, "agent"))
+        .unwrap_or("worker");
+    let action = match status {
+        Some("running") => "started",
+        Some("done") => "done",
+        Some("failed") => "failed",
+        _ => message.as_str(),
+    };
+    let mut parts = vec![format!("{role} {action}")];
+    if status == Some("running") {
+        if let Some(runtime) = payload_str(payload, "runtime").filter(|runtime| *runtime != role) {
+            parts.push(runtime.to_string());
+        }
+        if let Some(model) = provider_model_label(payload) {
+            parts.push(model);
+        }
+    }
+    if let Some(id) = payload_short_id(payload, "task_id") {
+        parts.push(id);
+    }
+    if let Some(duration) = payload_u64(payload, "duration_ms").map(format_duration_ms) {
+        parts.push(duration);
+    }
+    parts.join(" · ")
+}
+
+fn reviewer_event_summary(payload: &Value) -> String {
+    if payload_str(payload, "status").is_none() && payload_bool(payload, "approved").is_some() {
+        return agent_events::summarize_event_payload(payload, EVENT_SUMMARY_MAX_CHARS);
+    }
+    let id = payload_short_id(payload, "task_id");
+    let action = match payload_str(payload, "status") {
+        Some("running") => "checking worker output".to_string(),
+        Some("done") if payload_bool(payload, "approved") == Some(true) => "passed".to_string(),
+        Some("warning") if payload_bool(payload, "approved") == Some(false) => {
+            "needs fixes".to_string()
+        }
+        _ => normalized_payload_message(payload, "review event"),
+    };
+    let mut parts = vec![action];
+    if let Some(id) = id {
+        parts.push(id);
+    }
+    if payload_str(payload, "status") == Some("warning") {
+        if let Some(issues) = payload_issue_count(payload, "issues") {
+            parts.push(format!("{issues} issue(s)"));
+        }
+    }
+    parts.join(" · ")
+}
+
+fn orchestrator_event_summary(payload: &Value) -> String {
+    match payload_str(payload, "status") {
+        Some("done") => match payload_usize(payload, "count") {
+            Some(count) => format!("done · {count} sub-task(s)"),
+            None => normalized_payload_message(payload, "done"),
+        },
+        Some("failed") => format!("error · {}", normalized_payload_message(payload, "failed")),
+        _ => normalized_payload_message(payload, "orchestrator event"),
+    }
+}
+
+fn normalized_payload_message(payload: &Value, fallback: &str) -> String {
+    payload_str(payload, "message")
+        .map(|message| message.replace(" - ", " · "))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn strip_role_prefix(kind: &str, text: &str) -> String {
+    let label = orchestration_label(kind).unwrap_or(kind);
+    let trimmed = text.trim();
+    for prefix in [kind, label] {
+        for separator in [": ", " - ", " — "] {
+            let needle = format!("{prefix}{separator}");
+            if trimmed
+                .get(..needle.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(&needle))
+            {
+                return trimmed[needle.len()..].trim_start().to_string();
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
+fn worker_output_label(payload: &Value) -> Option<String> {
+    let role = payload_str(payload, "worker_role");
+    let agent = payload_str(payload, "agent");
+    match (role, agent) {
+        (Some(role), Some(agent)) if role != agent => Some(format!("{role} · {agent}")),
+        (Some(role), _) => Some(role.to_string()),
+        (_, Some(agent)) => Some(agent.to_string()),
+        _ => None,
+    }
+}
+
+fn provider_model_label(payload: &Value) -> Option<String> {
+    let model = payload_str(payload, "model")?;
+    Some(match payload_str(payload, "provider") {
+        Some(provider) if !provider.trim().is_empty() => format!("{provider}/{model}"),
+        _ => model.to_string(),
+    })
+}
+
+fn payload_str<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn payload_bool(payload: &Value, key: &str) -> Option<bool> {
+    payload.get(key).and_then(Value::as_bool)
+}
+
+fn payload_usize(payload: &Value, key: &str) -> Option<usize> {
+    payload
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+}
+
+fn payload_issue_count(payload: &Value, key: &str) -> Option<usize> {
+    payload_usize(payload, key).or_else(|| payload.get(key).and_then(Value::as_array).map(Vec::len))
+}
+
+fn payload_u64(payload: &Value, key: &str) -> Option<u64> {
+    payload.get(key).and_then(Value::as_u64)
+}
+
+fn payload_short_id(payload: &Value, key: &str) -> Option<String> {
+    let value = payload_str(payload, key)?;
+    Some(value.chars().take(8).collect())
+}
+
+fn format_duration_ms(duration_ms: u64) -> String {
+    if duration_ms < 1_000 {
+        return format!("{duration_ms}ms");
+    }
+    let seconds = duration_ms / 1_000;
+    let millis = duration_ms % 1_000;
+    if seconds < 60 {
+        if millis == 0 {
+            return format!("{seconds}s");
+        }
+        return format!("{seconds}.{}s", millis / 100);
+    }
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    format!("{minutes}m{seconds:02}s")
+}
+
 fn format_imported_claude_event(event: &Event) -> Option<String> {
     if event.payload.get("source").and_then(|v| v.as_str()) != Some("claude-code") {
         return None;
@@ -816,6 +1063,97 @@ mod tests {
         assert!(line.contains("needs changes: 1 issue(s)"));
         assert!(line.contains("worker output missing"));
         assert!(!line.contains("\"approved\""));
+    }
+
+    #[test]
+    fn formats_orchestration_lifecycle_as_waterfall() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let worker_started = Event {
+            session_id: Uuid::new_v4(),
+            task_id,
+            ts: Utc::now(),
+            kind: "worker".into(),
+            payload: serde_json::json!({
+                "status": "running",
+                "message": "worker-cc started",
+                "task_id": task_id,
+                "agent": "claude-code",
+                "worker_role": "worker-cc",
+                "runtime": "claude-code",
+                "model": "MiniMax-M3",
+                "provider": "minimax"
+            }),
+        };
+        let line = format_session_event(&worker_started);
+        assert!(
+            line.contains("worker worker-cc started · claude-code · minimax/MiniMax-M3 · 12345678")
+        );
+
+        let worker_done = Event {
+            payload: serde_json::json!({
+                "status": "done",
+                "message": "worker-cc done",
+                "task_id": task_id,
+                "agent": "claude-code",
+                "worker_role": "worker-cc",
+                "duration_ms": 1250
+            }),
+            ..worker_started.clone()
+        };
+        let line = format_session_event(&worker_done);
+        assert!(line.contains("worker worker-cc done · 12345678 · 1.2s"));
+
+        let reviewer = Event {
+            kind: "reviewer".into(),
+            payload: serde_json::json!({
+                "status": "warning",
+                "message": "review needs fixes - 2 issue(s)",
+                "task_id": task_id,
+                "approved": false,
+                "issues": 2
+            }),
+            ..worker_started
+        };
+        let line = format_session_event(&reviewer);
+        assert!(line.contains("review needs fixes · 12345678 · 2 issue(s)"));
+        assert!(!line.contains("review needs fixes -"));
+    }
+
+    #[test]
+    fn formats_orchestration_output_without_raw_json_or_runtime_prefix() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let worker_output = Event {
+            session_id: Uuid::new_v4(),
+            task_id,
+            ts: Utc::now(),
+            kind: "worker".into(),
+            payload: serde_json::json!({
+                "status": "output",
+                "message": "worker-cc output",
+                "task_id": task_id,
+                "agent": "claude-code",
+                "worker_role": "worker-cc",
+                "content": "claude assistant: useful summary"
+            }),
+        };
+        let line = format_session_event(&worker_output);
+        assert!(line.contains("worker worker-cc · claude-code · 12345678: useful summary"));
+        assert!(!line.contains("claude assistant:"));
+
+        let critic_output = Event {
+            kind: "critic".into(),
+            payload: serde_json::json!({
+                "status": "output",
+                "message": "critic output",
+                "content": "critic>\n{\"approved\":false,\"issues\":[\"missing test\"]}"
+            }),
+            ..worker_output
+        };
+        let line = format_session_event(&critic_output);
+        assert!(line.contains("critic needs changes: 1 issue(s)"));
+        assert!(line.contains("missing test"));
+        assert!(!line.contains("critic>"));
+        assert!(!line.contains('{'));
     }
 
     #[test]
