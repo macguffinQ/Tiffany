@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.10] - 2026-06-19
+
+### Changed
+
+- Build the published `tiffany` binary from a new lightweight `tiffany-cli`
+  crate instead of the full Codex CLI entrypoint.
+- Keep the top-level `tiffany --help` surface focused on Tiffany orchestration
+  rather than exposing Codex login, model, sandbox, and profile flags.
+- Route `tiffany`, `tiffany "prompt"`, and `tiffany orchestrator ...` through
+  the orchestrator-native TUI by default.
+- Updated development, release, Homebrew fallback, and source-install commands
+  to build `tiffany-ui/codex-rs/tiffany-cli`.
+
+### Fixed
+
+- Fixed `./scripts/tiffany-dev -- <raw args>` so the raw-argument separator is
+  stripped before invoking the local Tiffany binary.
+
 ## [0.1.9] - 2026-06-19
 
 ### Added
