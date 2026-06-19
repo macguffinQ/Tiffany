@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 - Added release tag checks so tag versions must match the root Cargo package version.
 - Added actionable `orchestrator doctor` next steps for first-run setup and repair.
 - Added concise `orchestrator status` next/check actions for first-run launch guidance.
+- Added provider/model/role/default-worker summaries to `orchestrator status`.
 
 ## [0.1.11] - 2026-06-19
 

@@ -531,6 +531,22 @@ fn print_status(config_path: &Path) -> Result<()> {
                 "claude:       bypass_permissions={}",
                 cfg.behavior.cc_bypass_permissions
             );
+            println!(
+                "providers:    {}",
+                status_name_summary(cfg.providers.keys().cloned().collect(), 4)
+            );
+            println!(
+                "models:       {}",
+                status_name_summary(cfg.models.iter().map(|model| model.id.clone()).collect(), 4)
+            );
+            println!(
+                "roles:        {}",
+                status_name_summary(cfg.roles.keys().cloned().collect(), 5)
+            );
+            println!(
+                "worker:       {}",
+                runtime::default_worker_role(&cfg.roles).unwrap_or_else(|| "(none)".to_string())
+            );
             true
         }
         Err(err) => {
@@ -553,6 +569,21 @@ fn print_status(config_path: &Path) -> Result<()> {
         println!("{:<13}{}", format!("{}:", action.label), action.command);
     }
     Ok(())
+}
+
+fn status_name_summary(mut names: Vec<String>, limit: usize) -> String {
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        return "0".to_string();
+    }
+    let shown = names.iter().take(limit).cloned().collect::<Vec<_>>();
+    let suffix = if names.len() > shown.len() {
+        format!(", +{}", names.len() - shown.len())
+    } else {
+        String::new()
+    };
+    format!("{} ({})", names.len(), shown.join(", ") + &suffix)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3903,5 +3934,23 @@ mod tests {
         assert!(actions[0].command.contains("install tiffany-loop"));
         assert!(actions[0].command.contains("./scripts/tiffany-dev"));
         assert_eq!(actions[1].command, "orchestrator doctor");
+    }
+
+    #[test]
+    fn status_name_summary_sorts_deduplicates_and_truncates() {
+        assert_eq!(status_name_summary(Vec::new(), 4), "0");
+        assert_eq!(
+            status_name_summary(
+                vec![
+                    "worker".to_string(),
+                    "planner".to_string(),
+                    "worker".to_string(),
+                    "critic".to_string(),
+                    "reviewer".to_string(),
+                ],
+                3,
+            ),
+            "4 (critic, planner, reviewer, +1)"
+        );
     }
 }
