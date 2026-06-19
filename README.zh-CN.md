@@ -50,6 +50,20 @@ tiffany-loop orchestration mode
 
 正常交互使用：安装后先运行一次 `orchestrator setup`，再用 `tiffany-loop` 进入主界面；源码开发时用 `./scripts/tiffany-dev setup` 和 `./scripts/tiffany-dev`。
 
+最短路径：
+
+```bash
+# Homebrew 或 release 包安装后：
+orchestrator setup
+tiffany-loop
+
+# 源码 checkout：
+./scripts/tiffany-dev setup
+./scripts/tiffany-dev
+```
+
+进入 UI 后，用 `/provider` 配置密钥和 endpoint，用 `/role` 注册 planner、critic、worker、reviewer 等角色，用 `/roles` 检查角色是否接上 provider/model/runtime；worker 因 provider、模型、key 或 runtime 报错时，先跑 `/doctor`。
+
 | 名称 | 它是什么 | 用途 |
 |---|---|---|
 | `tiffany-loop` | 主 UI 命令 / 包名 | 交互对话、provider 设置、角色设置、多轮编排 |

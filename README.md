@@ -41,6 +41,22 @@ It's designed for software engineering tasks where:
 
 For normal interactive use, run `orchestrator setup` once, then start the UI with `tiffany-loop`. From a source checkout, use `./scripts/tiffany-dev setup` and `./scripts/tiffany-dev`.
 
+The shortest path is:
+
+```bash
+# Installed with Homebrew or a release archive:
+orchestrator setup
+tiffany-loop
+
+# Source checkout:
+./scripts/tiffany-dev setup
+./scripts/tiffany-dev
+```
+
+Inside the UI, configure credentials with `/provider`, register roles with
+`/role`, inspect role wiring with `/roles`, and use `/doctor` when a worker
+fails because of a provider, model, key, or runtime mismatch.
+
 | Name | What it is | Use it for |
 |---|---|---|
 | `tiffany-loop` | Primary UI command / package name | Interactive chat, provider setup, role setup, multi-turn orchestration |

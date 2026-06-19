@@ -34,6 +34,7 @@ Usage:
   ./scripts/tiffany-dev
       Build ./target/dev-small/orchestrator and ./target/dev-small/tiffany-loop
       when needed, then open the local tiffany-loop TUI in orchestrator mode.
+      This is the source-checkout equivalent of running installed `tiffany-loop`.
 
   ./scripts/tiffany-dev orchestrator ["prompt"...]
       Open the local TUI and route input through the orchestrator runtime.
@@ -49,6 +50,12 @@ Usage:
 
   ./scripts/tiffany-dev -- <raw tiffany-loop args>
       Pass arguments through to the local tiffany-loop binary.
+
+In the TUI:
+  /provider     configure provider credentials and endpoints
+  /role         register planner/critic/worker/reviewer roles
+  /roles        inspect current role -> model -> runtime wiring
+  /doctor       diagnose provider/model/key/runtime problems
 
 Environment:
   TIFFANY_HOME              UI config/state root, default: ~/.tiffany
