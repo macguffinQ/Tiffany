@@ -98,7 +98,7 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-dev orchestrator "..."`：带初始问题立即运行 orchestrator 流程；native mode 默认执行者是 Claude Code（`worker-cc`），进入后输入框继续提交也会走 orchestrator。
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml`：指定 orchestrator 配置文件，同时继续让 tiffany-loop UI 配置隔离在 `TIFFANY_HOME`。
 - `./scripts/tiffany-dev orchestrator --legacy ...`：兼容旧 orchestrator CLI 桥接。
-- `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；源码本地运行用 `--small`，需要更快的可分发构建时用 `--fast-release`，最终 dist 二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。需要构建后只保留最终 dist 二进制时，加 `--prune-dist-cache`。
+- `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；默认使用源码本地运行的 `--small` profile，需要普通 debug profile 时用 `--dev`，需要更快的可分发构建时用 `--fast-release`。最终 dist 二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。需要构建后只保留最终 dist 二进制时，加 `--prune-dist-cache`。
 - `./scripts/tiffany-check --smoke`：small debug 构建、检查 fork 格式，验证 legacy bridge、事件流入口，并运行示例 smoke 测试。
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
 - `./scripts/tiffany-check-examples`：只运行仓库内示例项目测试。
@@ -294,7 +294,7 @@ behavior:
 | `./scripts/tiffany-dev` | 运行 tiffany-loop UI |
 | `./scripts/tiffany-dev setup` | 从源码运行首次配置向导 |
 | `./scripts/tiffany-dev orchestrator` | 从 tiffany-loop fork 桥接到现有 orchestrator runtime |
-| `./scripts/tiffany-build [args]` | 在共享 `./target` 中构建 runtime 和 UI 二进制；源码本地运行用 `--small --locked`，也可用默认 strip 的 `--fast-release --locked`；加 `--prune-dist-cache` 可只保留最终 dist 二进制 |
+| `./scripts/tiffany-build [args]` | 在共享 `./target` 中构建 runtime 和 UI 二进制；默认等价源码本地运行的 `--small`，需要普通 debug 用 `--dev --locked`，也可用默认 strip 的 `--fast-release --locked`；加 `--prune-dist-cache` 可只保留最终 dist 二进制 |
 | `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge/example 验证 |
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge/example 验证 |
 | `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |

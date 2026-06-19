@@ -11,9 +11,12 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     "  - target/*/orchestrator" \
     "  - target/*/tiffany-loop (plus tiffany compatibility alias)" \
     "" \
+    "Default profile: --small (target/dev-small). Use --dev for Cargo's normal debug profile." \
+    "" \
     "Examples:" \
     "  ./scripts/tiffany-build" \
     "  ./scripts/tiffany-build --small --locked" \
+    "  ./scripts/tiffany-build --dev --locked" \
     "  ./scripts/tiffany-build --release --locked" \
     "  ./scripts/tiffany-build --fast-release --locked" \
     "  ./scripts/tiffany-build --fast-release --locked --prune-dist-cache" \
@@ -42,6 +45,7 @@ dist_mode=0
 prune_dist_cache="${TIFFANY_PRUNE_DIST_CACHE:-0}"
 build_target=""
 expect_target=0
+explicit_profile=0
 prev_arg=""
 for arg in "$@"; do
   if [[ "$expect_target" == "1" ]]; then
@@ -51,17 +55,31 @@ for arg in "$@"; do
 
   case "$arg" in
     --fast-release|--dist)
+      explicit_profile=1
       dist_mode=1
       cargo_flags+=(--profile tiffany-dist)
       ;;
     --small|--small-debug)
+      explicit_profile=1
       cargo_flags+=(--profile dev-small)
+      ;;
+    --dev|--debug)
+      explicit_profile=1
       ;;
     --prune-dist-cache)
       prune_dist_cache=1
       ;;
     --profile=tiffany-dist)
+      explicit_profile=1
       dist_mode=1
+      cargo_flags+=("$arg")
+      ;;
+    --profile|--profile=*)
+      explicit_profile=1
+      cargo_flags+=("$arg")
+      ;;
+    --release)
+      explicit_profile=1
       cargo_flags+=("$arg")
       ;;
     --target)
@@ -74,6 +92,7 @@ for arg in "$@"; do
       ;;
     tiffany-dist)
       if [[ "$prev_arg" == "--profile" ]]; then
+        explicit_profile=1
         dist_mode=1
       fi
       cargo_flags+=("$arg")
@@ -84,6 +103,9 @@ for arg in "$@"; do
   esac
   prev_arg="$arg"
 done
+if [[ "$explicit_profile" == "0" ]]; then
+  cargo_flags=(--profile dev-small "${cargo_flags[@]}")
+fi
 if [[ "${TIFFANY_QUIET:-0}" == "1" ]]; then
   cargo_flags+=(--quiet)
 fi
