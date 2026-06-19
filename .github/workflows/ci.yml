@@ -29,13 +29,17 @@ jobs:
             tiffany-ui/codex-rs -> ../../target
 
       - name: Format
-        run: cargo fmt -- --check
+        run: |
+          cargo fmt -- --check
+          cargo fmt --manifest-path crates/tiffany-event-format/Cargo.toml -- --check
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features
 
       - name: Test
-        run: cargo test --all
+        run: |
+          cargo test --all
+          cargo test --manifest-path crates/tiffany-event-format/Cargo.toml
 
       - name: Build
         run: cargo build --all

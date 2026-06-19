@@ -68,6 +68,7 @@ home = "0.5"
 dirs = "5"
 tempfile = "3"
 unicode-width = "0.2"
+tiffany-event-format = { path = "crates/tiffany-event-format" }
 
 [dev-dependencies]
 tokio-test = "0.4"
