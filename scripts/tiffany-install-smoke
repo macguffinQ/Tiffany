@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/tiffany-install-smoke [--smoke|--dist|--bin-dir DIR]
+
+Checks the installed/source-built command surface in an isolated HOME:
+  - orchestrator
+  - tiffany-loop
+  - tiffany compatibility alias
+  - init/status/doctor/provider dry-run
+  - tiffany-loop orchestrator help and legacy bridge help
+
+Modes:
+  --smoke  Use ./target/dev-small binaries.
+  --dist   Use ./target/tiffany-dist binaries.
+
+Options:
+  --bin-dir DIR  Use an explicit directory containing the three binaries.
+
+Default: --smoke
+EOF
+}
+
+target_dir="${TIFFANY_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_dir/target}}"
+case "$target_dir" in
+  /*) ;;
+  *) target_dir="$repo_dir/$target_dir" ;;
+esac
+
+mode="smoke"
+bin_dir=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --smoke|--debug)
+      mode="smoke"
+      ;;
+    --dist|--fast-release)
+      mode="dist"
+      ;;
+    --bin-dir)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      bin_dir="$2"
+      shift
+      ;;
+    --bin-dir=*)
+      bin_dir="${1#--bin-dir=}"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ -z "$bin_dir" ]]; then
+  case "$mode" in
+    smoke) bin_dir="$target_dir/dev-small" ;;
+    dist) bin_dir="$target_dir/tiffany-dist" ;;
+  esac
+fi
+case "$bin_dir" in
+  /*) ;;
+  *) bin_dir="$repo_dir/$bin_dir" ;;
+esac
+
+exe_suffix=""
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) exe_suffix=".exe" ;;
+esac
+
+orchestrator_bin="$bin_dir/orchestrator$exe_suffix"
+tiffany_bin="$bin_dir/tiffany-loop$exe_suffix"
+tiffany_alias_bin="$bin_dir/tiffany$exe_suffix"
+
+for binary in "$orchestrator_bin" "$tiffany_bin" "$tiffany_alias_bin"; do
+  if [[ ! -x "$binary" ]]; then
+    echo "missing executable: $binary" >&2
+    echo "build first with ./scripts/tiffany-build --small or ./scripts/tiffany-build --fast-release" >&2
+    exit 1
+  fi
+done
+
+tmp_root="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_root"
+}
+trap cleanup EXIT
+
+export HOME="$tmp_root/home"
+export TIFFANY_HOME="$tmp_root/tiffany"
+export TIFFANY_SQLITE_HOME="$tmp_root/tiffany-sqlite"
+export CODEX_HOME="$TIFFANY_HOME"
+export CODEX_SQLITE_HOME="$TIFFANY_SQLITE_HOME"
+export TIFFANY_BIN="$tiffany_bin"
+unset ORCHESTRATOR_LEGACY_TUI
+mkdir -p "$HOME" "$TIFFANY_HOME" "$TIFFANY_SQLITE_HOME"
+
+config="$HOME/.orchestrator/config.yaml"
+
+run_log() {
+  local label="$1"
+  shift
+  local log="$tmp_root/$label.log"
+  echo "checking $label..." >&2
+  if ! "$@" >"$log" 2>&1; then
+    cat "$log" >&2
+    exit 1
+  fi
+  printf '%s\n' "$log"
+}
+
+assert_log_contains() {
+  local log="$1"
+  local needle="$2"
+  if ! grep -F -- "$needle" "$log" >/dev/null; then
+    echo "expected output to contain: $needle" >&2
+    echo "---- $log ----" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+}
+
+assert_log_not_contains() {
+  local log="$1"
+  local needle="$2"
+  if grep -F -- "$needle" "$log" >/dev/null; then
+    echo "expected output not to contain: $needle" >&2
+    echo "---- $log ----" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+}
+
+log="$(run_log orchestrator-help "$orchestrator_bin" --help)"
+assert_log_contains "$log" "Multi-agent orchestration platform"
+assert_log_contains "$log" "setup"
+
+log="$(run_log tiffany-help "$tiffany_bin" --help)"
+assert_log_contains "$log" "Tiffany Loop"
+assert_log_contains "$log" "orchestrator"
+
+log="$(run_log tiffany-alias-help "$tiffany_alias_bin" --help)"
+assert_log_contains "$log" "Tiffany Loop"
+
+log="$(run_log tiffany-orchestrator-help "$tiffany_bin" orchestrator --help)"
+assert_log_contains "$log" "--orchestrator-config"
+assert_log_contains "$log" "--worker"
+
+log="$(run_log init "$orchestrator_bin" --config "$config" init)"
+assert_log_contains "$log" "Wrote default config"
+if [[ ! -f "$config" ]]; then
+  echo "init did not create $config" >&2
+  exit 1
+fi
+
+log="$(run_log status "$orchestrator_bin" --config "$config" status)"
+assert_log_contains "$log" "tiffany-loop"
+assert_log_contains "$log" "$tiffany_bin"
+assert_log_contains "$log" "$config"
+assert_log_contains "$log" "bridge:"
+
+log="$(run_log doctor "$orchestrator_bin" --config "$config" doctor)"
+assert_log_contains "$log" "orchestrator doctor"
+assert_log_contains "$log" "tiffany-loop binary:"
+assert_log_contains "$log" "config parsed"
+assert_log_contains "$log" "Roles:"
+
+log="$(run_log provider-dry-run "$orchestrator_bin" --config "$config" config provider setup custom --type openai --env TIFFANY_INSTALL_SMOKE_API_KEY --endpoint https://example.invalid/v1 --dry-run)"
+assert_log_contains "$log" "Provider setup dry-run"
+assert_log_contains "$log" '${TIFFANY_INSTALL_SMOKE_API_KEY}'
+assert_log_contains "$log" "https://example.invalid/v1"
+assert_log_not_contains "$config" "example.invalid"
+
+log="$(run_log events-help "$orchestrator_bin" --config "$config" events --help)"
+assert_log_contains "$log" "Stream orchestrator progress events"
+
+log="$(run_log legacy-bridge-help "$tiffany_bin" orchestrator --bin "$orchestrator_bin" --orchestrator-config "$config" --legacy help)"
+assert_log_contains "$log" "Multi-agent orchestration platform"
+
+echo "install smoke passed ($mode): $bin_dir"

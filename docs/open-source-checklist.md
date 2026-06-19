@@ -13,6 +13,7 @@ Use this before making the repository public.
 - [ ] Run full release preflight before publishing the next tag:
 
 ```bash
+./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --full --tag v0.1.11
 ./scripts/tiffany-clean-targets --sizes
 ```
@@ -43,6 +44,7 @@ find . -path './target' -prune -o -path './tiffany-ui/codex-rs/target' -prune -o
 ```bash
 ./scripts/tiffany-release-preflight --full --tag v0.1.11
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
+./scripts/tiffany-install-smoke --dist
 ```
 
 Run `cargo package --allow-dirty` only when preparing a crates.io package.

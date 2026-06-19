@@ -7,7 +7,7 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/tiffany-check [--smoke|--dist]
 
-Checks the local tiffany-loop fork, orchestrator bridge, and checked-in examples.
+Checks the local tiffany-loop fork, install surface, orchestrator bridge, and checked-in examples.
 
 Modes:
   --smoke  Small debug build plus bridge/event/example smoke checks. Intended for PR/main CI.
@@ -79,6 +79,9 @@ echo "checking tiffany-loop CLI help..."
 if [[ "$mode" == "smoke" ]]; then
   "$repo_dir/scripts/tiffany-dev" -- --help >/dev/null 2>&1
 fi
+
+echo "checking isolated install surface..."
+"$repo_dir/scripts/tiffany-install-smoke" "--$mode" --bin-dir "$binary_dir"
 
 echo "checking orchestrator bridge..."
 "$binary_dir/tiffany-loop" orchestrator \

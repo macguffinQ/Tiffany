@@ -109,6 +109,13 @@ shasum -a 256 "/tmp/${asset}"
 tar -tzf "/tmp/${asset}" | head
 ```
 
+From a source checkout with matching binaries built, maintainers can also run
+the isolated install smoke against a binary directory:
+
+```bash
+./scripts/tiffany-install-smoke --bin-dir /path/to/tiffany-loop-v0.1.11-aarch64-apple-darwin
+```
+
 ## Formula template
 
 See `packaging/homebrew/tiffany-loop.rb`. It is a source-build template; the release workflow generates the published formula with the current tag, archive URLs, and checksums.

@@ -99,8 +99,9 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml`：指定 orchestrator 配置文件，同时继续让 tiffany-loop UI 配置隔离在 `TIFFANY_HOME`。
 - `./scripts/tiffany-dev orchestrator --legacy ...`：兼容旧 orchestrator CLI 桥接。
 - `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；默认使用源码本地运行的 `--small` profile，需要普通 debug profile 时用 `--dev`，需要更快的可分发构建时用 `--fast-release`。最终 dist 二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。需要构建后只保留最终 dist 二进制时，加 `--prune-dist-cache`。
-- `./scripts/tiffany-check --smoke`：small debug 构建、检查 fork 格式，验证 legacy bridge、事件流入口，并运行示例 smoke 测试。
+- `./scripts/tiffany-check --smoke`：small debug 构建、检查 fork 格式，验证隔离安装入口、legacy bridge、事件流入口，并运行示例 smoke 测试。
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
+- `./scripts/tiffany-install-smoke --smoke|--dist`：在临时 HOME 中验证 `orchestrator`、`tiffany-loop` 和 `tiffany` 兼容别名，不触碰真实用户配置。
 - `./scripts/tiffany-check-examples`：只运行仓库内示例项目测试。
 - `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]`：运行汇总后的发布前检查；打 tag 前使用 `--full --tag vX.Y.Z`。
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small`：查看构建缓存大小、定位大文件，在保留已编译依赖和最终二进制的同时清理可重建缓存，或清理更大的 build 输出，避免 `target/` 膨胀。
@@ -295,8 +296,9 @@ behavior:
 | `./scripts/tiffany-dev setup` | 从源码运行首次配置向导 |
 | `./scripts/tiffany-dev orchestrator` | 从 tiffany-loop fork 桥接到现有 orchestrator runtime |
 | `./scripts/tiffany-build [args]` | 在共享 `./target` 中构建 runtime 和 UI 二进制；默认等价源码本地运行的 `--small`，需要普通 debug 用 `--dev --locked`，也可用默认 strip 的 `--fast-release --locked`；加 `--prune-dist-cache` 可只保留最终 dist 二进制 |
-| `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge/example 验证 |
-| `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge/example 验证 |
+| `./scripts/tiffany-check --smoke` | 执行快速本地 fork/install/bridge/example 验证 |
+| `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/install/bridge/example 验证 |
+| `./scripts/tiffany-install-smoke --smoke|--dist` | 在隔离临时 HOME 中验证安装后的命令行为 |
 | `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | 执行汇总后的本地发布前检查 |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
@@ -496,6 +498,7 @@ cargo build --release
 ./scripts/tiffany-build --release --locked
 ./scripts/tiffany-build --fast-release --locked
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
+./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --quick
 ./scripts/tiffany-release-preflight --full --tag v0.1.11   # 打 tag 前
 
