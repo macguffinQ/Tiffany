@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.11] - 2026-06-19
+
+### Fixed
+
+- Avoid initializing Tiffany/Codex TUI helper aliases for `tiffany --help`,
+  `tiffany --version`, and `tiffany orchestrator --help`, keeping help output
+  clean in Homebrew, CI, and temporary-home environments.
+
+### Changed
+
+- Clarified the TUI alignment document so future maintainers treat
+  `tiffany-ui/codex-rs/tiffany-cli` as the published UI entrypoint instead of
+  the full upstream-style `codex-rs/cli`.
+
 ## [0.1.10] - 2026-06-19
 
 ### Changed

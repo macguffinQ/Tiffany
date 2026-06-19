@@ -45,7 +45,7 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 Name: HOMEBREW_TAP_TOKEN
 ```
 
-After that, pushing a tag like `v0.1.10` will:
+After that, pushing a tag like `v0.1.11` will:
 
 1. Build the macOS Apple Silicon release archive used by Homebrew.
 2. Publish the GitHub Release.
@@ -70,7 +70,7 @@ git ls-remote --heads https://github.com/macguffinQ/homebrew-tap.git main
 Manual tap update fallback:
 
 ```bash
-tag=v0.1.10
+tag=v0.1.11
 version="${tag#v}"
 asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
 

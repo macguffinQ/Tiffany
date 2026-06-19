@@ -239,8 +239,8 @@ strip "$(command -v orchestrator)" "$(command -v tiffany)" 2>/dev/null || true
 
 ```bash
 # Example: install a downloaded archive
-tar -xzf tiffany-loop-v0.1.10-aarch64-apple-darwin.tar.gz
-cd tiffany-loop-v0.1.10-aarch64-apple-darwin
+tar -xzf tiffany-loop-v0.1.11-aarch64-apple-darwin.tar.gz
+cd tiffany-loop-v0.1.11-aarch64-apple-darwin
 chmod +x orchestrator tiffany
 ./orchestrator setup
 ./orchestrator doctor
