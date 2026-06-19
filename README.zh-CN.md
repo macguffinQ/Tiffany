@@ -193,7 +193,8 @@ orchestrator run "implement fibonacci in src/fib.rs"
 
 # 7. 查看历史会话
 orchestrator sessions list
-orchestrator sessions show <id>
+orchestrator sessions show <id>          # 默认人类可读
+orchestrator sessions show <id> --raw    # 原始 JSONL
 orchestrator sessions grep "rate limit"
 ```
 
@@ -283,8 +284,8 @@ behavior:
 | `orchestrator tui --detach` | 后台启动终端对话 |
 | `orchestrator acp` | 启动 Agent Client Protocol stdio server |
 | `orchestrator sessions list` | 列出历史会话 |
-| `orchestrator sessions show <id>` | 查看某个会话日志 |
-| `orchestrator sessions grep <pattern>` | 搜索会话日志 |
+| `orchestrator sessions show <id>` | 查看人类可读的会话日志，`--raw` 保留原始 JSONL |
+| `orchestrator sessions grep <pattern>` | 搜索会话日志并显示可读摘要 |
 | `orchestrator sessions import-cc` | 导入 Claude Code 历史会话 |
 | `orchestrator config` | 查看和修改 orchestrator 配置 |
 | `orchestrator status` | 查看两个安装命令、配置根目录、桥接命令、mux 和日志路径 |

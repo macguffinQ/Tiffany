@@ -287,7 +287,8 @@ orchestrator run "fix typo" --planner opus --worker codex
 
 # 9. Browse past sessions
 orchestrator sessions list
-orchestrator sessions show <id>
+orchestrator sessions show <id>          # human-readable by default
+orchestrator sessions show <id> --raw    # original JSONL
 orchestrator sessions grep "rate limit"
 
 # 10. See everything the orchestrator loaded
@@ -379,8 +380,8 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `orchestrator tui --detach` | Run terminal chat in background outside zellij (PID file at `~/.orchestrator/tui.pid`) |
 | `orchestrator acp` | Run an Agent Client Protocol server over stdio |
 | `orchestrator sessions list` | List recent sessions |
-| `orchestrator sessions show <id>` | Show a session's event log |
-| `orchestrator sessions grep <pattern>` | Grep across all session logs |
+| `orchestrator sessions show <id>` | Show a human-readable session event log (`--raw` keeps JSONL) |
+| `orchestrator sessions grep <pattern>` | Search session logs and print readable event summaries |
 | `orchestrator sessions import-cc` | Import your existing CC sessions from `~/.claude/projects/<slug>/sessions/` |
 | `orchestrator config` | Inspect and edit orchestrator configuration |
 | `orchestrator status` | Show the installed command pair, config roots, bridge command, mux, and logs |

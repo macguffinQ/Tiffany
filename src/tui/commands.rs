@@ -10,7 +10,7 @@ use super::util::{
 };
 use crate::config::{Config, RoleConfig};
 use crate::core::session_store::SessionStore;
-use crate::core::types::{Event as StoreEvent, Session};
+use crate::core::types::Session;
 use crate::runtime::{self, AGENT_RUNTIME_ROUTES};
 use crate::usage::{compute_for_window, UsageWindow};
 use std::fs::{self, File, OpenOptions};
@@ -3234,89 +3234,8 @@ fn session_id8(s: &Session) -> String {
     s.id.to_string().chars().take(8).collect()
 }
 
-const LOG_EVENT_PAYLOAD_MAX_CHARS: usize = 4_000;
-const LOG_EVENT_FALLBACK_MAX_CHARS: usize = 1_000;
-
 fn format_event_line(raw: &str) -> String {
-    if let Ok(event) = serde_json::from_str::<StoreEvent>(raw) {
-        if let Some(line) = format_imported_claude_event(&event) {
-            return line;
-        }
-        let payload = if event.payload.is_null() {
-            String::new()
-        } else {
-            format!(
-                " {}",
-                humanize_jsonish(&event.payload.to_string(), LOG_EVENT_FALLBACK_MAX_CHARS)
-            )
-        };
-        format!("{} {}{}", event.ts.format("%H:%M:%S"), event.kind, payload)
-    } else {
-        truncate_chars(raw, LOG_EVENT_FALLBACK_MAX_CHARS)
-    }
-}
-
-fn format_imported_claude_event(event: &StoreEvent) -> Option<String> {
-    if event.payload.get("source").and_then(|v| v.as_str()) != Some("claude-code") {
-        return None;
-    }
-
-    let ts = event.ts.format("%H:%M:%S").to_string();
-    if event.kind == "metadata" {
-        let summary = event
-            .payload
-            .get("summary")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or("imported Claude Code session");
-        let cwd = event
-            .payload
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty());
-        let body = match cwd {
-            Some(cwd) => format!("{summary}\nproject: {cwd}"),
-            None => summary.to_string(),
-        };
-        return Some(format_multiline_log_event(&ts, "claude-code", &body));
-    }
-
-    let content = event
-        .payload
-        .get("content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let body = if content.trim().is_empty() {
-        humanize_jsonish(&event.payload.to_string(), LOG_EVENT_PAYLOAD_MAX_CHARS)
-    } else {
-        humanize_jsonish(content, LOG_EVENT_PAYLOAD_MAX_CHARS)
-    };
-    if body.trim().is_empty() {
-        return Some(format!("{} {}", ts, event.kind));
-    }
-
-    let label = match event.kind.as_str() {
-        "tool_use" => "tool",
-        "tool_result" => "tool result",
-        "result" => "result",
-        other => other,
-    };
-    Some(format_multiline_log_event(&ts, label, &body))
-}
-
-fn format_multiline_log_event(ts: &str, label: &str, body: &str) -> String {
-    let mut lines = body.trim_end().lines();
-    let Some(first) = lines.next() else {
-        return format!("{ts} {label}");
-    };
-
-    let mut out = format!("{ts} {label} {first}");
-    for line in lines {
-        out.push('\n');
-        out.push_str("    ");
-        out.push_str(line);
-    }
-    out
+    crate::session_display::format_session_event_line(raw)
 }
 
 fn format_transcript_for_copy(transcript: &[ChatMsg]) -> String {

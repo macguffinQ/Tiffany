@@ -377,7 +377,15 @@ enum SessionsCmd {
         limit: u32,
     },
     /// Show one session's events
-    Show { id: String },
+    Show {
+        id: String,
+        /// Print raw JSONL instead of human-readable event summaries
+        #[arg(long)]
+        raw: bool,
+        /// Only show the last N event lines
+        #[arg(long)]
+        tail: Option<usize>,
+    },
     /// Grep across all session logs
     Grep { pattern: String },
     /// Import Claude Code sessions into orchestrator session log

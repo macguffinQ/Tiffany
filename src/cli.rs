@@ -7,6 +7,7 @@ use orchestrator::pipeline::orchestrator::Orchestrator;
 use orchestrator::tiffany_events::TiffanyProgressEvent;
 use orchestrator::tiffany_install;
 use orchestrator::{adapters, cc_config, mux, roles, runtime, storage};
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -185,20 +186,29 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                         );
                     }
                 }
-                crate::SessionsCmd::Show { id } => {
+                crate::SessionsCmd::Show { id, raw, tail } => {
                     let uuid = uuid::Uuid::parse_str(&id)
                         .with_context(|| format!("invalid session id: {}", id))?;
                     let sessions = store.get_many(&[uuid])?;
                     if let Some(s) = sessions.into_iter().next() {
                         let path = store.log_path(uuid);
                         if path.exists() {
-                            let content = std::fs::read_to_string(&path)?;
                             println!(
-                                "--- {} ({}, {}) ---\n{}",
-                                s.id,
-                                s.agent,
-                                s.role.as_str(),
-                                content
+                                "{}",
+                                orchestrator::session_display::format_session_log(
+                                    &s,
+                                    &path,
+                                    orchestrator::session_display::SessionLogRenderOptions {
+                                        raw,
+                                        tail,
+                                    },
+                                )?
+                            );
+                        } else {
+                            println!(
+                                "{}\n\nEvents:\n  log file not found: {}",
+                                orchestrator::session_display::format_session_header(&s, &path),
+                                path.display()
                             );
                         }
                     } else {
@@ -207,9 +217,38 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                 }
                 crate::SessionsCmd::Grep { pattern } => {
                     let hits = store.grep(&pattern)?;
-                    println!("{} hit(s) for {:?}", hits.len(), pattern);
+                    let raw_total = hits.len();
+                    let mut seen = HashSet::new();
+                    let mut readable_hits = Vec::new();
                     for (s, e) in hits {
-                        println!("[{}] {} @ {}: {}", s.id, e.kind, e.ts, e.payload);
+                        if orchestrator::session_display::is_low_value_human_event(&e) {
+                            continue;
+                        }
+                        if let Some(key) = orchestrator::session_display::human_event_dedupe_key(&e)
+                        {
+                            let session_scoped_key = format!("{}:{key}", s.id);
+                            if !seen.insert(session_scoped_key) {
+                                continue;
+                            }
+                        }
+                        readable_hits.push(format!(
+                            "[{}] {}",
+                            s.id,
+                            orchestrator::session_display::format_session_event(&e)
+                        ));
+                    }
+                    let readable_total = readable_hits.len();
+                    println!(
+                        "{} raw hit(s), {} readable unique hit(s) for {:?}",
+                        raw_total, readable_total, pattern
+                    );
+                    for line in readable_hits {
+                        println!("{line}");
+                    }
+                    if raw_total > 0 && readable_total == 0 {
+                        println!(
+                            "only low-value hits were hidden; use `sessions show <id> --raw` to inspect a session"
+                        );
                     }
                 }
                 crate::SessionsCmd::ImportCc { project } => {
