@@ -2267,28 +2267,8 @@ fn visible_content(event: &TiffanyProgressEvent) -> Option<String> {
         return None;
     }
 
-    let cleaned = content
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                return Some(String::new());
-            }
-            if trimmed == "thinking" || trimmed.ends_with(" system: system") {
-                return None;
-            }
-            Some(strip_runtime_prefix(line))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string();
-
-    if cleaned.is_empty() {
-        return None;
-    }
-    let humanized = event_format::humanize_jsonish(&cleaned, HUMANIZE_MAX_CHARS);
-    let display = strip_redundant_role_prefix(&event.role, &strip_final_heading(&humanized));
+    let display = event_format::clean_visible_agent_output(content, HUMANIZE_MAX_CHARS)?;
+    let display = strip_redundant_role_prefix(&event.role, &display);
     let display = format_tiffany_summary_style(&event.role, &display);
     if is_low_value_output(&display) {
         return None;
@@ -2318,7 +2298,6 @@ fn is_low_value_output(text: &str) -> bool {
 
 fn final_output_candidate(content: &str) -> Option<String> {
     event_format::final_output_candidate(content, HUMANIZE_MAX_CHARS)
-        .map(|result| strip_final_heading(&result))
         .filter(|result| !result.trim().is_empty())
 }
 
@@ -2330,25 +2309,13 @@ fn final_output_from_event(event: &TiffanyProgressEvent, visible: &str) -> Optio
         return Some(result);
     }
     let raw = event.content.as_deref()?;
-    if worker_output_kind(raw).is_some_and(|kind| kind == "assistant") {
-        let cleaned = strip_final_heading(visible);
+    if event_format::runtime_output_kind(raw).is_some_and(|kind| kind == "assistant") {
+        let cleaned = event_format::strip_known_final_heading(visible);
         if !cleaned.trim().is_empty() {
             return Some(cleaned);
         }
     }
     None
-}
-
-fn worker_output_kind(content: &str) -> Option<&str> {
-    let prefix = content.trim_start().split_once(": ")?.0;
-    let mut parts = prefix.split_whitespace();
-    let runtime = parts.next()?.to_ascii_lowercase();
-    let kind = parts.next()?.trim();
-    if matches!(runtime.as_str(), "claude" | "claude-code" | "codex") {
-        Some(kind)
-    } else {
-        None
-    }
 }
 
 fn remember_better_text(slot: &mut Option<String>, candidate: String) {
@@ -2535,95 +2502,6 @@ fn restyle_summary_first_line(line: &str) -> String {
         }
     }
     line.to_string()
-}
-
-fn strip_runtime_prefix(line: &str) -> String {
-    let trimmed = line.trim_start();
-    for prefix in [
-        "claude-code assistant: ",
-        "claude-code result: ",
-        "claude-code final_answer: ",
-        "claude-code tool_use: ",
-        "claude-code tool_result: ",
-        "claude assistant: ",
-        "claude result: ",
-        "claude final_answer: ",
-        "claude tool_use: ",
-        "claude tool_result: ",
-        "codex assistant: ",
-        "codex result: ",
-        "codex final_answer: ",
-        "codex tool_use: ",
-        "codex tool_result: ",
-    ] {
-        if let Some(rest) = trimmed.strip_prefix(prefix) {
-            return rest.to_string();
-        }
-    }
-
-    if let Some((prefix, rest)) = trimmed.split_once(": ") {
-        let prefix = prefix.to_ascii_lowercase();
-        let mut parts = prefix.split_whitespace();
-        let runtime = parts.next();
-        let kind = parts.next();
-        if matches!(runtime, Some("claude" | "claude-code" | "codex"))
-            && matches!(
-                kind,
-                Some(
-                    "assistant"
-                        | "result"
-                        | "final"
-                        | "final_answer"
-                        | "task_complete"
-                        | "tool"
-                        | "tool_use"
-                        | "tool_result"
-                        | "exec"
-                        | "local_shell_call"
-                        | "function_call"
-                        | "function_call_output"
-                        | "custom_tool_call"
-                        | "custom_tool_call_output"
-                        | "tool_search_call"
-                        | "tool_search_output"
-                        | "web_search_call"
-                        | "image_generation_call"
-                        | "mcp_tool_call"
-                )
-            )
-        {
-            return rest.to_string();
-        }
-    }
-
-    line.to_string()
-}
-
-fn strip_final_heading(content: &str) -> String {
-    let trimmed = content.trim();
-    for heading in [
-        "final result",
-        "final answer",
-        "final_result",
-        "final_answer",
-    ] {
-        if trimmed.eq_ignore_ascii_case(heading) {
-            return String::new();
-        }
-        if trimmed
-            .get(..heading.len())
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(heading))
-        {
-            let rest = &trimmed[heading.len()..];
-            if let Some(rest) = rest.strip_prefix(':') {
-                return rest.trim_start().to_string();
-            }
-            if rest.starts_with('\n') || rest.starts_with("\r\n") {
-                return rest.trim_start().to_string();
-            }
-        }
-    }
-    trimmed.to_string()
 }
 
 fn is_ignorable_stdout_noise(line: &str) -> bool {

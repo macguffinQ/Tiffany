@@ -920,9 +920,9 @@ fn format_imported_claude_event(event: &Event) -> Option<String> {
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let body = if content.trim().is_empty() {
-        agent_events::humanize_jsonish(&event.payload.to_string(), EVENT_SUMMARY_MAX_CHARS)
+        visible_session_event_text(&event.payload.to_string())
     } else {
-        agent_events::humanize_jsonish(content, EVENT_SUMMARY_MAX_CHARS)
+        visible_session_event_text(content)
     };
     if body.trim().is_empty() {
         return Some(format!("{} {}", ts, event.kind));
@@ -970,12 +970,15 @@ pub fn human_event_dedupe_key(event: &Event) -> Option<String> {
 }
 
 fn session_event_summary_for_key(event: &Event) -> String {
-    if event.payload.get("source").and_then(|v| v.as_str()) == Some("claude-code") {
-        if let Some(content) = event.payload.get("content").and_then(|v| v.as_str()) {
-            return agent_events::humanize_jsonish(content, EVENT_SUMMARY_MAX_CHARS);
-        }
+    if let Some(content) = event.payload.get("content").and_then(|v| v.as_str()) {
+        return visible_session_event_text(content);
     }
-    agent_events::summarize_event_payload(&event.payload, EVENT_SUMMARY_MAX_CHARS)
+    visible_session_event_text(&event.payload.to_string())
+}
+
+fn visible_session_event_text(content: &str) -> String {
+    agent_events::clean_visible_agent_output(content, EVENT_SUMMARY_MAX_CHARS)
+        .unwrap_or_else(|| agent_events::humanize_jsonish(content, EVENT_SUMMARY_MAX_CHARS))
 }
 
 fn is_low_value_session_event(kind: &str, summary: &str) -> bool {

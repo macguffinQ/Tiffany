@@ -139,7 +139,7 @@ pub fn final_output_candidate(content: &str, max: usize) -> Option<String> {
     ] {
         if let Some(idx) = lower.find(marker) {
             let raw = &content[idx + marker.len()..];
-            let result = humanize_jsonish(raw, max);
+            let result = strip_known_final_heading(&humanize_jsonish(raw, max));
             if !result.trim().is_empty() {
                 return Some(result);
             }
@@ -154,6 +154,56 @@ pub fn final_output_candidate(content: &str, max: usize) -> Option<String> {
         }
     }
     None
+}
+
+pub fn clean_visible_agent_output(content: &str, max: usize) -> Option<String> {
+    let cleaned = content
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return Some(String::new());
+            }
+            if trimmed == "thinking" || trimmed.ends_with(" system: system") {
+                return None;
+            }
+            Some(strip_runtime_output_prefix(line))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let display = humanize_jsonish(&cleaned, max);
+    let display = normalize_output_summary(&display);
+    let display = strip_known_final_heading(&display);
+    (!is_low_value_output(&display)).then_some(display)
+}
+
+pub fn strip_runtime_output_prefix(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let Some((prefix, rest)) = trimmed.split_once(": ") else {
+        return line.to_string();
+    };
+    if runtime_output_kind_from_prefix(prefix).is_some() {
+        return rest.to_string();
+    }
+    line.to_string()
+}
+
+pub fn runtime_output_kind(content: &str) -> Option<&'static str> {
+    let prefix = content.trim_start().split_once(": ")?.0;
+    runtime_output_kind_from_prefix(prefix)
+}
+
+pub fn strip_known_final_heading(content: &str) -> String {
+    strip_final_heading(content)
+        .unwrap_or_else(|| content.trim())
+        .to_string()
 }
 
 fn strip_final_heading(content: &str) -> Option<&str> {
@@ -197,34 +247,47 @@ pub fn normalize_output_summary(display: &str) -> String {
         return trimmed.to_string();
     };
 
+    match runtime_output_kind_from_prefix(prefix) {
+        Some(_) => body.trim().to_string(),
+        None => trimmed.to_string(),
+    }
+}
+
+fn runtime_output_kind_from_prefix(prefix: &str) -> Option<&'static str> {
     let prefix = prefix.to_ascii_lowercase();
     let mut parts = prefix.split_whitespace();
-    let _agent = parts.next();
-    match parts.next() {
-        Some(
-            "assistant"
-            | "event"
-            | "result"
-            | "final"
-            | "final_answer"
-            | "task_complete"
-            | "turn_complete"
-            | "tool"
-            | "tool_use"
-            | "tool_result"
-            | "exec"
-            | "local_shell_call"
-            | "function_call"
-            | "function_call_output"
-            | "custom_tool_call"
-            | "custom_tool_call_output"
-            | "tool_search_call"
-            | "tool_search_output"
-            | "web_search_call"
-            | "image_generation_call"
-            | "mcp_tool_call",
-        ) => body.trim().to_string(),
-        _ => trimmed.to_string(),
+    let runtime = parts.next()?;
+    let kind = parts.next()?;
+    if !matches!(runtime, "agent" | "claude" | "claude-code" | "codex") {
+        return None;
+    }
+    known_runtime_output_kind(kind)
+}
+
+fn known_runtime_output_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "assistant" => Some("assistant"),
+        "event" => Some("event"),
+        "result" => Some("result"),
+        "final" => Some("final"),
+        "final_answer" => Some("final_answer"),
+        "task_complete" => Some("task_complete"),
+        "turn_complete" => Some("turn_complete"),
+        "tool" => Some("tool"),
+        "tool_use" => Some("tool_use"),
+        "tool_result" => Some("tool_result"),
+        "exec" => Some("exec"),
+        "local_shell_call" => Some("local_shell_call"),
+        "function_call" => Some("function_call"),
+        "function_call_output" => Some("function_call_output"),
+        "custom_tool_call" => Some("custom_tool_call"),
+        "custom_tool_call_output" => Some("custom_tool_call_output"),
+        "tool_search_call" => Some("tool_search_call"),
+        "tool_search_output" => Some("tool_search_output"),
+        "web_search_call" => Some("web_search_call"),
+        "image_generation_call" => Some("image_generation_call"),
+        "mcp_tool_call" => Some("mcp_tool_call"),
+        _ => None,
     }
 }
 
@@ -1372,6 +1435,35 @@ mod tests {
             final_output_candidate("claude-code assistant: Final answer:\n完成并验证。", 500)
                 .as_deref(),
             Some("完成并验证。")
+        );
+    }
+
+    #[test]
+    fn cleans_visible_agent_output_with_shared_runtime_prefix_rules() {
+        assert_eq!(
+            clean_visible_agent_output(
+                "claude-code system: system\nthinking\nclaude-code assistant: Final result\n你好！",
+                500
+            )
+            .as_deref(),
+            Some("你好！")
+        );
+        assert_eq!(
+            clean_visible_agent_output("codex turn_complete: {\"result\":\"完成并验证。\"}", 500)
+                .as_deref(),
+            Some("完成并验证。")
+        );
+        assert_eq!(
+            clean_visible_agent_output(
+                "codex local_shell_call: {\"type\":\"local_shell_call\",\"action\":{\"command\":[\"cargo\",\"test\"]}}",
+                500
+            )
+            .as_deref(),
+            Some("tool shell: cargo test")
+        );
+        assert_eq!(
+            runtime_output_kind("codex turn_complete: done"),
+            Some("turn_complete")
         );
     }
 
