@@ -28,6 +28,8 @@ pub struct TiffanyProgressEvent {
     pub issues: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 impl From<RunProgress> for TiffanyProgressEvent {
@@ -48,6 +50,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: None,
+                duration_ms: None,
             },
             RunProgress::Planned { sub_task_count } => Self {
                 role: "planner",
@@ -64,6 +67,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: Some(sub_task_count),
+                duration_ms: None,
             },
             RunProgress::Critiquing { round } => Self {
                 role: "critic",
@@ -80,6 +84,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: None,
+                duration_ms: None,
             },
             RunProgress::CritiqueResult { approved, issues } => Self {
                 role: "critic",
@@ -100,6 +105,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: Some(approved),
                 issues: Some(issues),
                 count: None,
+                duration_ms: None,
             },
             RunProgress::Replanning { attempt } => Self {
                 role: "planner",
@@ -116,6 +122,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: None,
+                duration_ms: None,
             },
             RunProgress::Executing { sub_task_count } => Self {
                 role: "worker",
@@ -132,6 +139,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: Some(sub_task_count),
+                duration_ms: None,
             },
             RunProgress::WorkerStarted {
                 task_id,
@@ -156,6 +164,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: None,
+                duration_ms: None,
             },
             RunProgress::WorkerOutput {
                 task_id,
@@ -177,6 +186,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: None,
+                duration_ms: None,
             },
             RunProgress::RoleOutput { role, content } => {
                 let role = match role.as_str() {
@@ -201,12 +211,14 @@ impl From<RunProgress> for TiffanyProgressEvent {
                     approved: None,
                     issues: None,
                     count: None,
+                    duration_ms: None,
                 }
             }
             RunProgress::WorkerDone {
                 task_id,
                 agent,
                 role,
+                duration_ms,
                 ok,
             } => Self {
                 role: "worker",
@@ -227,6 +239,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: None,
+                duration_ms: Some(duration_ms),
             },
             RunProgress::Reviewing { task_id } => Self {
                 role: "reviewer",
@@ -243,6 +256,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: None,
+                duration_ms: None,
             },
             RunProgress::ReviewResult {
                 task_id,
@@ -267,6 +281,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: Some(approved),
                 issues: Some(issues),
                 count: None,
+                duration_ms: None,
             },
             RunProgress::Done { task_count } => Self {
                 role: "orchestrator",
@@ -283,6 +298,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: Some(task_count),
+                duration_ms: None,
             },
             RunProgress::Failed(message) => Self {
                 role: "orchestrator",
@@ -299,6 +315,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 approved: None,
                 issues: None,
                 count: None,
+                duration_ms: None,
             },
         }
     }

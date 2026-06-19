@@ -62,6 +62,7 @@ pub enum RunProgress {
         task_id: Uuid,
         agent: String,
         role: String,
+        duration_ms: u64,
         ok: bool,
     },
     Reviewing {
@@ -331,7 +332,7 @@ impl Orchestrator {
         let by_id: HashMap<Uuid, Task> = tasks.iter().map(|t| (t.id, t.clone())).collect();
         let mut completed_ids: HashSet<Uuid> = HashSet::new();
         let mut results: Vec<Task> = Vec::new();
-        let mut joinset: JoinSet<(Uuid, String, String, Result<Session>)> = JoinSet::new();
+        let mut joinset: JoinSet<(Uuid, String, String, u64, Result<Session>)> = JoinSet::new();
 
         loop {
             // Find ready tasks: status==Pending (only — NOT Running) and all
@@ -369,6 +370,7 @@ impl Orchestrator {
                 let task_id = t.id;
                 let agent = adapter.name().to_string();
                 let worker_role = assignment.role.clone();
+                let worker_start = std::time::Instant::now();
                 let _ = tx.send(RunProgress::WorkerStarted {
                     task_id,
                     agent: agent.clone(),
@@ -409,7 +411,13 @@ impl Orchestrator {
                 joinset.spawn(async move {
                     let res = adapter.start(&t, Some(event_tx)).await;
                     let _ = forwarder.await;
-                    (task_id, agent, worker_role, res.map(|h| h.session))
+                    (
+                        task_id,
+                        agent,
+                        worker_role,
+                        duration_ms(worker_start.elapsed()),
+                        res.map(|h| h.session),
+                    )
                 });
             }
 
@@ -428,7 +436,7 @@ impl Orchestrator {
             }
 
             if let Some(joined) = joinset.join_next().await {
-                let (task_id, agent, role, res) = joined?;
+                let (task_id, agent, role, duration_ms, res) = joined?;
                 match res {
                     Ok(mut session) => {
                         let done_agent = if session.agent.trim().is_empty() {
@@ -455,6 +463,7 @@ impl Orchestrator {
                             task_id,
                             agent: done_agent,
                             role,
+                            duration_ms,
                             ok: true,
                         });
                     }
@@ -476,6 +485,7 @@ impl Orchestrator {
                             task_id,
                             agent,
                             role,
+                            duration_ms,
                             ok: false,
                         });
                     }
@@ -486,6 +496,10 @@ impl Orchestrator {
         tracing::info!("executed {} / {} tasks", results.len(), total);
         Ok(results)
     }
+}
+
+fn duration_ms(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn apply_top_task_agent_hint(top_task: &Task, sub_tasks: &mut [Task]) {
@@ -870,6 +884,7 @@ mod tests {
 
         let mut saw_worker_started = false;
         let mut saw_worker_output = false;
+        let mut saw_worker_done_duration = false;
         while let Ok(event) = rx.try_recv() {
             match event {
                 RunProgress::WorkerStarted {
@@ -889,10 +904,22 @@ mod tests {
                         && content.contains("test-worker assistant")
                         && content.contains("worker is making progress");
                 }
+                RunProgress::WorkerDone {
+                    role,
+                    duration_ms,
+                    ok,
+                    ..
+                } => {
+                    saw_worker_done_duration = role == "worker-cc" && ok && duration_ms < 60_000;
+                }
                 _ => {}
             }
         }
         assert!(saw_worker_started, "expected WorkerStarted metadata event");
         assert!(saw_worker_output, "expected forwarded WorkerOutput event");
+        assert!(
+            saw_worker_done_duration,
+            "expected WorkerDone duration metadata"
+        );
     }
 }

@@ -1,6 +1,6 @@
 use super::state::{ChatMsg, InputState};
 use super::util::{
-    copy_to_clipboard, humanize_jsonish, is_low_value_execution_output,
+    copy_to_clipboard, format_duration_ms, humanize_jsonish, is_low_value_execution_output,
     normalize_execution_output_summary, summarize_execution_output, truncate_chars,
 };
 use crate::agent_events;
@@ -597,13 +597,15 @@ fn format_run_event_for_recording(event: &RunProgress) -> Option<String> {
             task_id,
             agent,
             role,
+            duration_ms,
             ok,
         } => Some(format!(
-            "Worker {}: {} ({}, {})",
+            "Worker {}: {} ({}, {}, {})",
             if *ok { "done" } else { "failed" },
             role,
             agent,
-            &task_id.to_string()[..8]
+            &task_id.to_string()[..8],
+            format_duration_ms(*duration_ms)
         )),
         RunProgress::Reviewing { task_id } => {
             Some(format!("Reviewing: {}", &task_id.to_string()[..8]))

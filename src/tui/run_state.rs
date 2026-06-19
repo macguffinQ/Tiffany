@@ -7,7 +7,9 @@ use super::process::{
     refresh_live_trace, start_live_trace,
 };
 use super::state::{ChatMsg, InputState};
-use super::util::{humanize_jsonish, is_low_value_execution_output, truncate_chars};
+use super::util::{
+    format_duration_ms, humanize_jsonish, is_low_value_execution_output, truncate_chars,
+};
 use crate::agent_events;
 use crate::core::session_store::SessionStore;
 use crate::core::types::Task;
@@ -305,6 +307,7 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
             task_id,
             agent,
             role,
+            duration_ms,
             ok,
         } => {
             let id8 = &task_id.to_string()[..8];
@@ -312,9 +315,19 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
                 input.run_worker_failure_count += 1;
             }
             input.current_stage = if ok {
-                format!("Worker done ✓: {} ({})", role, id8)
+                format!(
+                    "Worker done ✓: {} ({}, {})",
+                    role,
+                    id8,
+                    format_duration_ms(duration_ms)
+                )
             } else {
-                format!("Worker failed: {} ({})", role, id8)
+                format!(
+                    "Worker failed: {} ({}, {})",
+                    role,
+                    id8,
+                    format_duration_ms(duration_ms)
+                )
             };
             input.current_stage_detail = agent.clone();
         }
@@ -845,6 +858,7 @@ mod tests {
                 task_id,
                 agent: "test-worker".into(),
                 role: "worker-cc".into(),
+                duration_ms: 25,
                 ok: false,
             },
             &mut input,

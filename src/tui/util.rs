@@ -32,6 +32,23 @@ pub(super) fn normalize_execution_output_summary(display: &str) -> String {
     agent_events::normalize_output_summary(display)
 }
 
+pub(super) fn format_duration_ms(duration_ms: u64) -> String {
+    if duration_ms < 1_000 {
+        return format!("{duration_ms}ms");
+    }
+    let seconds = duration_ms / 1_000;
+    let millis = duration_ms % 1_000;
+    if seconds < 60 {
+        if millis == 0 {
+            return format!("{seconds}s");
+        }
+        return format!("{seconds}.{}s", millis / 100);
+    }
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    format!("{minutes}m{seconds:02}s")
+}
+
 pub(super) fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     let mut cmd = if cfg!(target_os = "macos") {
         Command::new("pbcopy")
@@ -97,5 +114,12 @@ mod tests {
         let display = humanize_jsonish(raw, 200);
 
         assert_eq!(display, "final payload done");
+    }
+
+    #[test]
+    fn formats_worker_durations_for_progress() {
+        assert_eq!(format_duration_ms(25), "25ms");
+        assert_eq!(format_duration_ms(1_250), "1.2s");
+        assert_eq!(format_duration_ms(62_000), "1m02s");
     }
 }

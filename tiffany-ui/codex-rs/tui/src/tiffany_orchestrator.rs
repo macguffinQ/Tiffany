@@ -92,6 +92,7 @@ struct TiffanyProgressEvent {
     approved: Option<bool>,
     issues: Option<usize>,
     count: Option<usize>,
+    duration_ms: Option<u64>,
 }
 
 #[derive(Default)]
@@ -1293,6 +1294,9 @@ fn event_title(event: &TiffanyProgressEvent) -> String {
         if let Some(id) = short_task_id(event.task_id.as_deref()) {
             title = format!("{title} · {id}");
         }
+        if let Some(duration) = event.duration_ms.map(format_duration_ms) {
+            title = format!("{title} · {duration}");
+        }
         return title;
     }
 
@@ -1381,6 +1385,23 @@ fn provider_model_label(event: &TiffanyProgressEvent) -> Option<String> {
             None => model.to_string(),
         },
     )
+}
+
+fn format_duration_ms(duration_ms: u64) -> String {
+    if duration_ms < 1_000 {
+        return format!("{duration_ms}ms");
+    }
+    let seconds = duration_ms / 1_000;
+    let millis = duration_ms % 1_000;
+    if seconds < 60 {
+        if millis == 0 {
+            return format!("{seconds}s");
+        }
+        return format!("{seconds}.{}s", millis / 100);
+    }
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    format!("{minutes}m{seconds:02}s")
 }
 
 fn visible_content(event: &TiffanyProgressEvent) -> Option<String> {
@@ -2043,6 +2064,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
 
         let lines = output_event_lines(&event, "done");
@@ -2069,6 +2091,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
 
         let mut lines = vec![status_line(
@@ -2083,6 +2106,32 @@ mod tests {
         assert!(text.contains("worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"));
         assert!(text.contains("model: minimax/MiniMax-M3"));
         assert!(text.contains("task: 回答用户的问题"));
+    }
+
+    #[test]
+    fn worker_done_title_shows_duration() {
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "done".to_string(),
+            message: "worker-cc done".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: None,
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: Some(1_250),
+        };
+
+        assert_eq!(
+            event_title(&event),
+            "worker-cc done · claude-code · 12345678 · 1.2s"
+        );
     }
 
     #[test]
@@ -2102,6 +2151,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
         assert_eq!(
             visible_content(&event).as_deref(),
@@ -2129,6 +2179,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
 
         let visible = visible_content(&event).expect("visible critic output");
@@ -2155,6 +2206,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
 
         assert_eq!(
@@ -2180,6 +2232,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
         assert_eq!(visible_content(&event).as_deref(), Some("结果\n- done"));
         assert_eq!(
@@ -2205,6 +2258,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
 
         assert_eq!(visible_content(&event).as_deref(), Some("done"));
@@ -2228,6 +2282,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
 
         assert_eq!(
@@ -2269,6 +2324,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
         let result = TiffanyProgressEvent {
             content: Some("claude-code result: useful summary".to_string()),
@@ -2329,6 +2385,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
         let planner_visible = visible_content(&planner).expect("planner details visible");
         assert!(planner_visible.contains("plan ready"));
@@ -2352,6 +2409,7 @@ mod tests {
             approved: None,
             issues: None,
             count: None,
+            duration_ms: None,
         };
         let reviewer_visible = visible_content(&reviewer).expect("review issue visible");
         assert!(reviewer_visible.contains("needs changes"));

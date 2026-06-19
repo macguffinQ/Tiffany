@@ -6,7 +6,10 @@
 // while the terminal loop only inserts those lines into scrollback.
 
 use super::state::InputState;
-use super::util::{normalize_execution_output_summary, summarize_execution_output, truncate_chars};
+use super::util::{
+    format_duration_ms, normalize_execution_output_summary, summarize_execution_output,
+    truncate_chars,
+};
 use crate::agent_events;
 use crate::pipeline::orchestrator::RunProgress;
 
@@ -98,19 +101,30 @@ pub(super) fn progress_line(
             task_id,
             agent: _,
             role,
+            duration_ms,
             ok,
         } => {
             if *ok {
                 Some((
                     "✓",
                     GREEN,
-                    format!("{} · {} done", role, short_task_id(task_id)),
+                    format!(
+                        "{} · {} done · {}",
+                        role,
+                        short_task_id(task_id),
+                        format_duration_ms(*duration_ms)
+                    ),
                 ))
             } else {
                 Some((
                     "✗",
                     RED,
-                    format!("{} · {} failed", role, short_task_id(task_id)),
+                    format!(
+                        "{} · {} failed · {}",
+                        role,
+                        short_task_id(task_id),
+                        format_duration_ms(*duration_ms)
+                    ),
                 ))
             }
         }
