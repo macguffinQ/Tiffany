@@ -102,7 +102,7 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-check --smoke`：debug 构建、检查 fork 格式，验证 legacy bridge、事件流入口，并运行示例 smoke 测试。
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
 - `./scripts/tiffany-check-examples`：只运行仓库内示例项目测试。
-- `./scripts/tiffany-release-preflight --quick|--full`：运行汇总后的发布前检查；打 tag 前使用 `--full`。
+- `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]`：运行汇总后的发布前检查；打 tag 前使用 `--full --tag vX.Y.Z`。
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug`：查看构建缓存大小、定位大文件，在保留已编译依赖和最终二进制的同时清理可重建缓存，或清理更大的 build 输出，避免 `target/` 膨胀。
 
 直接进入 `tiffany-ui/codex-rs` 执行 Cargo 命令时，也会通过 fork 的 Cargo 配置重定向到根目录 `./target`。旧 checkout 如果已经有 `tiffany-ui/codex-rs/target`，那是重复缓存，可以用 `./scripts/tiffany-clean-targets` 删除。
@@ -297,7 +297,7 @@ behavior:
 | `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge/example 验证 |
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge/example 验证 |
 | `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |
-| `./scripts/tiffany-release-preflight --quick|--full` | 执行汇总后的本地发布前检查 |
+| `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | 执行汇总后的本地发布前检查 |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
 | `tiffany orchestrator` | 安装后打开主 tiffany-loop UI |
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
@@ -494,7 +494,7 @@ cargo build --release
 ./scripts/tiffany-build --fast-release --locked
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-release-preflight --quick
-./scripts/tiffany-release-preflight --full   # 打 tag 前
+./scripts/tiffany-release-preflight --full --tag v0.1.11   # 打 tag 前
 
 # 直接在 tiffany-ui/codex-rs 中执行 cargo，也会使用根目录 ./target。
 # 用 ./scripts/tiffany-clean-targets --top 定位体积来源；

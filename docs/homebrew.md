@@ -47,7 +47,7 @@ Name: HOMEBREW_TAP_TOKEN
 
 After that, pushing a tag like `v0.1.11` will:
 
-1. Run `./scripts/tiffany-release-preflight --quick` on the tagged commit.
+1. Run `./scripts/tiffany-release-preflight --quick --tag <tag>` on the tagged commit.
 2. Build the macOS Apple Silicon release archive used by Homebrew.
 3. Publish the GitHub Release.
 4. Update `macguffinQ/homebrew-tap` with a `tiffany-loop` formula that installs both

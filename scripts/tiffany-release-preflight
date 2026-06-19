@@ -5,7 +5,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/tiffany-release-preflight [--quick|--full]
+Usage: ./scripts/tiffany-release-preflight [--quick|--full] [--tag vX.Y.Z]
 
 Runs the release preflight checks from this checkout.
 
@@ -13,27 +13,45 @@ Modes:
   --quick  Format, tests, examples, locked build, and open-source audit.
   --full   Quick checks plus Tiffany dist/fork-specific checks for release tags.
 
+Options:
+  --tag    Verify the tag version matches the root Cargo.toml package version.
+
 Default: --quick
 EOF
 }
 
 mode="quick"
-case "${1:-}" in
-  ""|--quick)
-    mode="quick"
-    ;;
-  --full|--dist|--release)
-    mode="full"
-    ;;
-  -h|--help)
-    usage
-    exit 0
-    ;;
-  *)
-    usage >&2
-    exit 2
-    ;;
-esac
+release_tag=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --quick)
+      mode="quick"
+      ;;
+    --full|--dist|--release)
+      mode="full"
+      ;;
+    --tag)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      release_tag="$2"
+      shift
+      ;;
+    --tag=*)
+      release_tag="${1#--tag=}"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 
 cargo_bin="${CARGO:-cargo}"
 if ! command -v "$cargo_bin" >/dev/null 2>&1; then
@@ -50,6 +68,33 @@ export CARGO_TARGET_DIR="$target_dir"
 step() {
   printf '\n== %s ==\n' "$1"
 }
+
+root_package_version() {
+  awk '
+    /^\[package\]/ { in_package = 1; next }
+    /^\[/ && in_package { exit }
+    in_package && $1 == "version" {
+      gsub(/"/, "", $3)
+      print $3
+      exit
+    }
+  ' "$repo_dir/Cargo.toml"
+}
+
+if [[ -n "$release_tag" ]]; then
+  step "release tag version"
+  package_version="$(root_package_version)"
+  tag_version="${release_tag#v}"
+  if [[ -z "$package_version" ]]; then
+    echo "Could not read root package version from Cargo.toml" >&2
+    exit 1
+  fi
+  if [[ "$tag_version" != "$package_version" ]]; then
+    echo "Tag $release_tag does not match Cargo.toml package version $package_version" >&2
+    exit 1
+  fi
+  echo "tag $release_tag matches package version $package_version"
+fi
 
 step "root format"
 (cd "$repo_dir" && "$cargo_bin" fmt -- --check)

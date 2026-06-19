@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 - Added a `tiffany-clean-targets --trim` mode for pruning rebuildable caches
   while keeping compiled deps and final binaries.
 - Added release workflow preflight gating before publishing tagged builds.
+- Added release tag checks so tag versions must match the root Cargo package version.
 
 ## [0.1.11] - 2026-06-19
 
