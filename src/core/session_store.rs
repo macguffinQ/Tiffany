@@ -1,7 +1,7 @@
 //! Persistent session log: JSONL files + SQLite index.
 
 use crate::core::types::{Event, Role, Session};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use std::path::Path;
@@ -169,6 +169,40 @@ impl SessionStore {
         Ok(rows)
     }
 
+    pub fn resolve_selector(&self, selector: &str) -> Result<Session> {
+        let selector = selector.trim();
+        if selector.is_empty() || selector == "last" || selector == "." {
+            return self
+                .list(1)
+                .context("listing sessions")?
+                .into_iter()
+                .next()
+                .context("No sessions yet.");
+        }
+
+        if let Ok(id) = Uuid::parse_str(selector) {
+            return self
+                .get_many(&[id])
+                .with_context(|| format!("reading session {selector}"))?
+                .into_iter()
+                .next()
+                .with_context(|| format!("Session not found: {selector}"));
+        }
+
+        let matches = self
+            .list(10_000)
+            .context("listing sessions")?
+            .into_iter()
+            .filter(|session| session.id.to_string().starts_with(selector))
+            .collect::<Vec<_>>();
+
+        match matches.len() {
+            0 => bail!("Session not found: {selector}"),
+            1 => Ok(matches.into_iter().next().unwrap()),
+            count => bail!("Ambiguous session prefix: {selector} ({count} matches)"),
+        }
+    }
+
     pub fn grep(&self, pattern: &str) -> Result<Vec<(Session, Event)>> {
         // Scan all JSONL files for the pattern. Simple but effective.
         let mut hits = vec![];
@@ -254,5 +288,53 @@ impl SessionReader for SessionStore {
     }
     async fn list(&self, limit: u32) -> Result<Vec<Session>> {
         SessionStore::list(self, limit)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    fn test_store() -> (tempfile::TempDir, SessionStore) {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        (tmp, store)
+    }
+
+    #[test]
+    fn resolve_selector_accepts_last_dot_full_id_and_prefix() {
+        let (_tmp, store) = test_store();
+        let mut older = Session::new(Uuid::new_v4(), "older", Role::Worker);
+        older.id = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        older.started_at = Utc::now() - Duration::seconds(10);
+        let mut newer = Session::new(Uuid::new_v4(), "newer", Role::Worker);
+        newer.id = Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        newer.started_at = Utc::now();
+        store.finalize(&older).unwrap();
+        store.finalize(&newer).unwrap();
+
+        assert_eq!(store.resolve_selector("last").unwrap().id, newer.id);
+        assert_eq!(store.resolve_selector(".").unwrap().id, newer.id);
+        assert_eq!(
+            store.resolve_selector(&newer.id.to_string()).unwrap().id,
+            newer.id
+        );
+        assert_eq!(store.resolve_selector("22222222").unwrap().id, newer.id);
+    }
+
+    #[test]
+    fn resolve_selector_reports_ambiguous_prefixes() {
+        let (_tmp, store) = test_store();
+        let mut first = Session::new(Uuid::new_v4(), "first", Role::Worker);
+        first.id = Uuid::parse_str("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1").unwrap();
+        let mut second = Session::new(Uuid::new_v4(), "second", Role::Worker);
+        second.id = Uuid::parse_str("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2").unwrap();
+        store.finalize(&first).unwrap();
+        store.finalize(&second).unwrap();
+
+        let err = store.resolve_selector("aaaaaaaa").unwrap_err().to_string();
+        assert!(err.contains("Ambiguous session prefix"));
     }
 }

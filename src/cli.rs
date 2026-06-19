@@ -189,55 +189,49 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                     tree,
                     flow,
                 } => {
-                    let uuid = uuid::Uuid::parse_str(&id)
-                        .with_context(|| format!("invalid session id: {}", id))?;
-                    let sessions = store.get_many(&[uuid])?;
-                    if let Some(s) = sessions.into_iter().next() {
-                        let path = store.log_path(uuid);
-                        if flow {
-                            let all_sessions = store.list(10_000)?;
-                            println!(
-                                "{}",
-                                orchestrator::session_display::format_session_flow(
-                                    &s,
-                                    &all_sessions,
-                                    store.log_dir(),
-                                    orchestrator::session_display::SessionFlowRenderOptions {
-                                        tail_per_session: tail,
-                                    },
-                                )
-                            );
-                        } else if tree {
-                            let all_sessions = store.list(10_000)?;
-                            println!(
-                                "{}",
-                                orchestrator::session_display::format_session_tree(
-                                    &s,
-                                    &all_sessions,
-                                    store.log_dir(),
-                                )
-                            );
-                        } else if path.exists() {
-                            println!(
-                                "{}",
-                                orchestrator::session_display::format_session_log(
-                                    &s,
-                                    &path,
-                                    orchestrator::session_display::SessionLogRenderOptions {
-                                        raw,
-                                        tail,
-                                    },
-                                )?
-                            );
-                        } else {
-                            println!(
-                                "{}\n\nEvents:\n  log file not found: {}",
-                                orchestrator::session_display::format_session_header(&s, &path),
-                                path.display()
-                            );
-                        }
+                    let s = store.resolve_selector(&id)?;
+                    let path = store.log_path(s.id);
+                    if flow {
+                        let all_sessions = store.list(10_000)?;
+                        println!(
+                            "{}",
+                            orchestrator::session_display::format_session_flow(
+                                &s,
+                                &all_sessions,
+                                store.log_dir(),
+                                orchestrator::session_display::SessionFlowRenderOptions {
+                                    tail_per_session: tail,
+                                },
+                            )
+                        );
+                    } else if tree {
+                        let all_sessions = store.list(10_000)?;
+                        println!(
+                            "{}",
+                            orchestrator::session_display::format_session_tree(
+                                &s,
+                                &all_sessions,
+                                store.log_dir(),
+                            )
+                        );
+                    } else if path.exists() {
+                        println!(
+                            "{}",
+                            orchestrator::session_display::format_session_log(
+                                &s,
+                                &path,
+                                orchestrator::session_display::SessionLogRenderOptions {
+                                    raw,
+                                    tail
+                                },
+                            )?
+                        );
                     } else {
-                        println!("session not found");
+                        println!(
+                            "{}\n\nEvents:\n  log file not found: {}",
+                            orchestrator::session_display::format_session_header(&s, &path),
+                            path.display()
+                        );
                     }
                 }
                 crate::SessionsCmd::Grep { pattern } => {

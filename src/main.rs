@@ -378,6 +378,7 @@ enum SessionsCmd {
     },
     /// Show one session's events
     Show {
+        /// Session UUID, short prefix, last, or .
         id: String,
         /// Print raw JSONL instead of human-readable event summaries
         #[arg(long)]

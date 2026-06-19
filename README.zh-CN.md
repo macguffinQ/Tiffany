@@ -193,10 +193,10 @@ orchestrator run "implement fibonacci in src/fib.rs"
 
 # 7. 查看历史会话
 orchestrator sessions list
-orchestrator sessions show <id>          # 默认人类可读
-orchestrator sessions show <id> --raw    # 原始 JSONL
-orchestrator sessions show <id> --tree   # 父子 run 树
-orchestrator sessions show <id> --flow   # 总控/worker 可读瀑布流
+orchestrator sessions show <id|prefix|last>          # 默认人类可读
+orchestrator sessions show <id|prefix|last> --raw    # 原始 JSONL
+orchestrator sessions show <id|prefix|last> --tree   # 父子 run 树
+orchestrator sessions show <id|prefix|last> --flow   # 总控/worker 可读瀑布流
 orchestrator sessions grep "rate limit"
 ```
 
@@ -286,7 +286,7 @@ behavior:
 | `orchestrator tui --detach` | 后台启动终端对话 |
 | `orchestrator acp` | 启动 Agent Client Protocol stdio server |
 | `orchestrator sessions list` | 列出历史会话，显示角色、父子关系提示和 tree/log 快捷入口 |
-| `orchestrator sessions show <id>` | 查看人类可读的总控或 worker 会话日志，`--raw` 保留原始 JSONL，`--tree` 显示父子关系，`--flow` 显示可读瀑布流 |
+| `orchestrator sessions show <id|prefix|last>` | 查看人类可读的总控或 worker 会话日志，`--raw` 保留原始 JSONL，`--tree` 显示父子关系，`--flow` 显示可读瀑布流 |
 | `orchestrator sessions grep <pattern>` | 搜索会话日志并显示可读摘要 |
 | `orchestrator sessions import-cc` | 导入 Claude Code 历史会话 |
 | `orchestrator config` | 查看和修改 orchestrator 配置 |

@@ -3276,41 +3276,9 @@ fn resolve_session(
     store: &SessionStore,
     selector: Option<&str>,
 ) -> std::result::Result<Session, String> {
-    let selector = selector.unwrap_or("last");
-    if selector == "last" || selector == "." {
-        return store
-            .list(1)
-            .map_err(|e| format!("Could not list sessions: {:#}", e))?
-            .into_iter()
-            .next()
-            .ok_or_else(|| "No sessions yet.".to_string());
-    }
-
-    if let Ok(id) = uuid::Uuid::parse_str(selector) {
-        return store
-            .get_many(&[id])
-            .map_err(|e| format!("Could not read session {}: {:#}", selector, e))?
-            .into_iter()
-            .next()
-            .ok_or_else(|| format!("Session not found: {}", selector));
-    }
-
-    let matches: Vec<Session> = store
-        .list(500)
-        .map_err(|e| format!("Could not list sessions: {:#}", e))?
-        .into_iter()
-        .filter(|s| s.id.to_string().starts_with(selector))
-        .collect();
-
-    match matches.len() {
-        0 => Err(format!("Session not found: {}", selector)),
-        1 => Ok(matches.into_iter().next().unwrap()),
-        _ => Err(format!(
-            "Ambiguous session prefix: {} ({} matches)",
-            selector,
-            matches.len()
-        )),
-    }
+    store
+        .resolve_selector(selector.unwrap_or("last"))
+        .map_err(|err| format!("{err:#}"))
 }
 
 fn format_session_state(s: &Session) -> &'static str {
