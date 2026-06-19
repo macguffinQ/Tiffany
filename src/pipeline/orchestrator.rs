@@ -5,7 +5,7 @@
 
 use crate::agent_events;
 use crate::core::session_store::SessionStore;
-use crate::core::types::{Event, Session, Task, TaskStatus};
+use crate::core::types::{Event, Role, Session, Task, TaskStatus};
 use crate::core::worker::WorkerAdapter;
 use crate::roles::critic::Critic;
 use crate::roles::planner::Planner;
@@ -14,7 +14,7 @@ use crate::roles::router::CapabilityRouter;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -129,17 +129,65 @@ impl Orchestrator {
         top_task: Task,
         tx: UnboundedSender<RunProgress>,
     ) -> Result<Vec<Task>> {
+        let mut orchestration_session =
+            Session::new(top_task.id, "orchestrator", Role::Orchestrator);
+        orchestration_session.model = "pipeline".to_string();
+        orchestration_session.parent_session_ids = top_task.parent_session_ids.clone();
+        self.session_store
+            .finalize(&orchestration_session)
+            .context("starting orchestration session")?;
+        self.session_store
+            .append(&Event {
+                session_id: orchestration_session.id,
+                task_id: top_task.id,
+                ts: chrono::Utc::now(),
+                kind: "user".into(),
+                payload: serde_json::json!({
+                    "message": top_task.prompt.clone(),
+                    "tags": top_task.tags.clone(),
+                    "agent_hint": top_task.agent_hint.clone(),
+                    "model_hint": top_task.model_hint.clone(),
+                    "model_provider_hint": top_task.model_provider_hint.clone(),
+                }),
+            })
+            .context("recording orchestration request")?;
+        let (record_tx, record_rx) = tokio::sync::mpsc::unbounded_channel();
+        let recorder = spawn_progress_recorder(
+            self.session_store.clone(),
+            orchestration_session.id,
+            top_task.id,
+            record_rx,
+            tx,
+        );
+
         // Wrap body in async block so we can log any error before returning.
         // This is the safety net — without it, an `Err` from critique / replan
         // / reviewer silently exits and terminal chat is left spinning forever.
-        let result: Result<Vec<Task>> = async { self.run_inner(&top_task, tx.clone()).await }.await;
+        let result: Result<Vec<Task>> = async {
+            self.run_inner(&top_task, record_tx.clone(), Some(orchestration_session.id))
+                .await
+        }
+        .await;
         if let Err(ref e) = result {
             tracing::error!(
                 "Pipeline exiting with error (was at some stage, terminal chat may be stuck): {:#}",
                 e
             );
-            let _ = tx.send(RunProgress::Failed(format!("{:#}", e)));
+            let _ = record_tx.send(RunProgress::Failed(format!("{:#}", e)));
         }
+        drop(record_tx);
+        if let Err(err) = recorder.await {
+            tracing::warn!("orchestration progress recorder task failed: {err}");
+        }
+        orchestration_session.ended_at = Some(chrono::Utc::now());
+        self.session_store
+            .finalize(&orchestration_session)
+            .with_context(|| {
+                format!(
+                    "finalizing orchestration session {}",
+                    orchestration_session.id
+                )
+            })?;
         result
     }
 
@@ -149,6 +197,7 @@ impl Orchestrator {
         &self,
         top_task: &Task,
         tx: UnboundedSender<RunProgress>,
+        orchestration_session_id: Option<Uuid>,
     ) -> Result<Vec<Task>> {
         // 1. Plan
         let _ = tx.send(RunProgress::Planning);
@@ -160,6 +209,7 @@ impl Orchestrator {
             .await
             .context("planning task")?;
         apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
+        attach_parent_session(orchestration_session_id, &mut plan.sub_tasks);
         tracing::info!(
             "→ Planning done: {} sub-tasks in {:?}",
             plan.sub_tasks.len(),
@@ -228,6 +278,7 @@ impl Orchestrator {
                     }
                 };
                 apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
+                attach_parent_session(orchestration_session_id, &mut plan.sub_tasks);
                 tracing::info!(
                     "→ Replanning done (attempt {}): {} sub-tasks in {:?}",
                     i + 1,
@@ -444,6 +495,13 @@ impl Orchestrator {
                         } else {
                             session.agent.clone()
                         };
+                        if let Some(task) = by_id.get(&task_id) {
+                            for parent_id in &task.parent_session_ids {
+                                if !session.parent_session_ids.contains(parent_id) {
+                                    session.parent_session_ids.push(*parent_id);
+                                }
+                            }
+                        }
                         session.ended_at = Some(chrono::Utc::now());
                         self.session_store
                             .finalize(&session)
@@ -502,6 +560,216 @@ fn duration_ms(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+fn spawn_progress_recorder(
+    store: Arc<SessionStore>,
+    session_id: Uuid,
+    top_task_id: Uuid,
+    mut rx: UnboundedReceiver<RunProgress>,
+    tx: UnboundedSender<RunProgress>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let stored_event = run_progress_to_event(session_id, top_task_id, &event);
+            if let Err(err) = store.append(&stored_event) {
+                tracing::warn!(
+                    "failed to record orchestration event {} for session {}: {err:#}",
+                    stored_event.kind,
+                    session_id
+                );
+            }
+            let _ = tx.send(event);
+        }
+    })
+}
+
+fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgress) -> Event {
+    let (kind, task_id, payload) = match event {
+        RunProgress::Planning => (
+            "planner",
+            top_task_id,
+            serde_json::json!({
+                "status": "running",
+                "message": "planning",
+            }),
+        ),
+        RunProgress::Planned { sub_task_count } => (
+            "planner",
+            top_task_id,
+            serde_json::json!({
+                "status": "done",
+                "message": format!("plan ready - {sub_task_count} sub-task(s)"),
+                "count": sub_task_count,
+            }),
+        ),
+        RunProgress::Critiquing { round } => (
+            "critic",
+            top_task_id,
+            serde_json::json!({
+                "status": "running",
+                "message": format!("checking plan - round {round}"),
+                "round": round,
+            }),
+        ),
+        RunProgress::CritiqueResult { approved, issues } => (
+            "critic",
+            top_task_id,
+            serde_json::json!({
+                "status": if *approved { "done" } else { "warning" },
+                "message": if *approved {
+                    "plan approved".to_string()
+                } else {
+                    format!("plan needs fixes - {issues} issue(s)")
+                },
+                "approved": approved,
+                "issues": issues,
+            }),
+        ),
+        RunProgress::Replanning { attempt } => (
+            "planner",
+            top_task_id,
+            serde_json::json!({
+                "status": "running",
+                "message": format!("replanning - attempt {attempt}"),
+                "attempt": attempt,
+            }),
+        ),
+        RunProgress::Executing { sub_task_count } => (
+            "worker",
+            top_task_id,
+            serde_json::json!({
+                "status": "running",
+                "message": format!("running {sub_task_count} sub-task(s)"),
+                "count": sub_task_count,
+            }),
+        ),
+        RunProgress::WorkerStarted {
+            task_id,
+            agent,
+            role,
+            runtime,
+            model,
+            provider,
+            prompt,
+        } => (
+            "worker",
+            *task_id,
+            serde_json::json!({
+                "status": "running",
+                "message": format!("{role} started"),
+                "task_id": task_id,
+                "agent": agent,
+                "worker_role": role,
+                "runtime": runtime,
+                "model": model,
+                "provider": provider,
+                "task_prompt": prompt,
+            }),
+        ),
+        RunProgress::WorkerOutput {
+            task_id,
+            agent,
+            role,
+            content,
+        } => (
+            "worker",
+            *task_id,
+            serde_json::json!({
+                "status": "output",
+                "message": format!("{role} output"),
+                "task_id": task_id,
+                "agent": agent,
+                "worker_role": role,
+                "content": content,
+            }),
+        ),
+        RunProgress::RoleOutput { role, content } => (
+            role.as_str(),
+            top_task_id,
+            serde_json::json!({
+                "status": "output",
+                "message": format!("{role} output"),
+                "content": content,
+            }),
+        ),
+        RunProgress::WorkerDone {
+            task_id,
+            agent,
+            role,
+            duration_ms,
+            ok,
+        } => (
+            "worker",
+            *task_id,
+            serde_json::json!({
+                "status": if *ok { "done" } else { "failed" },
+                "message": if *ok {
+                    format!("{role} done")
+                } else {
+                    format!("{role} failed")
+                },
+                "task_id": task_id,
+                "agent": agent,
+                "worker_role": role,
+                "duration_ms": duration_ms,
+                "ok": ok,
+            }),
+        ),
+        RunProgress::Reviewing { task_id } => (
+            "reviewer",
+            *task_id,
+            serde_json::json!({
+                "status": "running",
+                "message": "reviewing",
+                "task_id": task_id,
+            }),
+        ),
+        RunProgress::ReviewResult {
+            task_id,
+            approved,
+            issues,
+        } => (
+            "reviewer",
+            *task_id,
+            serde_json::json!({
+                "status": if *approved { "done" } else { "warning" },
+                "message": if *approved {
+                    "review approved".to_string()
+                } else {
+                    format!("review needs fixes - {issues} issue(s)")
+                },
+                "task_id": task_id,
+                "approved": approved,
+                "issues": issues,
+            }),
+        ),
+        RunProgress::Done { task_count } => (
+            "orchestrator",
+            top_task_id,
+            serde_json::json!({
+                "status": "done",
+                "message": format!("done - {task_count} sub-task(s)"),
+                "count": task_count,
+            }),
+        ),
+        RunProgress::Failed(message) => (
+            "orchestrator",
+            top_task_id,
+            serde_json::json!({
+                "status": "failed",
+                "message": message,
+            }),
+        ),
+    };
+
+    Event {
+        session_id,
+        task_id,
+        ts: chrono::Utc::now(),
+        kind: kind.to_string(),
+        payload,
+    }
+}
+
 fn apply_top_task_agent_hint(top_task: &Task, sub_tasks: &mut [Task]) {
     for task in sub_tasks {
         if task.agent_hint.is_none() {
@@ -513,6 +781,17 @@ fn apply_top_task_agent_hint(top_task: &Task, sub_tasks: &mut [Task]) {
             if let Some(worktree) = &top_task.worktree {
                 task.worktree = Some(worktree.clone());
             }
+        }
+    }
+}
+
+fn attach_parent_session(parent_session_id: Option<Uuid>, sub_tasks: &mut [Task]) {
+    let Some(parent_session_id) = parent_session_id else {
+        return;
+    };
+    for task in sub_tasks {
+        if !task.parent_session_ids.contains(&parent_session_id) {
+            task.parent_session_ids.push(parent_session_id);
         }
     }
 }
@@ -561,6 +840,26 @@ mod tests {
             sub_tasks[1].worktree.as_deref(),
             Some(std::path::Path::new("/tmp/other"))
         );
+    }
+
+    #[test]
+    fn orchestration_parent_is_attached_to_subtasks_once() {
+        let parent_id = Uuid::new_v4();
+        let mut task = Task::new("sub");
+        task.parent_session_ids.push(parent_id);
+        let mut sub_tasks = vec![task, Task::new("other")];
+
+        attach_parent_session(Some(parent_id), &mut sub_tasks);
+
+        assert_eq!(
+            sub_tasks[0]
+                .parent_session_ids
+                .iter()
+                .filter(|id| **id == parent_id)
+                .count(),
+            1
+        );
+        assert_eq!(sub_tasks[1].parent_session_ids, vec![parent_id]);
     }
 
     struct StaticPlanner;
@@ -804,6 +1103,68 @@ mod tests {
             }
         }
         assert!(saw_replan_warning, "expected visible replan fallback event");
+    }
+
+    #[tokio::test]
+    async fn run_with_progress_persists_orchestration_session_and_links_worker() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(StaticPlanner),
+            Arc::new(ApprovingCritic),
+            Arc::new(ApprovingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store.clone(),
+            1,
+            true,
+            false,
+        );
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let completed = orch
+            .run_with_progress(Task::new("persist the full run"), tx)
+            .await
+            .expect("run should complete");
+
+        assert_eq!(completed.len(), 1);
+        let sessions = store.list(10).unwrap();
+        let orchestration = sessions
+            .iter()
+            .find(|session| session.agent == "orchestrator")
+            .expect("orchestration session should be finalized");
+        assert_eq!(orchestration.role, Role::Orchestrator);
+        assert!(orchestration.ended_at.is_some());
+        let worker = sessions
+            .iter()
+            .find(|session| session.agent == "test-worker")
+            .expect("worker session should be finalized");
+        assert!(
+            worker.parent_session_ids.contains(&orchestration.id),
+            "worker session should link back to orchestration session"
+        );
+
+        let log = std::fs::read_to_string(store.log_path(orchestration.id)).unwrap();
+        assert!(log.contains("persist the full run"));
+        assert!(log.contains("\"type\":\"planner\""));
+        assert!(log.contains("\"type\":\"critic\""));
+        assert!(log.contains("\"type\":\"worker\""));
+        assert!(log.contains("\"type\":\"orchestrator\""));
     }
 
     #[tokio::test]

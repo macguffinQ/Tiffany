@@ -8,6 +8,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
+    Orchestrator,
     Planner,
     Critic,
     Router,
@@ -19,6 +20,7 @@ pub enum Role {
 impl Role {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Role::Orchestrator => "orchestrator",
             Role::Planner => "planner",
             Role::Critic => "critic",
             Role::Router => "router",

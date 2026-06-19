@@ -90,11 +90,22 @@ pub fn format_session_header(session: &Session, log_path: &Path) -> String {
     } else {
         truncate_chars(&session.files_touched.join(", "), 240)
     };
+    let parents = if session.parent_session_ids.is_empty() {
+        "none".to_string()
+    } else {
+        session
+            .parent_session_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
 
     format!(
-        "Session {}\n  task: {}\n  state: {}\n  agent: {}\n  role: {}\n  model: {}\n  started: {}\n  ended: {}\n  tokens: in={} out={} total={}\n  cost: ${:.4}\n  files: {}\n  log: {}",
+        "Session {}\n  task: {}\n  parents: {}\n  state: {}\n  agent: {}\n  role: {}\n  model: {}\n  started: {}\n  ended: {}\n  tokens: in={} out={} total={}\n  cost: ${:.4}\n  files: {}\n  log: {}",
         session.id,
         session.task_id,
+        parents,
         state,
         session.agent,
         session.role.as_str(),

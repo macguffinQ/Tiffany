@@ -284,7 +284,7 @@ behavior:
 | `orchestrator tui --detach` | 后台启动终端对话 |
 | `orchestrator acp` | 启动 Agent Client Protocol stdio server |
 | `orchestrator sessions list` | 列出历史会话 |
-| `orchestrator sessions show <id>` | 查看人类可读的会话日志，`--raw` 保留原始 JSONL |
+| `orchestrator sessions show <id>` | 查看人类可读的总控或 worker 会话日志，`--raw` 保留原始 JSONL |
 | `orchestrator sessions grep <pattern>` | 搜索会话日志并显示可读摘要 |
 | `orchestrator sessions import-cc` | 导入 Claude Code 历史会话 |
 | `orchestrator config` | 查看和修改 orchestrator 配置 |

@@ -211,6 +211,7 @@ impl SessionStore {
         let parent_ids: Vec<Uuid> = serde_json::from_str(&parent_str).unwrap_or_default();
         let files_touched: Vec<String> = serde_json::from_str(&files_str).unwrap_or_default();
         let role = match role.as_str() {
+            "orchestrator" => Role::Orchestrator,
             "planner" => Role::Planner,
             "critic" => Role::Critic,
             "router" => Role::Router,

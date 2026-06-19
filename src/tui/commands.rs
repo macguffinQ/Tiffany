@@ -3084,10 +3084,20 @@ fn format_session_detail(store: &SessionStore, selector: Option<&str>) -> String
             } else {
                 truncate_chars(&s.files_touched.join(", "), 240)
             };
+            let parents = if s.parent_session_ids.is_empty() {
+                "none".to_string()
+            } else {
+                s.parent_session_ids
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             format!(
-                "Session {}\n  task: {}\n  state: {}\n  agent: {}\n  role: {}\n  model: {}\n  started: {}\n  ended: {}\n  tokens: in={} out={} total={}\n  cost: ${:.4}\n  files: {}\n  log: {}",
+                "Session {}\n  task: {}\n  parents: {}\n  state: {}\n  agent: {}\n  role: {}\n  model: {}\n  started: {}\n  ended: {}\n  tokens: in={} out={} total={}\n  cost: ${:.4}\n  files: {}\n  log: {}",
                 s.id,
                 s.task_id,
+                parents,
                 format_session_state(&s),
                 s.agent,
                 s.role.as_str(),
