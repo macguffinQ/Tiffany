@@ -858,8 +858,10 @@ pub(super) fn export_process_capture(input: &InputState, target: &str) -> String
             }
         }
         "file" | "disk" | "log" => {
-            if process_filter(input).is_none() && input.process_capture_path.is_some() {
-                let path = input.process_capture_path.as_ref().unwrap();
+            if let (true, Some(path)) = (
+                process_filter(input).is_none(),
+                input.process_capture_path.as_ref(),
+            ) {
                 format!(
                     "Process capture is already saved to:\n  {}\n\nUse `/process clipboard` to copy it.",
                     path.display()
@@ -919,6 +921,8 @@ pub(super) fn process_filter_summary(input: &InputState) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::*;
 
     #[test]

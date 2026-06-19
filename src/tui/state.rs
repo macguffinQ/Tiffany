@@ -6,17 +6,12 @@ use std::time::Instant;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum ContextMode {
     Off,
+    #[default]
     Compact,
     Full,
-}
-
-impl Default for ContextMode {
-    fn default() -> Self {
-        Self::Compact
-    }
 }
 
 impl ContextMode {

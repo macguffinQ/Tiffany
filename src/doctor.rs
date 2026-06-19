@@ -718,9 +718,9 @@ fn check_rust_tool(
     }
 
     builder.warn(format!("{binary}: not found ({description})"));
-    builder.hint(format!(
-        "install Rust with rustup, or export PATH=\"$HOME/.cargo/bin:$PATH\" before running tiffany-loop"
-    ));
+    builder.hint(
+        "install Rust with rustup, or export PATH=\"$HOME/.cargo/bin:$PATH\" before running tiffany-loop",
+    );
     if let Some(last_failure) = failures
         .iter()
         .find(|failure| !failure.contains("No such file") && !failure.contains("not found"))
@@ -817,7 +817,7 @@ fn check_homebrew(builder: &mut DoctorReportBuilder) {
         Ok(summary) if summary.success && !summary.stdout.trim().is_empty() => {
             let installed = summary.stdout.trim();
             match parse_homebrew_tiffany_version(installed) {
-                Some(version) if version == env!("CARGO_PKG_VERSION") => {
+                Some(env!("CARGO_PKG_VERSION")) => {
                     builder.ok(format!("homebrew package: {installed}"));
                 }
                 Some(version) => {

@@ -83,7 +83,7 @@ pub fn agent_label(agent_hint: Option<&str>) -> String {
         .iter()
         .find(|route| {
             route.role_hint == agent_hint
-                || agent_hint.is_some_and(|hint| route.aliases.iter().any(|alias| *alias == hint))
+                || agent_hint.is_some_and(|hint| route.aliases.contains(&hint))
         })
         .map(|route| route.label.to_string())
         .unwrap_or_else(|| agent_hint.unwrap_or("auto").to_string())

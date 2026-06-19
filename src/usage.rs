@@ -108,7 +108,7 @@ pub fn compute_for_window(store: &SessionStore, window: UsageWindow) -> Result<U
                 .single()
                 .unwrap_or(now)
         }
-        UsageWindow::LastDays(n) => now - Duration::days(n as i64),
+        UsageWindow::LastDays(n) => now - Duration::days(n),
     };
     let filtered: Vec<Session> = all.into_iter().filter(|s| s.started_at >= cutoff).collect();
     Ok(Usage::from_sessions(&filtered))

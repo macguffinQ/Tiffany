@@ -1302,7 +1302,8 @@ fn handle_trace_command(input: &mut InputState, args: &[&str]) -> String {
         Some("off" | "disable" | "disabled") => {
             complete_live_trace(input);
             input.trace_live_enabled = false;
-            format!("Live trace disabled. Captured process is still available with /process [n].")
+            "Live trace disabled. Captured process is still available with /process [n]."
+                .to_string()
         }
         Some("full" | "expand" | "expanded") => {
             input.trace_live_enabled = true;
@@ -1538,8 +1539,8 @@ fn handle_roles_command(
             input.agent_hint = None;
             "Role hint cleared. Future tasks will use automatic routing.".into()
         }
-        "snippet" => format_role_config_snippet(config, &args),
-        "save" | "add" | "set" => save_role_config(config, runtime, &args),
+        "snippet" => format_role_config_snippet(config, args),
+        "save" | "add" | "set" => save_role_config(config, runtime, args),
         other => format!("Unknown roles option: {}\nUsage: /roles [show|route|use <role>|snippet <role> <model> <runtime>|save <role> <model> <runtime>|clear]", other),
     }
 }
@@ -2608,12 +2609,10 @@ fn format_graph_command(input: &InputState, args: &[&str]) -> String {
         "mermaid" | "diagram" => conversation_mermaid_graph(input, 24),
         "save" | "file" => save_conversation_mermaid_graph(input),
         "clipboard" | "copy" => copy_conversation_mermaid_graph(input),
-        other => {
-            return format!(
-                "Unknown graph option: {}\nUsage: /graph [compact|full|mermaid|save|clipboard]",
-                other
-            );
-        }
+        other => format!(
+            "Unknown graph option: {}\nUsage: /graph [compact|full|mermaid|save|clipboard]",
+            other
+        ),
     }
 }
 
@@ -2696,7 +2695,7 @@ fn conversation_mermaid_body(input: &InputState, limit: usize) -> String {
         out.push_str(&format!(
             "  queue[\"queue: {} pending ({})\"]:::queue\n",
             input.queued_prompts.len(),
-            escape_mermaid_label(&queue_state_label(input))
+            escape_mermaid_label(queue_state_label(input))
         ));
         if let Some(prev) = previous {
             out.push_str(&format!("  {} --> queue\n", prev));
@@ -3094,12 +3093,10 @@ fn build_imported_cc_chat_messages(
     session: &crate::cc_session_import::CCSession,
 ) -> (Vec<ChatMsg>, bool) {
     let mut messages = Vec::new();
-    let mut scanned = 0usize;
-    for event in &session.events {
+    for (scanned, event) in session.events.iter().enumerate() {
         if scanned >= IMPORT_CHAT_EVENT_LIMIT {
             return (messages, true);
         }
-        scanned += 1;
         if let Some(msg) = imported_cc_event_to_chat_msg(event) {
             messages.push(msg);
         }
@@ -3383,6 +3380,8 @@ fn copy_last_result(input: &InputState) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::*;
     use crate::core::types::{Event, Role, Session};
     use crate::tui::state::ContextMode;

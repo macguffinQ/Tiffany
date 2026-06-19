@@ -33,9 +33,7 @@ pub(super) fn assistant_content_history_lines(content: &str) -> Vec<String> {
             }
         } else if line.starts_with("Details:") || line.starts_with("Actions:") {
             lines.push(format!("  {DIM}{line}{RESET}"));
-        } else if line.starts_with("✓ done") {
-            lines.push(format!("  {GREEN}{BOLD}{line}{RESET}"));
-        } else if is_panel_heading(line) {
+        } else if line.starts_with("✓ done") || is_panel_heading(line) {
             lines.push(format!("  {GREEN}{BOLD}{line}{RESET}"));
         } else if line.trim_start().starts_with("✓ ") {
             lines.push(format!("  {GREEN}{line}{RESET}"));

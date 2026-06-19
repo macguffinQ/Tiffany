@@ -32,6 +32,7 @@ pub struct ClaudeCodeAdapter {
 }
 
 impl ClaudeCodeAdapter {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         binary: String,
         model: String,

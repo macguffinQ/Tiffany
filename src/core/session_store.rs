@@ -137,8 +137,7 @@ impl SessionStore {
         if ids.is_empty() {
             return Ok(vec![]);
         }
-        let placeholders = std::iter::repeat("?")
-            .take(ids.len())
+        let placeholders = std::iter::repeat_n("?", ids.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(

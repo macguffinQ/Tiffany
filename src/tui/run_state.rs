@@ -233,7 +233,7 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
         }
         RunProgress::CritiqueResult { approved, issues } => {
             let msg = if approved {
-                format!("▸ Critic approved ✓ (round ok, no issues)")
+                "▸ Critic approved ✓ (round ok, no issues)".to_string()
             } else {
                 format!("▸ Critic rejected ({} issues). Replanning…", issues)
             };
@@ -567,10 +567,11 @@ fn worker_final_output_candidate(content: &str) -> Option<String> {
 
 fn final_output_for_run(input: &InputState) -> Option<String> {
     let mut best = None;
-    for candidate in [&input.run_final_output, &input.run_last_worker_output] {
-        if let Some(text) = candidate {
-            remember_better_text(&mut best, humanize_jsonish(text, FINAL_OUTPUT_MAX_CHARS));
-        }
+    for text in [&input.run_final_output, &input.run_last_worker_output]
+        .into_iter()
+        .flatten()
+    {
+        remember_better_text(&mut best, humanize_jsonish(text, FINAL_OUTPUT_MAX_CHARS));
     }
     best.filter(|text| !text.trim().is_empty())
 }

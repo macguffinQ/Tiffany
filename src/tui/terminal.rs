@@ -268,6 +268,7 @@ impl Drop for TerminalInputGuard {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_terminal_key(
     key: KeyEvent,
     store: &Arc<SessionStore>,
@@ -723,6 +724,7 @@ fn handle_terminal_command(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_terminal_line(
     line: String,
     store: &Arc<SessionStore>,

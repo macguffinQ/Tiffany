@@ -218,11 +218,11 @@ impl CCConfig {
         if !self.system_prompt.is_empty() {
             s.push_str("# Project instructions (from CLAUDE.md)\n\n");
             s.push_str(&self.system_prompt);
-            s.push_str("\n");
+            s.push('\n');
         }
         if !history.is_empty() {
             if !s.is_empty() {
-                s.push_str("\n");
+                s.push('\n');
             }
             s.push_str("# Prior session context\n\n");
             s.push_str(history);

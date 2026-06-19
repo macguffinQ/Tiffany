@@ -1032,6 +1032,7 @@ fn print_roles(config_path: &Path, selected_role: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn register_role(
     config_path: &Path,
     role: &str,
@@ -1275,7 +1276,7 @@ fn run_wizard(config_path: &Path) -> Result<()> {
     println!("{}", c(ansi::BOLD, "Step 1: pick your LLM providers"));
     println!("(multi-select, comma-separated; or just press Enter for Claude-only)\n");
 
-    let available_providers = vec![
+    let available_providers = [
         (
             "anthropic",
             "Anthropic (Claude) — recommended",
@@ -1412,11 +1413,7 @@ fn run_wizard(config_path: &Path) -> Result<()> {
             );
             entry.kind = provider_kind(name).to_string();
             if !key_input.is_empty() {
-                if key_input.starts_with('$') {
-                    entry.api_key = Some(key_input.to_string());
-                } else {
-                    entry.api_key = Some(key_input.to_string());
-                }
+                entry.api_key = Some(key_input.to_string());
             }
             // For OpenAI-compatible and custom providers, ask for base_url
             let needs_url = matches!(
@@ -2803,6 +2800,7 @@ fn delete_provider(config_path: &Path, provider: &str, dry_run: bool) -> Result<
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setup_provider(
     config_path: &Path,
     provider: &str,
@@ -3543,6 +3541,8 @@ pub async fn build_orchestrator(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::*;
     use orchestrator::config::{ModelConfig, ProviderConfig, RoleConfig};
 

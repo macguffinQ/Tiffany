@@ -77,7 +77,7 @@ pub async fn format_context(
         if !s.files_touched.is_empty() {
             let _ = writeln!(out, "files touched: {}\n", s.files_touched.join(", "));
         }
-        out.push_str("\n");
+        out.push('\n');
     }
     Ok(out)
 }

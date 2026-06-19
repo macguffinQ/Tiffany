@@ -19,64 +19,6 @@ pub struct ResolvedAssignment {
     pub agent_teams: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ModelConfig;
-
-    #[test]
-    fn new_with_models_resolves_role_model_ids_to_cli_model_names() {
-        let roles = HashMap::from([(
-            "worker-cc".to_string(),
-            RoleConfig {
-                model: "sonnet".into(),
-                runtime: "claude-code".into(),
-                agent_teams: true,
-            },
-        )]);
-        let models = vec![ModelConfig {
-            id: "sonnet".into(),
-            provider: "anthropic".into(),
-            name: "claude-sonnet-4-6".into(),
-        }];
-        let router = CapabilityRouter::new_with_models(&roles, &[], &models);
-        let resolved = router.resolve(&Task::new("task")).expect("resolved route");
-
-        assert_eq!(resolved.model, "claude-sonnet-4-6");
-        assert_eq!(resolved.provider.as_deref(), Some("anthropic"));
-        assert_eq!(resolved.runtime, "claude-code");
-        assert!(resolved.agent_teams);
-    }
-
-    #[test]
-    fn default_route_can_use_named_claude_worker_when_worker_cc_is_absent() {
-        let roles = HashMap::from([
-            (
-                "planner".to_string(),
-                RoleConfig {
-                    model: "sonnet".into(),
-                    runtime: "claude-code".into(),
-                    agent_teams: false,
-                },
-            ),
-            (
-                "worker-cc-minimax".to_string(),
-                RoleConfig {
-                    model: "minimax".into(),
-                    runtime: "claude-code".into(),
-                    agent_teams: true,
-                },
-            ),
-        ]);
-        let router = CapabilityRouter::new_with_models(&roles, &[], &[]);
-        let resolved = router.resolve(&Task::new("task")).expect("resolved route");
-
-        assert_eq!(resolved.model, "minimax");
-        assert_eq!(resolved.runtime, "claude-code");
-        assert!(resolved.agent_teams);
-    }
-}
-
 pub struct CapabilityRouter {
     roles: HashMap<String, RoleConfig>,
     models: HashMap<String, ModelConfig>,
@@ -161,5 +103,63 @@ impl CapabilityRouter {
         };
         let rc = self.roles.get(&default_key).unwrap();
         Ok(self.assignment_for(&default_key, rc))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ModelConfig;
+
+    #[test]
+    fn new_with_models_resolves_role_model_ids_to_cli_model_names() {
+        let roles = HashMap::from([(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "sonnet".into(),
+                runtime: "claude-code".into(),
+                agent_teams: true,
+            },
+        )]);
+        let models = vec![ModelConfig {
+            id: "sonnet".into(),
+            provider: "anthropic".into(),
+            name: "claude-sonnet-4-6".into(),
+        }];
+        let router = CapabilityRouter::new_with_models(&roles, &[], &models);
+        let resolved = router.resolve(&Task::new("task")).expect("resolved route");
+
+        assert_eq!(resolved.model, "claude-sonnet-4-6");
+        assert_eq!(resolved.provider.as_deref(), Some("anthropic"));
+        assert_eq!(resolved.runtime, "claude-code");
+        assert!(resolved.agent_teams);
+    }
+
+    #[test]
+    fn default_route_can_use_named_claude_worker_when_worker_cc_is_absent() {
+        let roles = HashMap::from([
+            (
+                "planner".to_string(),
+                RoleConfig {
+                    model: "sonnet".into(),
+                    runtime: "claude-code".into(),
+                    agent_teams: false,
+                },
+            ),
+            (
+                "worker-cc-minimax".to_string(),
+                RoleConfig {
+                    model: "minimax".into(),
+                    runtime: "claude-code".into(),
+                    agent_teams: true,
+                },
+            ),
+        ]);
+        let router = CapabilityRouter::new_with_models(&roles, &[], &[]);
+        let resolved = router.resolve(&Task::new("task")).expect("resolved route");
+
+        assert_eq!(resolved.model, "minimax");
+        assert_eq!(resolved.runtime, "claude-code");
+        assert!(resolved.agent_teams);
     }
 }

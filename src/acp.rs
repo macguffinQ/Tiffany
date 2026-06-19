@@ -1264,7 +1264,7 @@ fn selected_acp_context_entries(session: &AcpSession) -> Vec<AcpChatMsg> {
         .filter_map(|msg| {
             let content = acp_context_content(msg.role, &msg.content);
             let content = truncate_chars(content.trim(), per_message_limit);
-            (!content.is_empty()).then(|| AcpChatMsg {
+            (!content.is_empty()).then_some(AcpChatMsg {
                 role: msg.role,
                 content,
             })

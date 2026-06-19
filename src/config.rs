@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
     pub providers: HashMap<String, ProviderConfig>,
     pub runtimes: HashMap<String, RuntimeConfig>,
@@ -15,19 +15,6 @@ pub struct Config {
     #[serde(default)]
     pub overrides: Vec<OverrideConfig>,
     pub behavior: BehaviorConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            providers: HashMap::new(),
-            runtimes: HashMap::new(),
-            models: Vec::new(),
-            roles: HashMap::new(),
-            overrides: Vec::new(),
-            behavior: BehaviorConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
