@@ -142,6 +142,41 @@ pub fn final_output_candidate(content: &str, max: usize) -> Option<String> {
             }
         }
     }
+
+    let normalized = normalize_output_summary(&humanize_jsonish(content, max));
+    if let Some(raw) = strip_final_heading(&normalized) {
+        let result = humanize_jsonish(raw, max);
+        if !result.trim().is_empty() {
+            return Some(result);
+        }
+    }
+    None
+}
+
+fn strip_final_heading(content: &str) -> Option<&str> {
+    let trimmed = content.trim();
+    for heading in [
+        "final result",
+        "final answer",
+        "final_result",
+        "final_answer",
+    ] {
+        if trimmed.eq_ignore_ascii_case(heading) {
+            return Some("");
+        }
+        if trimmed
+            .get(..heading.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(heading))
+        {
+            let rest = &trimmed[heading.len()..];
+            if let Some(rest) = rest.strip_prefix(':') {
+                return Some(rest.trim_start());
+            }
+            if rest.starts_with('\n') || rest.starts_with("\r\n") {
+                return Some(rest.trim_start());
+            }
+        }
+    }
     None
 }
 
@@ -843,6 +878,19 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, "Done and verified.");
+    }
+
+    #[test]
+    fn extracts_final_output_from_plain_final_heading() {
+        assert_eq!(
+            final_output_candidate("Final result\n你好！\n我可以帮你写代码。", 500).as_deref(),
+            Some("你好！\n我可以帮你写代码。")
+        );
+        assert_eq!(
+            final_output_candidate("claude-code assistant: Final answer:\n完成并验证。", 500)
+                .as_deref(),
+            Some("完成并验证。")
+        );
     }
 
     #[test]

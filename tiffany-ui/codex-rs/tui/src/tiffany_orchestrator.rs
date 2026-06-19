@@ -1433,18 +1433,13 @@ impl BridgeState {
             if is_redundant_role_output(&event.role, content) {
                 return;
             }
-            if event.role == "worker"
-                && let Some(result) = event.content.as_deref().and_then(final_output_candidate)
-            {
+            if let Some(result) = final_output_from_event(&event, content) {
                 remember_better_text(&mut self.final_output, result);
             }
             let key = normalized_output_key(content);
             let scope = output_scope(&event);
             if !self.seen_outputs.insert(format!("{scope}:{key}")) {
                 return;
-            }
-            if event.role == "worker" {
-                remember_better_text(&mut self.final_output, content.to_string());
             }
         } else {
             let title = event_title(&event);
@@ -2028,6 +2023,35 @@ fn final_output_candidate(content: &str) -> Option<String> {
     event_format::final_output_candidate(content, HUMANIZE_MAX_CHARS)
         .map(|result| strip_final_heading(&result))
         .filter(|result| !result.trim().is_empty())
+}
+
+fn final_output_from_event(event: &TiffanyProgressEvent, visible: &str) -> Option<String> {
+    if event.role != "worker" || event.status != "output" {
+        return None;
+    }
+    if let Some(result) = event.content.as_deref().and_then(final_output_candidate) {
+        return Some(result);
+    }
+    let raw = event.content.as_deref()?;
+    if worker_output_kind(raw).is_some_and(|kind| kind == "assistant") {
+        let cleaned = strip_final_heading(visible);
+        if !cleaned.trim().is_empty() {
+            return Some(cleaned);
+        }
+    }
+    None
+}
+
+fn worker_output_kind(content: &str) -> Option<&str> {
+    let prefix = content.trim_start().split_once(": ")?.0;
+    let mut parts = prefix.split_whitespace();
+    let runtime = parts.next()?.to_ascii_lowercase();
+    let kind = parts.next()?.trim();
+    if matches!(runtime.as_str(), "claude" | "claude-code" | "codex") {
+        Some(kind)
+    } else {
+        None
+    }
 }
 
 fn remember_better_text(slot: &mut Option<String>, candidate: String) {
@@ -2810,6 +2834,73 @@ mod tests {
             final_output_candidate("claude-code result: Final answer:\n完成并验证").as_deref(),
             Some("完成并验证")
         );
+    }
+
+    #[test]
+    fn captures_final_result_heading_for_followup_memory() {
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            message: "worker output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: Some("Final result\n你好！\n我可以帮你写代码。".to_string()),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+        let visible = visible_content(&event).expect("visible final result");
+
+        assert_eq!(
+            final_output_from_event(&event, &visible).as_deref(),
+            Some("你好！\n我可以帮你写代码。")
+        );
+    }
+
+    #[test]
+    fn captures_assistant_output_but_not_worker_process_noise_for_memory() {
+        let assistant = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            message: "worker output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: Some("claude-code assistant: 你好！".to_string()),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+        let assistant_visible = visible_content(&assistant).expect("assistant visible");
+        assert_eq!(
+            final_output_from_event(&assistant, &assistant_visible).as_deref(),
+            Some("你好！")
+        );
+
+        let stderr = TiffanyProgressEvent {
+            content: Some("claude-code stderr: model not found".to_string()),
+            ..assistant.clone()
+        };
+        let stderr_visible = visible_content(&stderr).expect("stderr visible");
+        assert_eq!(final_output_from_event(&stderr, &stderr_visible), None);
+
+        let raw_status = TiffanyProgressEvent {
+            content: Some("running tests".to_string()),
+            ..assistant
+        };
+        let raw_visible = visible_content(&raw_status).expect("status visible");
+        assert_eq!(final_output_from_event(&raw_status, &raw_visible), None);
     }
 
     #[test]
