@@ -635,6 +635,9 @@ fn status_config_issues(cfg: &Config) -> Vec<String> {
         {
             issues.push(format!("{provider_name} api key missing"));
         }
+        if provider_needs_base_url(provider_name, provider) {
+            issues.push(format!("{provider_name} base_url missing"));
+        }
     }
 
     let model_ids = cfg
@@ -651,7 +654,7 @@ fn status_config_issues(cfg: &Config) -> Vec<String> {
         if !model_ids.contains(role.model.as_str()) {
             issues.push(format!("{role_name} model {} missing", role.model));
         }
-        if !cfg.runtimes.contains_key(&role.runtime) {
+        if cfg.runtime_config(&role.runtime).is_none() {
             issues.push(format!("{role_name} runtime {} missing", role.runtime));
         }
     }
@@ -662,6 +665,20 @@ fn status_config_issues(cfg: &Config) -> Vec<String> {
     issues.sort();
     issues.dedup();
     issues
+}
+
+fn provider_needs_base_url(
+    provider_name: &str,
+    provider: &orchestrator::config::ProviderConfig,
+) -> bool {
+    provider.kind.eq_ignore_ascii_case("openai")
+        && !provider_name.eq_ignore_ascii_case("openai")
+        && provider
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
 }
 
 fn status_issue_summary(issues: &[String], limit: usize) -> String {
@@ -747,7 +764,12 @@ fn is_missing_provider_link(issue: &str) -> bool {
 fn is_provider_setup_issue(issue: &str) -> bool {
     issue == "no providers"
         || issue.ends_with(" api key missing")
+        || issue.ends_with(" base_url missing")
         || is_missing_provider_link(issue)
+}
+
+fn missing_provider_base_url(issue: &str) -> Option<&str> {
+    issue.strip_suffix(" base_url missing")
 }
 
 fn is_role_setup_issue(issue: &str) -> bool {
@@ -802,6 +824,17 @@ fn status_actions(
             .iter()
             .any(|issue| is_provider_setup_issue(issue))
         {
+            if let Some(provider) = config_issues
+                .iter()
+                .find_map(|issue| missing_provider_base_url(issue))
+            {
+                actions.push(StatusAction {
+                    label: "fix endpoint",
+                    command: format!(
+                        "tiffany-loop then `/provider endpoint {provider} <url>`, or `orchestrator config provider setup {provider} --endpoint <url>`"
+                    ),
+                });
+            }
             actions.push(StatusAction {
                 label: "fix provider",
                 command: "tiffany-loop then /provider, or `orchestrator config provider setup <provider> --env <ENV_NAME>`".into(),
@@ -4297,6 +4330,22 @@ mod tests {
     }
 
     #[test]
+    fn status_actions_call_out_missing_openai_compatible_endpoint() {
+        let issues = vec!["minimax base_url missing".to_string()];
+        let actions = status_actions(true, &issues, true, false);
+
+        assert_eq!(actions[0].label, "fix endpoint");
+        assert!(actions[0]
+            .command
+            .contains("/provider endpoint minimax <url>"));
+        assert!(actions[0]
+            .command
+            .contains("config provider setup minimax --endpoint <url>"));
+        assert_eq!(actions[1].label, "fix provider");
+        assert_eq!(actions[2].command, "orchestrator doctor".to_string());
+    }
+
+    #[test]
     fn status_actions_split_mixed_provider_and_role_repairs() {
         let issues = vec![
             "google api key missing".to_string(),
@@ -4386,6 +4435,43 @@ mod tests {
         assert!(health.contains("provider auth missing for 1: openai"));
         assert!(health.contains("model provider links:"));
         assert!(health.contains("role/model wiring:"));
+    }
+
+    #[test]
+    fn status_config_health_reports_missing_openai_compatible_endpoint() {
+        let mut cfg = config_with_models();
+        cfg.providers.insert(
+            "minimax".to_string(),
+            ProviderConfig {
+                kind: "openai".to_string(),
+                api_key: Some("set".to_string()),
+                base_url: None,
+            },
+        );
+
+        let issues = status_config_issues(&cfg);
+
+        assert!(issues.contains(&"minimax base_url missing".to_string()));
+        assert!(status_config_health(&cfg).contains("minimax base_url missing"));
+    }
+
+    #[test]
+    fn status_config_health_accepts_runtime_aliases() {
+        let mut cfg = config_with_models();
+        cfg.providers
+            .insert("anthropic".to_string(), provider("anthropic"));
+        cfg.roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "sonnet".to_string(),
+                runtime: "claude".to_string(),
+                agent_teams: true,
+            },
+        );
+
+        let issues = status_config_issues(&cfg);
+
+        assert!(!issues.contains(&"worker-cc runtime claude missing".to_string()));
     }
 
     #[test]
