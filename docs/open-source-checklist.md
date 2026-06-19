@@ -21,7 +21,7 @@ Use this before making the repository public.
 - [ ] Review all files under `~/.orchestrator` before sharing logs or examples.
 - [ ] Review all files under `~/.tiffany` before sharing UI history, logs, or config.
 - [ ] Confirm no API keys, private prompts, session logs, database files, or generated worktrees are committed.
-- [x] Run a final secret scan before pushing. `./scripts/open-source-audit` covers common local-state, large-file, and secret patterns. If you run manual scans, investigate every match:
+- [x] Run a final secret scan before pushing. `./scripts/open-source-audit` covers tracked local state, untracked suspicious files, large files, and common secret patterns. Treat every reported path as a blocker unless it is an intentional fixture with a documented exception. If you run manual scans, investigate every match:
 
 ```bash
 git grep -nE 'sk-[A-Za-z0-9_-]{20,}|ANTHROPIC_API_KEY|OPENAI_API_KEY|GITHUB_TOKEN|BEGIN (RSA|OPENSSH|PRIVATE) KEY' -- . ':!Cargo.lock'

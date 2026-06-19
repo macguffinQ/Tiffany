@@ -13,10 +13,30 @@ section() {
 section "tracked local state"
 tracked_state="$(
   git ls-files |
-    rg '(^|/)(target|\.orchestrator|sessions)(/|$)|\.(db|sqlite|sqlite3|db-wal|db-shm|db-journal|log)$|(^|/)\.env(\.|$)' || true
+    rg '(^|/)(target|\.orchestrator|\.tiffany|sessions)(/|$)|\.(db|sqlite|sqlite3|db-wal|db-shm|db-journal|log)$|(^|/)\.env(\.|$)|(^|/)(id_rsa|id_ed25519)(\.pub)?$|(^|/)config\.local\.ya?ml$' || true
+)"
+tracked_state="$(
+  printf '%s\n' "${tracked_state}" |
+    rg -v '^(third_party/openai-codex/|tiffany-ui/codex-rs/).*tests/fixtures/.*\.(jsonl|pem)$' || true
 )"
 if [[ -n "${tracked_state}" ]]; then
   echo "${tracked_state}"
+  fail=1
+else
+  echo "ok"
+fi
+
+section "untracked suspicious files"
+untracked_state="$(
+  git ls-files --others --exclude-standard |
+    rg '(^|/)(target|\.orchestrator|\.tiffany|sessions)(/|$)|\.(db|sqlite|sqlite3|db-wal|db-shm|db-journal|log|jsonl|pem|key)$|(^|/)\.env(\.|$)|(^|/)(id_rsa|id_ed25519)(\.pub)?$|(^|/)config(\.local)?\.ya?ml$' || true
+)"
+untracked_state="$(
+  printf '%s\n' "${untracked_state}" |
+    rg -v '^(third_party/openai-codex/|tiffany-ui/codex-rs/).*tests/fixtures/.*\.(jsonl|pem)$' || true
+)"
+if [[ -n "${untracked_state}" ]]; then
+  echo "${untracked_state}"
   fail=1
 else
   echo "ok"
@@ -47,6 +67,7 @@ secret_matches="$(
     ':!README.md' \
     ':!README.zh-CN.md' \
     ':!third_party/**' \
+    ':!docs/open-source-checklist.md' \
     ':!tiffany-ui/**/tests/**' \
     ':!tiffany-ui/codex-rs/agent-identity/src/lib.rs' \
     ':!tiffany-ui/codex-rs/cli/src/login.rs' \
