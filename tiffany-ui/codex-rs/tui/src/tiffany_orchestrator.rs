@@ -378,7 +378,12 @@ async fn run_event_bridge(
     } else {
         emit_lines(
             &app_event_tx,
-            orchestrator_failure_lines(status, &stderr, &state.malformed_stdout_text()),
+            orchestrator_failure_lines(
+                status,
+                &stderr,
+                &state.malformed_stdout_text(),
+                &state.worker_context_lines(),
+            ),
         );
     }
 
@@ -1349,6 +1354,7 @@ fn orchestrator_failure_lines(
     status: ExitStatus,
     stderr: &str,
     malformed_stdout: &str,
+    worker_context: &[String],
 ) -> Vec<Line<'static>> {
     let mut lines = vec![status_line(
         "✗",
@@ -1356,6 +1362,13 @@ fn orchestrator_failure_lines(
         "orchestrator",
         &format!("exited with status {status}"),
     )];
+
+    if !worker_context.is_empty() {
+        lines.push(body_line("worker context:", true));
+        for line in worker_context.iter().take(6) {
+            lines.push(body_line(line, true));
+        }
+    }
 
     let mut detail_text = stderr.trim().to_string();
     if !malformed_stdout.trim().is_empty() {
@@ -1589,6 +1602,55 @@ impl BridgeState {
         fill_missing(&mut event.model, meta.model.as_deref());
         fill_missing(&mut event.provider, meta.provider.as_deref());
     }
+
+    fn worker_context_lines(&self) -> Vec<String> {
+        let mut entries = self.worker_metadata.iter().collect::<Vec<_>>();
+        entries.sort_by_key(|(task_id, _)| task_id.as_str());
+        entries
+            .into_iter()
+            .map(|(task_id, meta)| worker_context_line(task_id, meta))
+            .collect()
+    }
+}
+
+fn worker_context_line(task_id: &str, meta: &WorkerMeta) -> String {
+    let mut parts = Vec::new();
+    if let Some(role) = meta.worker_role.as_deref().and_then(nonempty_trimmed) {
+        parts.push(role.to_string());
+    }
+    if let Some(agent) = meta.agent.as_deref().and_then(nonempty_trimmed)
+        && !parts.iter().any(|part| part == agent)
+    {
+        parts.push(agent.to_string());
+    }
+    if let Some(runtime) = meta.runtime.as_deref().and_then(nonempty_trimmed)
+        && !parts.iter().any(|part| part == runtime)
+    {
+        parts.push(format!("runtime {runtime}"));
+    }
+    if let Some(provider_model) = worker_meta_provider_model_label(meta) {
+        parts.push(provider_model);
+    }
+    if let Some(id) = short_task_id(Some(task_id)) {
+        parts.push(id.to_string());
+    }
+    if parts.is_empty() {
+        parts.push(short_task_id(Some(task_id)).unwrap_or(task_id).to_string());
+    }
+    format!("worker: {}", parts.join(" · "))
+}
+
+fn worker_meta_provider_model_label(meta: &WorkerMeta) -> Option<String> {
+    let model = meta.model.as_deref().and_then(nonempty_trimmed)?;
+    Some(match meta.provider.as_deref().and_then(nonempty_trimmed) {
+        Some(provider) => format!("{provider}/{model}"),
+        None => model.to_string(),
+    })
+}
+
+fn nonempty_trimmed(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
 }
 
 fn fill_present(slot: &mut Option<String>, value: Option<&str>) {
@@ -3021,6 +3083,10 @@ mod tests {
             event_title(&done),
             "worker-cc done · claude-code · minimax/MiniMax-M3 · 12345678 · 1.2s"
         );
+        assert_eq!(
+            state.worker_context_lines(),
+            vec!["worker: worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"]
+        );
     }
 
     #[test]
@@ -3553,6 +3619,7 @@ mod tests {
             ExitStatus::from_raw(1 << 8),
             "Error: reading config at /tmp/missing/config.yaml",
             "",
+            &[],
         );
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
@@ -3571,6 +3638,7 @@ mod tests {
             ExitStatus::from_raw(1 << 8),
             "",
             "2026-06-17T03:34:28Z ERROR planner returned no sub_tasks",
+            &[],
         );
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
@@ -3587,9 +3655,12 @@ mod tests {
             ExitStatus::from_raw(1 << 8),
             "worker-codex stderr: [1211] 模型不存在",
             "",
+            &["worker: worker-codex · codex · minimax/MiniMax-M3 · abcdef12".to_string()],
         );
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
+        assert!(text.contains("worker context"));
+        assert!(text.contains("worker-codex · codex · minimax/MiniMax-M3"));
         assert!(text.contains("模型不存在"));
         assert!(text.contains("model id must point to the provider API model name"));
         assert!(text.contains("/doctor"));
