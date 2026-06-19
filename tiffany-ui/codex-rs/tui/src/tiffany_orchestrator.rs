@@ -1815,6 +1815,9 @@ fn waterfall_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
     if event.role == "worker" && event.task_id.is_some() {
         return worker_status_line(event);
     }
+    if event.role == "reviewer" && event.task_id.is_some() {
+        return reviewer_status_line(event);
+    }
 
     let color = status_color(event);
     Line::from(vec![
@@ -1836,6 +1839,25 @@ fn waterfall_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
         ),
         Span::raw(" "),
         Span::styled(event_title(event), Style::default()),
+    ])
+}
+
+fn reviewer_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
+    let color = status_color(event);
+    Line::from(vec![
+        Span::styled(
+            status_symbol(event),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            "review",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(reviewer_lifecycle_title(event), Style::default()),
     ])
 }
 
@@ -1875,6 +1897,9 @@ fn event_title(event: &TiffanyProgressEvent) -> String {
         && event.task_id.is_some()
     {
         return worker_lifecycle_title(event);
+    }
+    if event.role == "reviewer" && event.task_id.is_some() {
+        return reviewer_lifecycle_title(event);
     }
 
     let mut title = normalize_event_message(&event.message);
@@ -1969,6 +1994,25 @@ fn event_detail_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>> {
         lines.push(meta_line("task", &truncate_text(prompt, 180)));
     }
     lines
+}
+
+fn reviewer_lifecycle_title(event: &TiffanyProgressEvent) -> String {
+    let action = match event.status.as_str() {
+        "running" => "checking worker output".to_string(),
+        "done" if event.approved == Some(true) => "passed".to_string(),
+        "warning" if event.approved == Some(false) => "needs fixes".to_string(),
+        _ => normalize_event_message(&event.message),
+    };
+    let mut parts = vec![action];
+    if let Some(id) = short_task_id(event.task_id.as_deref()) {
+        parts.push(id.to_string());
+    }
+    if matches!(event.status.as_str(), "warning" | "failed")
+        && let Some(issues) = event.issues
+    {
+        parts.push(format!("{issues} issue(s)"));
+    }
+    parts.join(" · ")
 }
 
 fn worker_lifecycle_title(event: &TiffanyProgressEvent) -> String {
@@ -2728,7 +2772,56 @@ mod tests {
         );
         assert_eq!(
             line_text(&waterfall_status_line(&reviewer)),
-            "⚠ step  04 reviewer review needs fixes · 2 issue(s) · 87654321"
+            "⚠ review  needs fixes · 87654321 · 2 issue(s)"
+        );
+    }
+
+    #[test]
+    fn reviewer_status_lines_track_worker_review_lifecycle() {
+        let checking = TiffanyProgressEvent {
+            role: "reviewer".to_string(),
+            status: "running".to_string(),
+            message: "reviewing worker output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: None,
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: None,
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+        assert_eq!(
+            line_text(&waterfall_status_line(&checking)),
+            "● review  checking worker output · 12345678"
+        );
+
+        let passed = TiffanyProgressEvent {
+            status: "done".to_string(),
+            message: "review approved".to_string(),
+            approved: Some(true),
+            issues: Some(0),
+            ..checking.clone()
+        };
+        assert_eq!(
+            line_text(&waterfall_status_line(&passed)),
+            "✓ review  passed · 12345678"
+        );
+
+        let needs_fixes = TiffanyProgressEvent {
+            status: "warning".to_string(),
+            message: "review needs fixes - 3 issue(s)".to_string(),
+            approved: Some(false),
+            issues: Some(3),
+            ..checking
+        };
+        assert_eq!(
+            line_text(&waterfall_status_line(&needs_fixes)),
+            "⚠ review  needs fixes · 12345678 · 3 issue(s)"
         );
     }
 
