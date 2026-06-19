@@ -10,7 +10,7 @@ Usage: ./scripts/tiffany-release-preflight [--quick|--full] [--tag vX.Y.Z]
 Runs the release preflight checks from this checkout.
 
 Modes:
-  --quick  Format, tests, examples, locked build, formula syntax, and open-source audit.
+  --quick  Format, clippy, tests, examples, locked build, formula syntax, and open-source audit.
   --full   Quick checks plus Tiffany dist/fork-specific checks for release tags.
 
 Options:
@@ -101,6 +101,9 @@ step "root format"
 
 step "shared event formatter format"
 "$cargo_bin" fmt --manifest-path "$repo_dir/crates/tiffany-event-format/Cargo.toml" -- --check
+
+step "root clippy"
+(cd "$repo_dir" && "$cargo_bin" clippy --all-targets -- -D warnings)
 
 step "root tests"
 (cd "$repo_dir" && "$cargo_bin" test --all)

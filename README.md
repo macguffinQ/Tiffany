@@ -411,7 +411,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `./scripts/tiffany-check --dist` | Run the release-profile fork/install/bridge/example verification |
 | `./scripts/tiffany-install-smoke --smoke|--dist` | Verify installed command behavior in an isolated temporary HOME |
 | `./scripts/tiffany-check-examples` | Run only checked-in example tests |
-| `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | Run consolidated local release-readiness checks |
+| `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | Run consolidated local release-readiness checks: format, clippy, tests, examples, audit, and dist checks in full mode |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` | Inspect or trim shared and legacy Cargo build caches; default removes only the old fork-local target |
 | `tiffany-loop` | Open the primary tiffany-loop UI after install |
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |

@@ -314,7 +314,7 @@ behavior:
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/install/bridge/example 验证 |
 | `./scripts/tiffany-install-smoke --smoke|--dist` | 在隔离临时 HOME 中验证安装后的命令行为 |
 | `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |
-| `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | 执行汇总后的本地发布前检查 |
+| `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | 执行汇总后的本地发布前检查：format、clippy、测试、示例、审计；full 模式再跑 dist 检查 |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
 | `tiffany-loop` | 安装后打开主 tiffany-loop UI |
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
