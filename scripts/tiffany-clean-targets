@@ -24,6 +24,10 @@ Usage:
   ./scripts/tiffany-clean-targets --incremental
       Remove Cargo incremental caches while keeping compiled deps and binaries.
 
+  ./scripts/tiffany-clean-targets --trim
+      Remove rebuildable incremental and tiffany-dist cache internals while
+      keeping compiled deps and final binaries.
+
   ./scripts/tiffany-clean-targets --dist
       Remove tiffany-dist build outputs from shared and legacy target dirs.
 
@@ -36,7 +40,7 @@ Usage:
   ./scripts/tiffany-clean-targets --all
       Remove both ./target and tiffany-ui/codex-rs/target.
 
-  ./scripts/tiffany-clean-targets --dry-run --dist-cache
+  ./scripts/tiffany-clean-targets --dry-run --trim
       Print what would be removed without deleting files.
 
 By default the shared ./target directory is kept, so normal incremental builds
@@ -95,6 +99,9 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --incremental)
       mode="incremental"
+      ;;
+    --trim)
+      mode="trim"
       ;;
     --dist)
       mode="dist"
@@ -162,6 +169,9 @@ show_sizes() {
   size_of "$legacy_target/debug/incremental"
   size_of "$legacy_target/tiffany-dist"
   size_of "$legacy_target/release"
+  echo
+  echo "Tip: run './scripts/tiffany-clean-targets --dry-run --trim' to preview"
+  echo "rebuildable cache cleanup while keeping compiled deps and final binaries."
 }
 
 show_top_dir() {
@@ -198,15 +208,32 @@ show_top_deep() {
 remove_dist_cache() {
   local target_root="$1"
   local label="$2"
+  local include_incremental="${3:-1}"
   local profile_dir="$target_root/tiffany-dist"
   if [[ ! -d "$profile_dir" ]]; then
     echo "$label dist cache already absent: $profile_dir"
     return
   fi
 
-  for entry in .fingerprint build deps examples incremental gn_out; do
+  for entry in .fingerprint build deps examples gn_out; do
     remove_path "$label tiffany-dist/$entry" "$profile_dir/$entry"
   done
+  if [[ "$include_incremental" == "1" ]]; then
+    remove_path "$label tiffany-dist/incremental" "$profile_dir/incremental"
+  fi
+}
+
+remove_incremental_caches() {
+  remove_path "shared debug incremental cache" "$shared_target/debug/incremental"
+  remove_path "shared tiffany-dist incremental cache" "$shared_target/tiffany-dist/incremental"
+  remove_path "legacy debug incremental cache" "$legacy_target/debug/incremental"
+  remove_path "legacy tiffany-dist incremental cache" "$legacy_target/tiffany-dist/incremental"
+}
+
+remove_rebuildable_caches() {
+  remove_incremental_caches
+  remove_dist_cache "$shared_target" "shared" 0
+  remove_dist_cache "$legacy_target" "legacy" 0
 }
 
 case "$mode" in
@@ -220,10 +247,10 @@ case "$mode" in
     show_top_deep
     ;;
   incremental)
-    remove_path "shared debug incremental cache" "$shared_target/debug/incremental"
-    remove_path "shared tiffany-dist incremental cache" "$shared_target/tiffany-dist/incremental"
-    remove_path "legacy debug incremental cache" "$legacy_target/debug/incremental"
-    remove_path "legacy tiffany-dist incremental cache" "$legacy_target/tiffany-dist/incremental"
+    remove_incremental_caches
+    ;;
+  trim)
+    remove_rebuildable_caches
     ;;
   dist)
     remove_path "shared tiffany-dist target" "$shared_target/tiffany-dist"

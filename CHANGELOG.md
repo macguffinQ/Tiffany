@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file.
   orchestration, worker edits, and test execution from a fresh checkout.
 - Added an example smoke-check script and CI coverage for checked-in examples.
 - Added a consolidated release preflight script for local quick and full checks.
+- Added a `tiffany-clean-targets --trim` mode for pruning rebuildable caches
+  while keeping compiled deps and final binaries.
 
 ## [0.1.11] - 2026-06-19
 
