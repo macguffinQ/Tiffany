@@ -899,7 +899,7 @@ fn diagnostic_hint(error: &str) -> Option<&'static str> {
         || lower.contains("1211")
     {
         return Some(
-            "hint: check the role model/provider mapping with `/role`, `/roles`, or `/provider`",
+            "hint: check `/role <role>`: model id must point to the provider API model name; then run `/doctor`",
         );
     }
     if lower.contains("unauthorized")
@@ -2566,6 +2566,23 @@ mod tests {
 
         assert!(text.contains("planner returned no sub_tasks"));
         assert!(!text.contains("ignored malformed event"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failure_lines_explain_model_mapping_errors() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let lines = orchestrator_failure_lines(
+            ExitStatus::from_raw(1 << 8),
+            "worker-codex stderr: [1211] 模型不存在",
+            "",
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("模型不存在"));
+        assert!(text.contains("model id must point to the provider API model name"));
+        assert!(text.contains("/doctor"));
     }
 
     #[test]

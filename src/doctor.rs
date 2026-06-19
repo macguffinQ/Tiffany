@@ -475,7 +475,14 @@ fn check_roles(builder: &mut DoctorReportBuilder, cfg: &Config) {
     match runtime::default_worker_role(&cfg.roles) {
         Some(role_name) => builder.ok(format!("default worker: {role_name}")),
         None => {
-            builder.fail("no worker role configured (add a role containing worker or executor)")
+            builder.fail("no worker role configured (add a role containing worker or executor)");
+            builder.hint(format!("configured roles: {}", available_role_names(cfg)));
+            builder.hint(
+                "add one with `orchestrator roles register worker-cc --model <model-id> --runtime claude-code --agent-teams`",
+            );
+            builder.hint(
+                "or add a Codex worker with `orchestrator roles register worker-codex --model <model-id> --runtime codex`",
+            );
         }
     }
 
@@ -548,6 +555,16 @@ fn check_role_binding(
 
 fn available_runtime_names(cfg: &Config) -> String {
     let mut names = cfg.runtimes.keys().map(String::as_str).collect::<Vec<_>>();
+    names.sort();
+    if names.is_empty() {
+        "(none)".to_string()
+    } else {
+        names.join(", ")
+    }
+}
+
+fn available_role_names(cfg: &Config) -> String {
+    let mut names = cfg.roles.keys().map(String::as_str).collect::<Vec<_>>();
     names.sort();
     if names.is_empty() {
         "(none)".to_string()
@@ -861,6 +878,48 @@ mod tests {
         assert!(rendered.contains("planner: model `missing-model` is not defined"));
         assert!(rendered.contains("planner: runtime `missing-runtime` is not defined"));
         assert!(report.issue_count >= 2);
+    }
+
+    #[test]
+    fn role_check_guides_missing_worker_registration() {
+        let mut cfg = Config {
+            behavior: BehaviorConfig::default(),
+            ..Config::default()
+        };
+        cfg.roles.insert(
+            "planner".into(),
+            RoleConfig {
+                model: "gpt".into(),
+                runtime: "codex".into(),
+                agent_teams: false,
+            },
+        );
+        cfg.roles.insert(
+            "critic".into(),
+            RoleConfig {
+                model: "gpt".into(),
+                runtime: "codex".into(),
+                agent_teams: false,
+            },
+        );
+        cfg.roles.insert(
+            "reviewer".into(),
+            RoleConfig {
+                model: "gpt".into(),
+                runtime: "codex".into(),
+                agent_teams: false,
+            },
+        );
+
+        let mut builder = DoctorReportBuilder::default();
+        check_roles(&mut builder, &cfg);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert!(rendered.contains("no worker role configured"));
+        assert!(rendered.contains("configured roles: critic, planner, reviewer"));
+        assert!(rendered.contains("orchestrator roles register worker-cc"));
+        assert!(rendered.contains("orchestrator roles register worker-codex"));
     }
 
     #[test]
