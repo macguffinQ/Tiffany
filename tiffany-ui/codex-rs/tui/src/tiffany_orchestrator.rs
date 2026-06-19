@@ -2063,7 +2063,7 @@ fn visible_content(event: &TiffanyProgressEvent) -> Option<String> {
     }
     let humanized = event_format::humanize_jsonish(&cleaned, HUMANIZE_MAX_CHARS);
     let display = strip_redundant_role_prefix(&event.role, &strip_final_heading(&humanized));
-    let display = format_tiffany_summary_style(&display);
+    let display = format_tiffany_summary_style(&event.role, &display);
     if is_low_value_output(&display) {
         return None;
     }
@@ -2177,18 +2177,114 @@ fn is_redundant_role_output(role: &str, content: &str) -> bool {
     }
 }
 
-fn format_tiffany_summary_style(content: &str) -> String {
+fn format_tiffany_summary_style(role: &str, content: &str) -> String {
     let mut lines = content.lines();
     let Some(first) = lines.next() else {
         return String::new();
     };
     let first = restyle_summary_first_line(first);
     let rest = lines.collect::<Vec<_>>();
+    if role == "planner" {
+        return compact_plan_summary(&first, &rest);
+    }
     if rest.is_empty() {
         first
     } else {
         format!("{}\n{}", first, rest.join("\n"))
     }
+}
+
+#[derive(Debug)]
+struct CompactPlanTask {
+    number: String,
+    prompt: String,
+    agent: Option<String>,
+}
+
+fn compact_plan_summary(first: &str, rest: &[&str]) -> String {
+    if !first
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("plan ready")
+    {
+        return if rest.is_empty() {
+            first.to_string()
+        } else {
+            format!("{}\n{}", first, rest.join("\n"))
+        };
+    }
+
+    let mut tasks: Vec<CompactPlanTask> = Vec::new();
+    let mut more_line: Option<String> = None;
+    let mut passthrough: Vec<String> = Vec::new();
+    for line in rest {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some((number, prompt)) = parse_plan_task_line(trimmed) {
+            tasks.push(CompactPlanTask {
+                number,
+                prompt,
+                agent: None,
+            });
+            continue;
+        }
+        if let Some(agent) = trimmed.strip_prefix("agent: ") {
+            if let Some(task) = tasks.last_mut() {
+                task.agent = Some(agent.trim().to_string());
+            } else {
+                passthrough.push(trimmed.to_string());
+            }
+            continue;
+        }
+        if trimmed.starts_with('…') && trimmed.contains("more") {
+            more_line = Some(trimmed.to_string());
+            continue;
+        }
+        passthrough.push(trimmed.to_string());
+    }
+
+    if tasks.is_empty() {
+        return if rest.is_empty() {
+            first.to_string()
+        } else {
+            format!("{}\n{}", first, rest.join("\n"))
+        };
+    }
+
+    let mut out = vec![first.to_string()];
+    let visible_count = tasks.len().min(3);
+    for task in tasks.iter().take(visible_count) {
+        let mut line = format!("  {}. {}", task.number, truncate_text(&task.prompt, 96));
+        if let Some(agent) = task.agent.as_deref().filter(|agent| !agent.is_empty()) {
+            line.push_str(" · ");
+            line.push_str(&truncate_text(agent, 48));
+        }
+        out.push(line);
+    }
+
+    let hidden_count = tasks.len().saturating_sub(visible_count);
+    if hidden_count > 0 {
+        out.push(format!("  … {hidden_count} more"));
+    } else if let Some(more_line) = more_line {
+        out.push(format!("  {more_line}"));
+    }
+    out.extend(
+        passthrough
+            .into_iter()
+            .take(2)
+            .map(|line| format!("  {line}")),
+    );
+    out.join("\n")
+}
+
+fn parse_plan_task_line(line: &str) -> Option<(String, String)> {
+    let (number, prompt) = line.split_once(". ")?;
+    if number.is_empty() || !number.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some((number.to_string(), prompt.trim().to_string()))
 }
 
 fn restyle_summary_first_line(line: &str) -> String {
@@ -3141,6 +3237,7 @@ mod tests {
         assert!(planner_visible.contains("plan ready"));
         assert!(planner_visible.contains("answer in Chinese"));
         assert!(planner_visible.contains("worker-cc"));
+        assert!(!planner_visible.contains("agent:"));
         assert!(!is_redundant_role_output(&planner.role, &planner_visible));
         assert!(!planner_visible.contains('{'));
 
@@ -3167,6 +3264,41 @@ mod tests {
         assert!(reviewer_visible.contains("return a concise result"));
         assert!(!is_redundant_role_output(&reviewer.role, &reviewer_visible));
         assert!(!reviewer_visible.contains('{'));
+    }
+
+    #[test]
+    fn planner_summary_compacts_tasks_and_inlines_agents() {
+        let planner = TiffanyProgressEvent {
+            role: "planner".to_string(),
+            status: "output".to_string(),
+            message: "planner output".to_string(),
+            task_id: None,
+            agent: None,
+            worker_role: None,
+            runtime: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: Some(
+                r#"{"sub_tasks":[{"prompt":"Audit the TUI output path and identify noisy controller messages that are repeated in the visible transcript","agent_hint":"worker-cc"},{"prompt":"Update the forked TUI renderer to keep worker output visible while compacting planner details","agent_hint":"worker-codex"},{"prompt":"Add regression tests for compact planner rendering and preserved reviewer issues","agent_hint":"worker-cc"},{"prompt":"Run the smoke check and summarize the result","agent_hint":"worker-cc"}]}"#
+                    .to_string(),
+            ),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+        };
+
+        let visible = visible_content(&planner).expect("visible compact plan");
+
+        assert!(visible.contains("plan ready - 4 sub-task(s)"));
+        assert!(visible.contains("1. Audit the TUI output path"));
+        assert!(visible.contains(" · worker-cc"));
+        assert!(visible.contains("2. Update the forked TUI renderer"));
+        assert!(visible.contains(" · worker-codex"));
+        assert!(visible.contains("… 1 more"));
+        assert!(!visible.contains("agent:"));
+        assert!(!visible.contains("4. Run the smoke check"));
     }
 
     #[test]
