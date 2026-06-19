@@ -385,10 +385,11 @@ pub fn format_session_event(event: &Event) -> String {
 
     let ts = event.ts.format("%H:%M:%S").to_string();
     let summary = agent_events::summarize_event_payload(&event.payload, EVENT_SUMMARY_MAX_CHARS);
+    let (label, summary) = session_event_label_and_summary(event, &summary);
     if summary.trim().is_empty() {
-        format!("{} {}", ts, event.kind)
+        format!("{} {}", ts, label)
     } else {
-        format_multiline_log_event(&ts, &event.kind, &summary)
+        format_multiline_log_event(&ts, &label, summary)
     }
 }
 
@@ -845,6 +846,32 @@ fn payload_short_id(payload: &Value, key: &str) -> Option<String> {
     Some(value.chars().take(8).collect())
 }
 
+fn session_event_label_and_summary<'a>(event: &'a Event, summary: &'a str) -> (String, &'a str) {
+    if codex_tool_event_kind(&event.kind) {
+        if let Some(rest) = summary.trim_start().strip_prefix("tool ") {
+            return ("tool".to_string(), rest);
+        }
+        return ("tool".to_string(), summary);
+    }
+    (event.kind.clone(), summary)
+}
+
+fn codex_tool_event_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "local_shell_call"
+            | "function_call"
+            | "custom_tool_call"
+            | "tool_search_call"
+            | "web_search_call"
+            | "image_generation_call"
+            | "mcp_tool_call"
+            | "function_call_output"
+            | "custom_tool_call_output"
+            | "tool_search_output"
+    )
+}
+
 fn format_duration_ms(duration_ms: u64) -> String {
     if duration_ms < 1_000 {
         return format!("{duration_ms}ms");
@@ -1154,6 +1181,47 @@ mod tests {
         assert!(line.contains("missing test"));
         assert!(!line.contains("critic>"));
         assert!(!line.contains('{'));
+    }
+
+    #[test]
+    fn formats_codex_tool_session_events_as_waterfall_steps() {
+        let session_id = Uuid::new_v4();
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let shell = Event {
+            session_id,
+            task_id,
+            ts: Utc::now(),
+            kind: "local_shell_call".into(),
+            payload: serde_json::json!({
+                "type": "local_shell_call",
+                "status": "in_progress",
+                "action": {
+                    "type": "exec",
+                    "command": ["cargo", "test", "--all"]
+                }
+            }),
+        };
+        let output = Event {
+            session_id,
+            task_id,
+            ts: Utc::now(),
+            kind: "function_call_output".into(),
+            payload: serde_json::json!({
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": [{ "type": "input_text", "text": "tests passed" }]
+            }),
+        };
+
+        let shell_line = format_session_event(&shell);
+        let output_line = format_session_event(&output);
+
+        assert!(shell_line.contains("tool shell: cargo test --all"));
+        assert!(output_line.contains("tool result: tests passed"));
+        assert!(!shell_line.contains("local_shell_call"));
+        assert!(!output_line.contains("function_call_output"));
+        assert!(!shell_line.contains('{'));
+        assert!(!output_line.contains('{'));
     }
 
     #[test]
@@ -1475,5 +1543,44 @@ mod tests {
         assert!(flow.contains("plan ready"));
         assert!(flow.contains("worker finished"));
         assert!(!flow.contains("\"message\""));
+    }
+
+    #[test]
+    fn session_flow_humanizes_codex_tool_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut session = Session::new(Uuid::new_v4(), "worker-codex", Role::Worker);
+        session.ended_at = Some(Utc::now());
+        let shell = Event {
+            session_id: session.id,
+            task_id: session.task_id,
+            ts: Utc::now(),
+            kind: "local_shell_call".into(),
+            payload: serde_json::json!({
+                "type": "local_shell_call",
+                "status": "completed",
+                "action": {
+                    "type": "exec",
+                    "command": ["git", "status", "--short"]
+                }
+            }),
+        };
+        std::fs::write(
+            session_log_path(tmp.path(), &session),
+            format!("{}\n", serde_json::to_string(&shell).unwrap()),
+        )
+        .unwrap();
+
+        let flow = format_session_flow(
+            &session,
+            &[session.clone()],
+            tmp.path(),
+            SessionFlowRenderOptions {
+                tail_per_session: Some(20),
+            },
+        );
+
+        assert!(flow.contains("tool shell: git status --short"));
+        assert!(!flow.contains("local_shell_call"));
+        assert!(!flow.contains("\"command\""));
     }
 }
