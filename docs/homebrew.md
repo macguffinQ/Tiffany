@@ -13,21 +13,21 @@ Homebrew is the recommended install path for users:
 ```bash
 brew tap macguffinQ/tap
 brew install tiffany-loop
-tiffany orchestrator
+tiffany-loop
 ```
 
 The tap repository should publish the formula at `Formula/tiffany-loop.rb`.
-The formula installs both binaries:
+The formula installs three binaries:
 
 - `orchestrator` for config, roles, event streaming, ACP, and non-interactive runs.
-- `tiffany` for the primary TUI. Use `tiffany orchestrator`, or `orchestrator tui`
-  which delegates to `tiffany` when it is installed.
+- `tiffany-loop` for the primary TUI. Use this command first.
+- `tiffany` as a compatibility alias for older scripts.
 
 After install, initialize runtime config and configure providers/roles from the TUI:
 
 ```bash
 orchestrator init
-tiffany orchestrator
+tiffany-loop
 ```
 
 Inside the TUI, use `/provider` and `/role`.
@@ -50,8 +50,8 @@ After that, pushing a tag like `v0.1.11` will:
 1. Run `./scripts/tiffany-release-preflight --quick --tag <tag>` on the tagged commit.
 2. Build the macOS Apple Silicon release archive used by Homebrew.
 3. Publish the GitHub Release.
-4. Update `macguffinQ/homebrew-tap` with a `tiffany-loop` formula that installs both
-   `orchestrator` and `tiffany`.
+4. Update `macguffinQ/homebrew-tap` with a `tiffany-loop` formula that installs
+   `tiffany-loop`, `orchestrator`, and the compatibility alias `tiffany`.
 
 The current release matrix publishes a prebuilt `aarch64-apple-darwin` archive.
 The generated formula uses that archive on Apple Silicon Macs. Intel Macs,

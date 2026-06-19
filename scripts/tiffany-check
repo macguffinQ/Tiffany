@@ -81,7 +81,7 @@ if [[ "$mode" == "smoke" ]]; then
 fi
 
 echo "checking orchestrator bridge..."
-"$binary_dir/tiffany" orchestrator \
+"$binary_dir/tiffany-loop" orchestrator \
   --bin "$binary_dir/orchestrator" \
   --legacy help >/dev/null 2>&1
 

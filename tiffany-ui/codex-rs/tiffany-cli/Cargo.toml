@@ -5,8 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "tiffany"
+name = "tiffany-loop"
 path = "src/main.rs"
+
+[[bin]]
+name = "tiffany"
+path = "src/bin/tiffany.rs"
 
 [lints]
 workspace = true

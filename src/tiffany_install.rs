@@ -44,25 +44,31 @@ pub fn resolve_tiffany_binary() -> Option<TiffanyBinary> {
         });
     }
 
-    let exe_name = tiffany_exe_name();
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(parent) = current_exe.parent() {
-            let adjacent = parent.join(exe_name);
-            if adjacent.exists() {
-                return Some(TiffanyBinary {
-                    path: adjacent,
-                    source: TiffanyBinarySource::Adjacent,
-                    verified: true,
-                });
+            for exe_name in tiffany_exe_names() {
+                let adjacent = parent.join(exe_name);
+                if adjacent.exists() {
+                    return Some(TiffanyBinary {
+                        path: adjacent,
+                        source: TiffanyBinarySource::Adjacent,
+                        verified: true,
+                    });
+                }
             }
         }
     }
 
-    which::which(exe_name).ok().map(|path| TiffanyBinary {
-        path,
-        source: TiffanyBinarySource::Path,
-        verified: true,
-    })
+    for exe_name in tiffany_exe_names() {
+        if let Ok(path) = which::which(exe_name) {
+            return Some(TiffanyBinary {
+                path,
+                source: TiffanyBinarySource::Path,
+                verified: true,
+            });
+        }
+    }
+    None
 }
 
 pub fn find_tiffany_binary() -> Option<PathBuf> {
@@ -70,10 +76,14 @@ pub fn find_tiffany_binary() -> Option<PathBuf> {
 }
 
 pub fn tiffany_exe_name() -> &'static str {
+    tiffany_exe_names()[0]
+}
+
+pub fn tiffany_exe_names() -> [&'static str; 2] {
     if cfg!(windows) {
-        "tiffany.exe"
+        ["tiffany-loop.exe", "tiffany.exe"]
     } else {
-        "tiffany"
+        ["tiffany-loop", "tiffany"]
     }
 }
 
@@ -164,7 +174,7 @@ mod tests {
     #[test]
     fn source_labels_are_user_facing() {
         let binary = TiffanyBinary {
-            path: PathBuf::from("tiffany"),
+            path: PathBuf::from("tiffany-loop"),
             source: TiffanyBinarySource::Path,
             verified: true,
         };

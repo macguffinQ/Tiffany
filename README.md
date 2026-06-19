@@ -9,7 +9,7 @@
 
 **Status:** Preview / beta. The CLI, config schema, TUI behavior, and release packaging may change before `1.0`.
 
-The product name is **tiffany-loop**. The installed command names remain `tiffany` and `orchestrator` for compatibility with existing scripts and user workflows.
+The product name and primary installed command are **tiffany-loop**. The older `tiffany` UI command and the lower-level `orchestrator` runtime command remain for compatibility and scripting.
 
 This is an independent community project. It is not an official product of OpenAI, Anthropic, MiniMax, or any model/runtime provider. Third-party names are used only to identify compatible tools, providers, and upstream open-source components.
 
@@ -39,18 +39,18 @@ It's designed for software engineering tasks where:
 
 ## Which command should I use?
 
-For normal interactive use, run `orchestrator setup` once, then start the UI with `tiffany orchestrator`. From a source checkout, use `./scripts/tiffany-dev setup` and `./scripts/tiffany-dev`.
+For normal interactive use, run `orchestrator setup` once, then start the UI with `tiffany-loop`. From a source checkout, use `./scripts/tiffany-dev setup` and `./scripts/tiffany-dev`.
 
 | Name | What it is | Use it for |
 |---|---|---|
-| `tiffany-loop` | Product/package name | Releases, Homebrew, docs, GitHub project identity |
-| `tiffany` | Primary TUI binary | Interactive chat, provider setup, role setup, multi-turn orchestration |
+| `tiffany-loop` | Primary UI command / package name | Interactive chat, provider setup, role setup, multi-turn orchestration |
+| `tiffany` | Compatibility UI alias | Existing scripts that still call `tiffany orchestrator` |
 | `orchestrator` | Runtime/control binary | Config, events, ACP server, non-interactive runs, scripting |
 | `./scripts/tiffany-dev` | Source checkout helper | Local development without installing binaries |
 
-The split is intentional: `tiffany` owns the terminal experience, while
+The split is intentional: `tiffany-loop` owns the terminal experience, while
 `orchestrator` owns provider config, role routing, event streaming, and runtime
-execution. `orchestrator tui` delegates to `tiffany orchestrator` when the TUI
+execution. `orchestrator tui` delegates to `tiffany-loop orchestrator` when the UI
 binary is installed.
 
 ## Try The Minimal Example
@@ -61,7 +61,7 @@ role routing, worker execution, and test-running loop are wired correctly:
 ```bash
 cd examples/python-fibonacci
 python3 -m unittest discover -s tests
-tiffany orchestrator
+tiffany-loop
 ```
 
 Then ask:
@@ -84,7 +84,7 @@ The legacy [`src/tui`](src/tui/) path remains only as a compatibility bridge for
 
 Development entrypoints:
 
-- `./scripts/tiffany-dev` - run the tiffany-loop orchestrator in tiffany-loop orchestration mode, reusing `./target/debug/orchestrator` and `./target/debug/tiffany` after the first build, then waiting for input.
+- `./scripts/tiffany-dev` - run the tiffany-loop orchestrator in tiffany-loop orchestration mode, reusing `./target/debug/orchestrator` and `./target/debug/tiffany-loop` after the first build, then waiting for input.
 - `./scripts/tiffany-dev --help` - explain the source-checkout entrypoints without building or launching the UI.
 - `./scripts/tiffany-dev setup` - run the local first-run setup wizard without installing binaries.
 - `./scripts/tiffany-dev config ...` - run the local orchestrator config command directly. It does not launch the TUI or require a UI login; use it for scriptable provider setup before opening the TUI.
@@ -104,8 +104,8 @@ For source-checkout development, `./scripts/tiffany-dev` builds missing debug bi
 
 tiffany-loop keeps fork state separate from upstream UI source. The fork uses `TIFFANY_HOME`, defaulting to `~/.tiffany`, and maps UI-internal config reads to `~/.tiffany/config.toml` instead of the upstream default config directory. SQLite state defaults to the same root through `TIFFANY_SQLITE_HOME`. Override with `TIFFANY_HOME=/path/to/tiffany-home`.
 
-When running the source helper or fork binary directly, set `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator` or pass `tiffany orchestrator --bin /path/to/orchestrator`.
-Installed builds include both `orchestrator` and `tiffany`; `orchestrator tui` delegates to `tiffany orchestrator` when the `tiffany` binary is installed, and falls back to the legacy terminal chat only when it is missing. Set `ORCHESTRATOR_LEGACY_TUI=1` to force the fallback.
+When running the source helper or fork binary directly, set `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator` or pass `tiffany-loop orchestrator --bin /path/to/orchestrator`.
+Installed builds include `tiffany-loop`, `orchestrator`, and the compatibility alias `tiffany`; `orchestrator tui` delegates to `tiffany-loop orchestrator` when the UI binary is installed, and falls back to the legacy terminal chat only when it is missing. Set `ORCHESTRATOR_LEGACY_TUI=1` to force the fallback.
 
 ---
 
@@ -196,7 +196,7 @@ All injected as system-prompt sections, in priority order: **AGENTS.md > CLAUDE.
 ### Terminal Chat
 
 - The active UI direction is the full tiffany-loop UI under `tiffany-ui/`.
-- `tiffany orchestrator "..."` streams planner, critic, worker, reviewer, and final-result events into tiffany-loop history cells.
+- `tiffany-loop "..."` streams planner, critic, worker, reviewer, and final-result events into tiffany-loop history cells.
 - In orchestrator mode, the tiffany-loop input box submits follow-up prompts to the orchestrator adapter instead of the normal tiffany-loop model turn.
 - The legacy runner keeps a single conversation view with normal terminal scrollback.
 - Native text selection, copy, paste, and mouse scrolling are handled by your terminal.
@@ -224,12 +224,13 @@ Recommended for users:
 brew tap macguffinQ/tap
 brew install tiffany-loop
 orchestrator setup
-tiffany orchestrator
+tiffany-loop
 ```
 
-The Homebrew package installs both commands:
+The Homebrew package installs three commands:
 
-- `tiffany` - the primary terminal UI. Start with `tiffany orchestrator`.
+- `tiffany-loop` - the primary terminal UI. Start here.
+- `tiffany` - compatibility alias for older scripts.
 - `orchestrator` - config, roles, event streaming, ACP, and non-interactive runs.
 
 After install:
@@ -238,13 +239,13 @@ After install:
 orchestrator init
 orchestrator setup
 orchestrator doctor
-tiffany orchestrator
+tiffany-loop
 ```
 
 Inside the TUI, use `/provider` to configure providers and `/role` to register
 planner, critic, worker, and reviewer roles.
 
-Prebuilt macOS Apple Silicon binaries are published on the GitHub Releases page after each `v*` tag. Archives include both commands. Linux, Windows, and Intel Mac users can install from source while additional prebuilt targets are being staged.
+Prebuilt macOS Apple Silicon binaries are published on the GitHub Releases page after each `v*` tag. Archives include `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias. Linux, Windows, and Intel Mac users can install from source while additional prebuilt targets are being staged.
 
 Source checkout for contributors:
 
@@ -261,20 +262,20 @@ Manual source install, if you want the commands in `PATH` without Homebrew:
 ```bash
 cargo install --path . --profile tiffany-dist
 cargo install --path tiffany-ui/codex-rs/tiffany-cli --profile tiffany-dist
-strip "$(command -v orchestrator)" "$(command -v tiffany)" 2>/dev/null || true
+strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v tiffany)" 2>/dev/null || true
 ```
 
 ```bash
 # Example: install a downloaded archive
 tar -xzf tiffany-loop-v0.1.11-aarch64-apple-darwin.tar.gz
 cd tiffany-loop-v0.1.11-aarch64-apple-darwin
-chmod +x orchestrator tiffany
+chmod +x orchestrator tiffany-loop tiffany
 ./orchestrator setup
 ./orchestrator doctor
-./tiffany orchestrator
+./tiffany-loop
 ```
 
-The `tiffany-loop` package installs both `orchestrator` and `tiffany`; the current GitHub repository name remains `Tiffany`.
+The `tiffany-loop` package installs `tiffany-loop`, `orchestrator`, and the compatibility alias `tiffany`; the current GitHub repository name remains `Tiffany`.
 Tag releases prioritize the macOS Apple Silicon archive used by Homebrew; Intel Macs, Linux, and Windows can install from source for now.
 Public Homebrew installs require the `macguffinQ/Tiffany` repository and release assets to be public.
 
@@ -288,7 +289,7 @@ orchestrator init
 # 2. Configure providers, models, and roles
 orchestrator setup
 # Or use the TUI forms:
-tiffany orchestrator
+tiffany-loop
 # then run /provider and /role
 
 # 3. Check the full provider -> model -> role -> runtime wiring
@@ -296,7 +297,7 @@ orchestrator doctor
 
 # 4. Run interactively
 cd ~/your-project
-tiffany orchestrator
+tiffany-loop
 
 # 5. Or run one non-interactive task
 orchestrator run "implement fibonacci in src/fib.rs"
@@ -388,13 +389,13 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `./scripts/tiffany-dev` | Run the tiffany-loop UI |
 | `./scripts/tiffany-dev setup` | Run the first-run setup wizard from source |
 | `./scripts/tiffany-dev orchestrator` | Bridge from the tiffany-loop fork into the existing orchestrator runtime |
-| `./scripts/tiffany-build [args]` | Build both binaries in shared `./target`; forwards args such as `--release --locked`, or use stripped `--fast-release --locked`; add `--prune-dist-cache` to keep only final dist binaries |
+| `./scripts/tiffany-build [args]` | Build runtime and UI binaries in shared `./target`; forwards args such as `--release --locked`, or use stripped `--fast-release --locked`; add `--prune-dist-cache` to keep only final dist binaries |
 | `./scripts/tiffany-check --smoke` | Run the fast local fork/bridge/example verification |
 | `./scripts/tiffany-check --dist` | Run the release-profile fork/bridge/example verification |
 | `./scripts/tiffany-check-examples` | Run only checked-in example tests |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | Run consolidated local release-readiness checks |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug` | Inspect or trim shared and legacy Cargo build caches; default removes only the old fork-local target |
-| `tiffany orchestrator` | Open the primary tiffany-loop UI after install |
+| `tiffany-loop` | Open the primary tiffany-loop UI after install |
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | Guided first-run setup for providers, models, and roles |
 | `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
@@ -404,7 +405,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `orchestrator config provider list|presets` | Inspect configured providers or built-in presets |
 | `orchestrator roles list` | List registered planner/critic/worker/reviewer roles |
 | `orchestrator roles register <role> --model <id> --runtime <runtime>` | Register or update a role binding |
-| `orchestrator tui` | Open the primary tiffany-loop UI when `tiffany` is installed; otherwise fall back to legacy terminal chat |
+| `orchestrator tui` | Open the primary tiffany-loop UI when `tiffany-loop` is installed; otherwise fall back to legacy terminal chat |
 | `orchestrator tui --ratatui` | Legacy compatibility flag; kept only for old scripts |
 | `orchestrator tui --new-tab` | Open terminal chat in a new zellij tab |
 | `orchestrator tui --detach` | Run terminal chat in background outside zellij (PID file at `~/.orchestrator/tui.pid`) |
@@ -414,7 +415,7 @@ Missing env vars → empty string (no error). You can run `orchestrator status` 
 | `orchestrator sessions grep <pattern> --limit 10` | Search session logs and print readable event summaries with copyable open commands |
 | `orchestrator sessions import-cc` | Import your existing CC sessions from `~/.claude/projects/<slug>/sessions/` |
 | `orchestrator config` | Inspect and edit orchestrator configuration |
-| `orchestrator status` | Show the installed command pair, config roots, bridge command, mux, and logs |
+| `orchestrator status` | Show installed commands, config roots, bridge command, mux, and logs |
 | `orchestrator doctor` | Diagnose tiffany UI discovery, config, runtime binaries, API keys, role wiring, and local tools |
 
 ---
@@ -430,7 +431,7 @@ The target terminal UI is the full tiffany-loop UI in [`tiffany-ui/`](tiffany-ui
 After install:
 
 ```bash
-tiffany orchestrator
+tiffany-loop
 orchestrator tui
 ```
 
@@ -440,7 +441,7 @@ To pass explicit orchestrator arguments during migration:
 ./scripts/tiffany-dev orchestrator
 ```
 
-`orchestrator tui` now delegates to `tiffany orchestrator` when it can find the `tiffany` binary next to `orchestrator` or on `PATH`. If `tiffany` is missing it falls back to the old compatibility runner. Set `ORCHESTRATOR_LEGACY_TUI=1` to force the fallback.
+`orchestrator tui` now delegates to `tiffany-loop orchestrator` when it can find the `tiffany-loop` binary next to `orchestrator` or on `PATH`. If the UI binary is missing it falls back to the old compatibility runner. Set `ORCHESTRATOR_LEGACY_TUI=1` to force the fallback.
 
 Forward explicit orchestrator arguments after the subcommand:
 
@@ -479,7 +480,7 @@ The bottom status line follows tiffany-loop-style run HUD behavior: it keeps one
 
 Troubleshooting first:
 
-- Run `orchestrator status` when you are unsure which `tiffany` / `orchestrator` binaries or config roots are being used.
+- Run `orchestrator status` when you are unsure which `tiffany-loop` / `orchestrator` binaries or config roots are being used.
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
 - Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, and worker CLI binaries.
 - For model errors, confirm the role's internal model id points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>`.
@@ -487,7 +488,7 @@ Troubleshooting first:
 Input behavior:
 
 - Press `Enter` to send.
-- In `tiffany orchestrator "..."`, pressing `Enter` starts another orchestrator run from the same tiffany-loop TUI session.
+- In `tiffany-loop "..."`, pressing `Enter` starts another orchestrator run from the same tiffany-loop TUI session.
 - While a run is active, normal messages are queued at the bottom, merged into the next batch, and run together when the current task finishes.
 - The bottom queue previews the next 4 items; `/queue show` prints the full queued batch.
 - Use `/queue pause` to hold queued messages after the current run; `/queue resume` or `/queue run` starts them when idle.
@@ -600,7 +601,7 @@ See `docs/architecture.md` for the full layered architecture.
 ### Why Rust?
 
 - **Fast control plane**: `orchestrator` stays small and quick to start, while
-  the heavier `tiffany` TUI carries the full terminal UI stack.
+  the heavier `tiffany-loop` TUI carries the full terminal UI stack.
 - **Terminal reliability**: matches the tool's ecosystem
 - **Async-first**: tokio for subprocess management + event streaming
 - **No GC pauses**: stays responsive in terminal chat mode
@@ -729,14 +730,14 @@ orchestrator/
 - [x] Webhook server (axum)
 - [x] Streaming process summaries in terminal chat
 - [x] Full tiffany-loop fork under `tiffany-ui/`
-- [x] tiffany-loop CLI binary in the tiffany-loop UI
-- [x] `tiffany orchestrator "..."` native tiffany-loop TUI event adapter
+- [x] `tiffany-loop` CLI binary in the tiffany-loop UI
+- [x] `tiffany-loop "..."` native tiffany-loop TUI event adapter
 - [x] Multi-turn orchestrator submissions from the native tiffany-loop input box
-- [x] `tiffany orchestrator --legacy ...` bridge to the existing runtime
+- [x] `tiffany-loop orchestrator --legacy ...` bridge to the existing runtime
 - [x] Vendored tiffany-loop TUI source snapshot under `third_party/openai-codex/codex-rs/tui`
 - [x] Native tiffany-loop adapter inside the tiffany-loop TUI app/session layer
-- [x] Make the tiffany-loop UI the default `orchestrator tui` command path when `tiffany` is installed
-- [x] Release/Homebrew packaging installs both `orchestrator` and `tiffany`
+- [x] Make the tiffany-loop UI the default `orchestrator tui` command path when `tiffany-loop` is installed
+- [x] Release/Homebrew packaging installs `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias
 - [ ] Remove copied partial TUI modules after the fork adapter is stable
 - [ ] Full-token streaming final responses in terminal chat
 - [ ] Background task mode (`orchestrator run --detach` + `orchestrator attach`)

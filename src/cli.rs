@@ -18,7 +18,9 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
         crate::Cmd::Init => {
             let target = Config::init_default()?;
             println!("Wrote default config to {}", target.display());
-            println!("Next: run `orchestrator setup` or open `tiffany orchestrator` and use /provider + /role.");
+            println!(
+                "Next: run `orchestrator setup` or open `tiffany-loop` and use /provider + /role."
+            );
             Ok(())
         }
 
@@ -120,7 +122,7 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                     anyhow::bail!("tiffany-loop UI exited with status {}", status);
                 }
                 println!(
-                    "tiffany-loop UI binary not found; using legacy terminal chat. Run `./scripts/tiffany-dev` from source or install the `tiffany` binary for the primary UI."
+                    "tiffany-loop UI binary not found; using legacy terminal chat. Run `./scripts/tiffany-dev` from source or install the `tiffany-loop` binary for the primary UI."
                 );
             }
 
@@ -484,14 +486,14 @@ fn print_status(config_path: &Path) -> Result<()> {
         Some(binary) => {
             let verified = if binary.verified { "" } else { " (not found)" };
             println!(
-                "tiffany:     {} ({}){}",
+                "ui binary:   {} ({}){}",
                 binary.path.display(),
                 binary.source_label(),
                 verified
             );
         }
         None => {
-            println!("tiffany:     not found; `orchestrator tui` will use legacy fallback");
+            println!("ui binary:   not found; `orchestrator tui` will use legacy fallback");
         }
     }
     println!(
@@ -499,7 +501,7 @@ fn print_status(config_path: &Path) -> Result<()> {
         if tiffany_install::legacy_tui_forced() {
             "legacy forced by ORCHESTRATOR_LEGACY_TUI"
         } else {
-            "tiffany orchestrator when available"
+            "tiffany-loop when available"
         }
     );
 
@@ -714,7 +716,7 @@ fn status_actions(
         return vec![
             StatusAction {
                 label: "next",
-                command: "orchestrator setup, or `tiffany orchestrator` then /provider + /role",
+                command: "orchestrator setup, or `tiffany-loop` then /provider + /role",
             },
             StatusAction {
                 label: "check",
@@ -727,7 +729,7 @@ fn status_actions(
         vec![
             StatusAction {
                 label: "next",
-                command: "tiffany orchestrator",
+                command: "tiffany-loop",
             },
             StatusAction {
                 label: "check",
@@ -1563,7 +1565,7 @@ fn run_wizard(config_path: &Path) -> Result<()> {
         c(ansi::BOLD, &config_path.display().to_string())
     );
     println!("\n  Check: {}", c(ansi::CYAN, "orchestrator doctor"));
-    println!("  Start: {}", c(ansi::CYAN, "tiffany orchestrator"));
+    println!("  Start: {}", c(ansi::CYAN, "tiffany-loop"));
     Ok(())
 }
 
@@ -4007,7 +4009,7 @@ mod tests {
             vec![
                 StatusAction {
                     label: "next",
-                    command: "tiffany orchestrator",
+                    command: "tiffany-loop",
                 },
                 StatusAction {
                     label: "check",

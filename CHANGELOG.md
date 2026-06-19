@@ -28,6 +28,8 @@ All notable changes to this project will be documented in this file.
   next-step hints instead of raw CLI tables.
 - Reworked orchestrator progress display into ordered waterfall step lines with
   route/task metadata for worker activity.
+- Added `tiffany-loop` as the primary installed UI command while keeping
+  `tiffany` as a compatibility alias.
 
 ## [0.1.11] - 2026-06-19
 

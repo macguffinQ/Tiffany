@@ -26,11 +26,11 @@ const CODEX_SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 #[derive(Debug, Parser)]
 #[command(
     author,
-    name = "tiffany",
+    name = "tiffany-loop",
     version,
-    bin_name = "tiffany",
+    bin_name = "tiffany-loop",
     subcommand_negates_reqs = true,
-    override_usage = "tiffany [OPTIONS] [PROMPT]\n       tiffany [OPTIONS] orchestrator [ARGS]"
+    override_usage = "tiffany-loop [OPTIONS] [PROMPT]\n       tiffany-loop [OPTIONS] orchestrator [ARGS]"
 )]
 struct TiffanyCli {
     /// Optional initial prompt to send through the orchestrator.
@@ -179,7 +179,10 @@ fn is_primary_tiffany_invocation(arg0: Option<&OsString>) -> bool {
     let Some(file_name) = Path::new(arg0).file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    file_name.strip_suffix(".exe").unwrap_or(file_name) == "tiffany"
+    matches!(
+        file_name.strip_suffix(".exe").unwrap_or(file_name),
+        "tiffany-loop" | "tiffany"
+    )
 }
 
 async fn run_tiffany(cli: TiffanyCli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
@@ -217,7 +220,7 @@ fn command_from_default_prompt(prompt: Option<String>) -> TiffanyOrchestratorCom
 }
 
 fn base_tui_cli() -> TuiCli {
-    TuiCli::parse_from(["tiffany"])
+    TuiCli::parse_from(["tiffany-loop"])
 }
 
 fn run_orchestrator_bridge(cmd: TiffanyOrchestratorCommand) -> anyhow::Result<()> {
@@ -341,11 +344,11 @@ fn resolve_tiffany_home(
     Ok(PathBuf::from(home).join(".tiffany"))
 }
 
-fn resolve_tiffany_sqlite_home(sqlite_home_env: Option<OsString>, home: &PathBuf) -> PathBuf {
+fn resolve_tiffany_sqlite_home(sqlite_home_env: Option<OsString>, home: &Path) -> PathBuf {
     sqlite_home_env
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.clone())
+        .unwrap_or_else(|| home.to_path_buf())
 }
 
 #[cfg(test)]
@@ -365,7 +368,7 @@ mod tests {
     #[test]
     fn help_and_version_skip_arg0_initialization_for_tiffany() {
         assert!(is_early_clap_request(&[
-            OsString::from("tiffany"),
+            OsString::from("tiffany-loop"),
             OsString::from("--help")
         ]));
         assert!(is_early_clap_request(&[
@@ -378,7 +381,11 @@ mod tests {
             OsString::from("--version")
         ]));
         assert!(is_early_clap_request(&[
-            OsString::from("tiffany"),
+            OsString::from("tiffany-loop.exe"),
+            OsString::from("--version")
+        ]));
+        assert!(is_early_clap_request(&[
+            OsString::from("tiffany-loop"),
             OsString::from("help"),
             OsString::from("orchestrator")
         ]));

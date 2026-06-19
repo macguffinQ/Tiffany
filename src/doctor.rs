@@ -67,7 +67,7 @@ impl DoctorReport {
         let mut steps = Vec::new();
         if self.issue_count == 0 {
             steps.push(
-                "Start the UI with `tiffany orchestrator` or `./scripts/tiffany-dev` from source."
+                "Start the UI with `tiffany-loop` or `./scripts/tiffany-dev` from source."
                     .to_string(),
             );
             return steps;
@@ -88,7 +88,8 @@ impl DoctorReport {
             );
         }
         if messages.iter().any(|message| {
-            message.contains("tiffany binary not found")
+            message.contains("tiffany-loop binary not found")
+                || message.contains("tiffany binary not found")
                 || message.contains("ORCHESTRATOR_LEGACY_TUI")
                 || message.contains("not resolvable")
         }) {
@@ -202,20 +203,21 @@ fn check_tiffany_ui(builder: &mut DoctorReportBuilder, config_path: &Path) {
 
     match tiffany_install::resolve_tiffany_binary() {
         Some(binary) if binary.verified => builder.ok(format!(
-            "tiffany binary: {} ({})",
+            "tiffany-loop binary: {} ({})",
             binary.path.display(),
             binary.source_label()
         )),
         Some(binary) => {
             builder.warn(format!(
-                "tiffany binary from {} is not resolvable: {}",
+                "tiffany-loop binary from {} is not resolvable: {}",
                 binary.source_label(),
                 binary.path.display()
             ));
-            builder.hint("unset TIFFANY_BIN or point it at the installed `tiffany` binary");
+            builder.hint("unset TIFFANY_BIN or point it at the installed `tiffany-loop` binary");
         }
         None => {
-            builder.warn("tiffany binary not found; `orchestrator tui` will use legacy fallback");
+            builder
+                .warn("tiffany-loop binary not found; `orchestrator tui` will use legacy fallback");
             builder
                 .hint("install tiffany-loop or use `./scripts/tiffany-dev` from a source checkout");
         }
@@ -225,7 +227,7 @@ fn check_tiffany_ui(builder: &mut DoctorReportBuilder, config_path: &Path) {
         builder.warn("ORCHESTRATOR_LEGACY_TUI forces the old terminal chat");
         builder.hint("unset ORCHESTRATOR_LEGACY_TUI to use the tiffany-loop UI");
     } else {
-        builder.ok("orchestrator tui will prefer `tiffany orchestrator`");
+        builder.ok("orchestrator tui will prefer `tiffany-loop`");
     }
 
     if let Some((home, source)) = tiffany_install::resolved_tiffany_home() {
@@ -1033,7 +1035,7 @@ mod tests {
         let rendered = report.render_text();
 
         assert!(rendered.contains("Next steps:"));
-        assert!(rendered.contains("tiffany orchestrator"));
+        assert!(rendered.contains("tiffany-loop"));
         assert!(rendered.contains("all required checks passed"));
     }
 

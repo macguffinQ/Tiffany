@@ -89,7 +89,8 @@ cargo build --release
 
 The build scripts use a shared Cargo target directory. The root release binary
 lands at `target/release/orchestrator` for a normal release build, and the
-primary UI binary lands next to it as `target/release/tiffany`. Fast
+primary UI binary lands next to it as `target/release/tiffany-loop`, with
+`target/release/tiffany` kept as a compatibility alias. Fast
 distributable builds use `target/tiffany-dist/`. The final binaries are small
 relative to the build cache; use `./scripts/tiffany-build --fast-release --locked
 --prune-dist-cache` or `./scripts/tiffany-clean-targets --dist-cache` when you
@@ -101,12 +102,13 @@ The primary terminal UI is the tiffany-loop UI:
 
 ```bash
 ./scripts/tiffany-dev      # source checkout
-tiffany orchestrator       # installed binary
-orchestrator tui           # delegates to tiffany when installed
+tiffany-loop               # installed binary
+orchestrator tui           # delegates to tiffany-loop when installed
 ```
 
-`orchestrator tui` falls back to the legacy terminal chat only when the `tiffany`
-binary is unavailable, or when `ORCHESTRATOR_LEGACY_TUI=1` is set.
+`orchestrator tui` falls back to the legacy terminal chat only when the
+`tiffany-loop` binary is unavailable, or when `ORCHESTRATOR_LEGACY_TUI=1` is
+set.
 
 - The tiffany-loop UI preserves upstream Ratatui/Crossterm rendering, resize,
   history cells, bottom pane, overlays, and exit rendering behavior.

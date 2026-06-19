@@ -14,12 +14,12 @@ class TiffanyLoop < Formula
     system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/tiffany-cli"), "--profile", "tiffany-dist"
 
     if OS.mac? || OS.linux?
-      system "strip", "#{bin}/orchestrator", "#{bin}/tiffany"
+      system "strip", "#{bin}/orchestrator", "#{bin}/tiffany-loop", "#{bin}/tiffany"
     end
   end
 
   test do
     assert_match "orchestrator", shell_output("#{bin}/orchestrator --help")
-    assert_match "orchestrator", shell_output("#{bin}/tiffany orchestrator --help 2>/dev/null")
+    assert_match "orchestrator", shell_output("#{bin}/tiffany-loop orchestrator --help 2>/dev/null")
   end
 end

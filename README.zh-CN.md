@@ -9,7 +9,7 @@
 
 **状态：** Preview / Beta。`1.0` 之前 CLI、配置格式、TUI 行为和发布包结构都可能继续调整。
 
-正式产品名是 **tiffany-loop**。当前安装命令仍保留 `tiffany` 和 `orchestrator`，用于兼容已有脚本和用户工作流。
+正式产品名和主安装命令都是 **tiffany-loop**。旧的 `tiffany` UI 命令和底层 `orchestrator` runtime 命令仍保留，用于兼容已有脚本和高级用法。
 
 这是一个独立社区项目，不是 OpenAI、Anthropic、MiniMax 或任何模型/运行时提供商的官方产品。第三方名称只用于说明兼容工具、provider 和上游开源组件。
 
@@ -48,18 +48,18 @@ tiffany-loop orchestration mode
 
 ## 到底该运行哪个命令？
 
-正常交互使用：安装后先运行一次 `orchestrator setup`，再用 `tiffany orchestrator` 进入主界面；源码开发时用 `./scripts/tiffany-dev setup` 和 `./scripts/tiffany-dev`。
+正常交互使用：安装后先运行一次 `orchestrator setup`，再用 `tiffany-loop` 进入主界面；源码开发时用 `./scripts/tiffany-dev setup` 和 `./scripts/tiffany-dev`。
 
 | 名称 | 它是什么 | 用途 |
 |---|---|---|
-| `tiffany-loop` | 产品名 / 包名 | Release、Homebrew、文档、GitHub 项目标识 |
-| `tiffany` | 主 TUI 二进制 | 交互对话、provider 设置、角色设置、多轮编排 |
+| `tiffany-loop` | 主 UI 命令 / 包名 | 交互对话、provider 设置、角色设置、多轮编排 |
+| `tiffany` | 兼容 UI 别名 | 仍然调用 `tiffany orchestrator` 的旧脚本 |
 | `orchestrator` | runtime / 控制二进制 | 配置、事件流、ACP server、非交互运行、脚本化 |
 | `./scripts/tiffany-dev` | 源码开发辅助脚本 | 不安装二进制时从当前 checkout 启动 |
 
-这个拆分是有意的：`tiffany` 负责终端交互体验，`orchestrator` 负责
+这个拆分是有意的：`tiffany-loop` 负责终端交互体验，`orchestrator` 负责
 provider 配置、角色路由、事件流和 runtime 执行。`orchestrator tui` 在
-安装了 `tiffany` 时会自动转到 `tiffany orchestrator`。
+安装了 `tiffany-loop` 时会自动转到 `tiffany-loop orchestrator`。
 
 ## 先用最小示例试跑
 
@@ -68,7 +68,7 @@ provider 配置、角色路由、事件流和 runtime 执行。`orchestrator tui
 ```bash
 cd examples/python-fibonacci
 python3 -m unittest discover -s tests
-tiffany orchestrator
+tiffany-loop
 ```
 
 然后输入：
@@ -91,7 +91,7 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 
 开发入口：
 
-- `./scripts/tiffany-dev`：默认进入 tiffany-loop orchestrator 的 tiffany-loop orchestration mode，首次缺失时构建 `./target/debug/orchestrator` 和 `./target/debug/tiffany`，之后复用 debug binary 直接启动，打开后等待输入。
+- `./scripts/tiffany-dev`：默认进入 tiffany-loop orchestrator 的 tiffany-loop orchestration mode，首次缺失时构建 `./target/debug/orchestrator` 和 `./target/debug/tiffany-loop`，之后复用 debug binary 直接启动，打开后等待输入。
 - `./scripts/tiffany-dev --help`：只显示源码 checkout 的入口说明，不构建、不启动 UI。
 - `./scripts/tiffany-dev setup`：不安装二进制，直接运行本工程首次配置向导。
 - `./scripts/tiffany-dev config ...`：直接执行本工程 orchestrator config 命令，不会启动 TUI，也不要求 UI 登录；适合进 TUI 前先脚本化配置 provider。
@@ -111,8 +111,8 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 
 tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.tiffany`，tiffany-loop 内部配置读取会被映射到 `~/.tiffany/config.toml`，不会读写上游默认配置目录。SQLite 状态库默认也通过 `TIFFANY_SQLITE_HOME` 指到同一目录。需要多套配置时可以用 `TIFFANY_HOME=/path/to/tiffany-home` 覆盖。
 
-运行源码辅助脚本或直接运行 fork binary 时，可以设置 `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator`，也可以传 `tiffany orchestrator --bin /path/to/orchestrator`。
-安装后的发布包会同时包含 `orchestrator` 和 `tiffany`。`orchestrator tui` 会优先转到 `tiffany orchestrator`，只有找不到 `tiffany` 时才回退到旧终端对话；需要强制旧入口时设置 `ORCHESTRATOR_LEGACY_TUI=1`。
+运行源码辅助脚本或直接运行 fork binary 时，可以设置 `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator`，也可以传 `tiffany-loop orchestrator --bin /path/to/orchestrator`。
+安装后的发布包会同时包含 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。`orchestrator tui` 会优先转到 `tiffany-loop orchestrator`，只有找不到 UI binary 时才回退到旧终端对话；需要强制旧入口时设置 `ORCHESTRATOR_LEGACY_TUI=1`。
 
 ## 主要特性
 
@@ -120,7 +120,7 @@ tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.
 - **多运行时**：Claude Code、Codex CLI、直接 API。
 - **多模型/多提供商**：Anthropic、OpenAI、Google Gemini、Ollama、本地或 OpenAI 兼容端点。
 - **终端 TUI**：主线切到完整 tiffany-loop UI；旧 `orchestrator tui` 仅保留兼容。
-- **tiffany-loop 原生事件流**：`tiffany orchestrator "..."` 把 planner、critic、worker、reviewer 和最终结果写入 tiffany-loop history cell。
+- **tiffany-loop 原生事件流**：`tiffany-loop "..."` 把 planner、critic、worker、reviewer 和最终结果写入 tiffany-loop history cell。
 - **原生多轮编排**：在 orchestrator mode 下，tiffany-loop 输入框提交会被路由到 orchestrator adapter，不再走普通 tiffany-loop 模型回合。
 - **过程透明**：灰色滚动展示运行过程，`/o` 可折叠或展开后续过程详情。
 - **最终结果清晰**：最终输出为纯文本结果块，方便选中复制；`/result` 可重新输出完整结果。
@@ -138,12 +138,13 @@ tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.
 brew tap macguffinQ/tap
 brew install tiffany-loop
 orchestrator setup
-tiffany orchestrator
+tiffany-loop
 ```
 
-Homebrew 包会同时安装两个命令：
+Homebrew 包会同时安装三个命令：
 
-- `tiffany`：主终端 UI，启动用 `tiffany orchestrator`。
+- `tiffany-loop`：主终端 UI，优先使用这个命令。
+- `tiffany`：兼容旧脚本的 UI 别名。
 - `orchestrator`：配置、角色、事件流、ACP 和非交互运行。
 
 安装后：
@@ -152,12 +153,12 @@ Homebrew 包会同时安装两个命令：
 orchestrator init
 orchestrator setup
 orchestrator doctor
-tiffany orchestrator
+tiffany-loop
 ```
 
 进入 TUI 后，用 `/provider` 配置 provider，用 `/role` 注册 planner、critic、worker、reviewer 等角色。
 
-每个 `v*` tag 发布后，GitHub Releases 会优先提供 macOS Apple Silicon 预编译二进制，压缩包内也包含两个命令。Linux、Windows 和 Intel Mac 目前可先从源码安装，后续再补更多预编译目标。
+每个 `v*` tag 发布后，GitHub Releases 会优先提供 macOS Apple Silicon 预编译二进制，压缩包内包含 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。Linux、Windows 和 Intel Mac 目前可先从源码安装，后续再补更多预编译目标。
 
 贡献者源码运行：
 
@@ -174,20 +175,20 @@ cd ~/code/orchestrator
 ```bash
 cargo install --path . --profile tiffany-dist
 cargo install --path tiffany-ui/codex-rs/tiffany-cli --profile tiffany-dist
-strip "$(command -v orchestrator)" "$(command -v tiffany)" 2>/dev/null || true
+strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v tiffany)" 2>/dev/null || true
 ```
 
 ```bash
 # 示例：安装下载好的 macOS Apple Silicon 压缩包
 tar -xzf tiffany-loop-v0.1.11-aarch64-apple-darwin.tar.gz
 cd tiffany-loop-v0.1.11-aarch64-apple-darwin
-chmod +x orchestrator tiffany
+chmod +x orchestrator tiffany-loop tiffany
 ./orchestrator setup
 ./orchestrator doctor
-./tiffany orchestrator
+./tiffany-loop
 ```
 
-`tiffany-loop` 安装包会提供 `orchestrator` 和 `tiffany` 两个二进制；当前 GitHub 仓库名仍是 `Tiffany`。
+`tiffany-loop` 安装包会提供 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`；当前 GitHub 仓库名仍是 `Tiffany`。
 tag release 目前优先提供 Homebrew 使用的 macOS Apple Silicon 压缩包；Intel Mac、Linux 和 Windows 可以先从源码安装。
 公开 Homebrew 安装要求 `macguffinQ/Tiffany` 仓库和 release assets 对外公开。
 
@@ -207,7 +208,7 @@ orchestrator doctor
 
 # 4. 进入主 TUI
 cd ~/your-project
-tiffany orchestrator
+tiffany-loop
 
 # 5. 或者运行单次非交互任务
 orchestrator run "implement fibonacci in src/fib.rs"
@@ -293,13 +294,13 @@ behavior:
 | `./scripts/tiffany-dev` | 运行 tiffany-loop UI |
 | `./scripts/tiffany-dev setup` | 从源码运行首次配置向导 |
 | `./scripts/tiffany-dev orchestrator` | 从 tiffany-loop fork 桥接到现有 orchestrator runtime |
-| `./scripts/tiffany-build [args]` | 在共享 `./target` 中同时构建两个二进制；可透传 `--release --locked`，也可用默认 strip 的 `--fast-release --locked`；加 `--prune-dist-cache` 可只保留最终 dist 二进制 |
+| `./scripts/tiffany-build [args]` | 在共享 `./target` 中构建 runtime 和 UI 二进制；可透传 `--release --locked`，也可用默认 strip 的 `--fast-release --locked`；加 `--prune-dist-cache` 可只保留最终 dist 二进制 |
 | `./scripts/tiffany-check --smoke` | 执行快速本地 fork/bridge/example 验证 |
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/bridge/example 验证 |
 | `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | 执行汇总后的本地发布前检查 |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
-| `tiffany orchestrator` | 安装后打开主 tiffany-loop UI |
+| `tiffany-loop` | 安装后打开主 tiffany-loop UI |
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | 引导式配置 provider、model、role |
 | `orchestrator run "..."` | 执行一个任务 |
@@ -307,7 +308,7 @@ behavior:
 | `orchestrator config provider list|presets` | 查看 provider 配置或内置预设 |
 | `orchestrator roles list` | 查看已注册角色 |
 | `orchestrator roles register <role> --model <id> --runtime <runtime>` | 注册或更新角色绑定 |
-| `orchestrator tui` | 找到 `tiffany` 时打开主 tiffany-loop UI；否则回退到旧终端对话 |
+| `orchestrator tui` | 找到 `tiffany-loop` 时打开主 tiffany-loop UI；否则回退到旧终端对话 |
 | `orchestrator tui --ratatui` | 旧兼容参数；仅保留给老脚本 |
 | `orchestrator tui --new-tab` | 在 zellij 中打开新 tab |
 | `orchestrator tui --detach` | 后台启动终端对话 |
@@ -317,7 +318,7 @@ behavior:
 | `orchestrator sessions grep <pattern> --limit 10` | 搜索会话日志，显示可读摘要和可复制打开命令 |
 | `orchestrator sessions import-cc` | 导入 Claude Code 历史会话 |
 | `orchestrator config` | 查看和修改 orchestrator 配置 |
-| `orchestrator status` | 查看两个安装命令、配置根目录、桥接命令、mux 和日志路径 |
+| `orchestrator status` | 查看安装命令、配置根目录、桥接命令、mux 和日志路径 |
 | `orchestrator doctor` | 诊断 tiffany UI 查找、配置、runtime、API key、角色绑定和本地工具 |
 
 ## 终端界面
@@ -331,7 +332,7 @@ behavior:
 安装后运行：
 
 ```bash
-tiffany orchestrator
+tiffany-loop
 orchestrator tui
 ```
 
@@ -341,7 +342,7 @@ orchestrator tui
 ./scripts/tiffany-dev orchestrator
 ```
 
-`orchestrator tui` 会优先查找同目录或 `PATH` 里的 `tiffany` 并启动 `tiffany orchestrator`。找不到时才使用旧兼容入口；需要强制旧入口时使用：
+`orchestrator tui` 会优先查找同目录或 `PATH` 里的 `tiffany-loop` 并启动 `tiffany-loop orchestrator`。找不到 UI binary 时才使用旧兼容入口；需要强制旧入口时使用：
 
 ```bash
 ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
@@ -393,12 +394,12 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 
 优先排障：
 
-- 不确定当前用的是哪个 `tiffany` / `orchestrator` binary 或配置根目录时，先运行 `orchestrator status`。
+- 不确定当前用的是哪个 `tiffany-loop` / `orchestrator` binary 或配置根目录时，先运行 `orchestrator status`。
 - worker 提前退出、provider 报 `model not found` / `模型不存在` / `401/403`、或者 API key 看起来没生效时，先运行 `/doctor` 或 `orchestrator doctor`。
 - doctor 会在不打印密钥的前提下检查环境变量 key 引用，验证 `role -> model -> provider -> runtime` 是否连通，提示重复/缺失 model，并显示本机安装/构建环境：Homebrew tap/package、Rust/cargo、Xcode/CLT 和 worker CLI 二进制。
 - 模型报错时，重点确认角色里的内部 model id 是否指向正确的 provider API model name：用 `/role <role>`，或 `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>` 修正。
 
-`tiffany orchestrator "..."` 进入后，直接在 tiffany-loop 输入框继续问即可触发下一轮 orchestrator 编排。运行中输入的普通消息会停留在底部队列，当前任务结束后合并为下一批一起执行。底部最多预览 4 条，完整队列可用 `/queue show` 查看。
+`tiffany-loop "..."` 进入后，直接在 tiffany-loop 输入框继续问即可触发下一轮 orchestrator 编排。运行中输入的普通消息会停留在底部队列，当前任务结束后合并为下一批一起执行。底部最多预览 4 条，完整队列可用 `/queue show` 查看。
 
 建议顺序：先用 `/provider` 配置 provider，再用 `/role` 注册角色；`/roles register ...` 仍保留给命令行式输入。tiffany-loop UI 启动时会读取 `~/.orchestrator/config.yaml`。
 
@@ -539,13 +540,13 @@ cargo run -- config
 - 对话流程图摘要
 - patch checkpoint / rollback
 - 完整 tiffany-loop UI：`tiffany-ui/`
-- tiffany-loop CLI binary
-- `tiffany orchestrator "..."` 原生 tiffany-loop TUI 事件 adapter
+- `tiffany-loop` CLI binary
+- `tiffany-loop "..."` 原生 tiffany-loop TUI 事件 adapter
 - 原生 tiffany-loop 输入框多轮 orchestrator 提交
-- `tiffany orchestrator --legacy ...` 兼容旧 runtime
+- `tiffany-loop orchestrator --legacy ...` 兼容旧 runtime
 - 已 vendor tiffany-loop TUI 源码快照：`third_party/openai-codex/codex-rs/tui`
-- `orchestrator tui` 在安装了 `tiffany` 时默认进入 tiffany-loop UI
-- Release/Homebrew 同时安装 `orchestrator` 和 `tiffany`
+- `orchestrator tui` 在安装了 `tiffany-loop` 时默认进入 tiffany-loop UI
+- Release/Homebrew 同时安装 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`
 
 计划中：
 

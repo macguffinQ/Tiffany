@@ -145,7 +145,7 @@ impl ChatWidget {
         if !self.tiffany_orchestrator_shell {
             self.add_error_message(
                 format!(
-                    "'/roles' is available in tiffany-loop orchestrator mode. Start it with `tiffany orchestrator` or `./scripts/tiffany-dev`.\n{ROLES_USAGE}"
+                    "'/roles' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{ROLES_USAGE}"
                 ),
             );
             return;
@@ -157,7 +157,7 @@ impl ChatWidget {
     fn dispatch_tiffany_role_command(&mut self, args: impl Into<String>) {
         if !self.tiffany_orchestrator_shell {
             self.add_error_message(format!(
-                "'/role' is available in tiffany-loop orchestrator mode. Start it with `tiffany orchestrator` or `./scripts/tiffany-dev`.\n{ROLE_USAGE}"
+                "'/role' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{ROLE_USAGE}"
             ));
             return;
         }
@@ -168,7 +168,7 @@ impl ChatWidget {
     fn dispatch_tiffany_provider_command(&mut self, args: impl Into<String>) {
         if !self.tiffany_orchestrator_shell {
             self.add_error_message(format!(
-                "'/provider' is available in tiffany-loop orchestrator mode. Start it with `tiffany orchestrator` or `./scripts/tiffany-dev`.\n{PROVIDER_USAGE}"
+                "'/provider' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{PROVIDER_USAGE}"
             ));
             return;
         }
@@ -179,7 +179,7 @@ impl ChatWidget {
     fn dispatch_tiffany_doctor_command(&mut self, args: impl Into<String>) {
         if !self.tiffany_orchestrator_shell {
             self.add_error_message(format!(
-                "'/doctor' is available in tiffany-loop orchestrator mode. Start it with `tiffany orchestrator` or `./scripts/tiffany-dev`.\n{DOCTOR_USAGE}"
+                "'/doctor' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{DOCTOR_USAGE}"
             ));
             return;
         }
@@ -190,7 +190,7 @@ impl ChatWidget {
     fn open_tiffany_provider_setup_prompt(&mut self, provider: Option<&str>) {
         if !self.tiffany_orchestrator_shell {
             self.add_error_message(format!(
-                "'/provider' is available in tiffany-loop orchestrator mode. Start it with `tiffany orchestrator` or `./scripts/tiffany-dev`.\n{PROVIDER_USAGE}"
+                "'/provider' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{PROVIDER_USAGE}"
             ));
             return;
         }
@@ -218,7 +218,7 @@ impl ChatWidget {
     fn open_tiffany_role_setup_prompt(&mut self, role: Option<&str>) {
         if !self.tiffany_orchestrator_shell {
             self.add_error_message(format!(
-                "'/role' is available in tiffany-loop orchestrator mode. Start it with `tiffany orchestrator` or `./scripts/tiffany-dev`.\n{ROLE_USAGE}"
+                "'/role' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{ROLE_USAGE}"
             ));
             return;
         }

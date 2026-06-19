@@ -7,9 +7,9 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   printf '%s\n' \
     "Usage: ./scripts/tiffany-build [cargo-build-args...]" \
     "" \
-    "Builds both binaries:" \
+    "Builds runtime and UI binaries:" \
     "  - target/*/orchestrator" \
-    "  - target/*/tiffany" \
+    "  - target/*/tiffany-loop (plus tiffany compatibility alias)" \
     "" \
     "Examples:" \
     "  ./scripts/tiffany-build" \
@@ -105,13 +105,13 @@ run_build() {
 }
 
 run_build "orchestrator" "$repo_dir" --bin orchestrator
-run_build "tiffany-loop UI" "$repo_dir/tiffany-ui/codex-rs" -p tiffany-cli --bin tiffany
+run_build "tiffany-loop UI" "$repo_dir/tiffany-ui/codex-rs" -p tiffany-cli --bin tiffany-loop --bin tiffany
 
 if [[ "$dist_mode" == "1" && "${TIFFANY_NO_STRIP:-0}" != "1" ]]; then
   case "$(uname -s)" in
     Darwin|Linux)
       if command -v strip >/dev/null 2>&1; then
-        for binary in "$target_dir/tiffany-dist/orchestrator" "$target_dir/tiffany-dist/tiffany"; do
+        for binary in "$target_dir/tiffany-dist/orchestrator" "$target_dir/tiffany-dist/tiffany-loop" "$target_dir/tiffany-dist/tiffany"; do
           if [[ -x "$binary" ]]; then
             echo "stripping $(basename "$binary")..."
             strip "$binary" || true

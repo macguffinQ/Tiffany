@@ -835,11 +835,7 @@ fn doctor_repair_actions(text: &str) -> Vec<DoctorRepairAction> {
         );
     }
     if actions.is_empty() && lower.contains("all required checks passed") {
-        push_doctor_action(
-            &mut actions,
-            "tiffany orchestrator",
-            "start an orchestration run",
-        );
+        push_doctor_action(&mut actions, "tiffany-loop", "start an orchestration run");
     }
 
     actions
@@ -2335,7 +2331,7 @@ mod tests {
         let lines = doctor_repair_lines("✓ all required checks passed");
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-        assert!(text.contains("repair  tiffany orchestrator  start an orchestration run"));
+        assert!(text.contains("repair  tiffany-loop  start an orchestration run"));
     }
 
     #[test]
