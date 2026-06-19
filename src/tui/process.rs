@@ -122,6 +122,9 @@ fn should_skip_recorded_run_event(input: &InputState, event: &str) -> bool {
 
 fn run_event_is_low_value_output(event: &str) -> bool {
     let Some((head, body)) = event.split_once(": ") else {
+        if let Some(output) = event.strip_prefix("worker output  ") {
+            return is_low_value_execution_output(output);
+        }
         return false;
     };
 
@@ -357,6 +360,9 @@ fn split_trace_time(line: &str) -> (&str, &str) {
 }
 
 fn summarize_trace_body(body: &str) -> (&'static str, String) {
+    if let Some((kind, summary)) = compact_process_body_view(body) {
+        return (kind, summary);
+    }
     if let Some(prompt) = body.strip_prefix("Started run: ") {
         return (
             "start",
@@ -463,6 +469,17 @@ fn summarize_worker_content(content: &str, max: usize) -> Option<String> {
     (!display.trim().is_empty()).then_some(display)
 }
 
+fn compact_event_summary(display: &str, max: usize) -> String {
+    let summary = display
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    truncate_chars(&summary, max)
+}
+
 fn role_label(role: &str) -> &'static str {
     match role {
         "planner" => "plan",
@@ -474,10 +491,10 @@ fn role_label(role: &str) -> &'static str {
 
 fn trace_state(input: &InputState, terminal: bool) -> (&'static str, &'static str) {
     if let Some(last) = input.run_events.last() {
-        if last.contains("Failed:") {
+        if last.contains("Failed:") || last.contains("error  ") {
             return ("✗", "failed");
         }
-        if last.contains("Cancelled by user") {
+        if last.contains("Cancelled by user") || last.contains("cancel  ") {
             return ("○", "cancelled");
         }
     }
@@ -504,6 +521,96 @@ fn trace_kind_icon(kind: &str) -> &'static str {
         "start" => "○",
         _ => "·",
     }
+}
+
+fn compact_process_body_view(body: &str) -> Option<(&'static str, String)> {
+    for (prefix, kind) in [
+        ("start  ", "start"),
+        ("route  ", "route"),
+        ("plan  ", "plan"),
+        ("critic  ", "critic"),
+        ("run  ", "run"),
+        ("worker  ", "worker"),
+        ("worker output  ", "worker"),
+        ("review  ", "review"),
+        ("done  ", "done"),
+        ("error  ", "error"),
+        ("cancel  ", "cancel"),
+    ] {
+        if let Some(summary) = body.strip_prefix(prefix) {
+            return Some((kind, humanize_jsonish(summary.trim(), 260)));
+        }
+    }
+    None
+}
+
+fn legacy_process_body_to_compact(body: &str) -> Option<String> {
+    if let Some(prompt) = body.strip_prefix("Started run: ") {
+        return Some(format!(
+            "start  task accepted · {}",
+            truncate_chars(prompt, 160)
+        ));
+    }
+    if let Some(agent) = body.strip_prefix("Agent hint: ") {
+        return Some(format!("route  routing hint · {}", agent.trim()));
+    }
+    if body == "Planning: decomposing task" {
+        return Some("plan  planning work".into());
+    }
+    if let Some(count) = body.strip_prefix("Planned: ") {
+        return Some(format!("plan  plan ready · {}", count.trim()));
+    }
+    if let Some(round) = body.strip_prefix("Critiquing: ") {
+        return Some(format!("critic  checking plan · {}", round.trim()));
+    }
+    if body == "Critique: approved" {
+        return Some("critic  plan approved".into());
+    }
+    if let Some(issues) = body.strip_prefix("Critique: rejected with ") {
+        return Some(format!("critic  plan needs changes · {}", issues.trim()));
+    }
+    if let Some(attempt) = body.strip_prefix("Replanning: ") {
+        return Some(format!("plan  updating plan · {}", attempt.trim()));
+    }
+    if let Some(count) = body.strip_prefix("Executing: ") {
+        return Some(format!("run  running {}", count.trim()));
+    }
+    if let Some(worker) = body.strip_prefix("Worker started: ") {
+        return Some(format!("worker  {}", worker.trim()));
+    }
+    if let Some(worker) = body.strip_prefix("Worker done: ") {
+        return Some(format!("worker  done · {}", worker.trim()));
+    }
+    if let Some(worker) = body.strip_prefix("Worker failed: ") {
+        return Some(format!("worker  failed · {}", worker.trim()));
+    }
+    if let Some(task) = body.strip_prefix("Reviewing: ") {
+        return Some(format!("review  checking worker output · {}", task.trim()));
+    }
+    if let Some(task) = body.strip_prefix("Review approved: ") {
+        return Some(format!("review  passed · {}", task.trim()));
+    }
+    if let Some(rest) = body.strip_prefix("Review rejected: ") {
+        let rest = rest.trim();
+        if let Some((task, issues)) = rest.split_once(" with ") {
+            return Some(format!(
+                "review  needs fixes · {} · {}",
+                task.trim(),
+                issues.trim()
+            ));
+        }
+        return Some(format!("review  needs fixes · {rest}"));
+    }
+    if let Some(done) = body.strip_prefix("Done: ") {
+        return Some(format!("done  {}", done.trim()));
+    }
+    if let Some(error) = body.strip_prefix("Failed: ") {
+        return Some(format!("error  {}", humanize_jsonish(error.trim(), 220)));
+    }
+    if body == "Cancelled by user" {
+        return Some("cancel  cancelled by user".into());
+    }
+    None
 }
 
 fn live_trace_mode(input: &InputState) -> &'static str {
@@ -535,36 +642,39 @@ pub(super) fn format_run_event(event: &RunProgress) -> String {
 
 fn format_run_event_for_recording(event: &RunProgress) -> Option<String> {
     match event {
-        RunProgress::Planning => Some("Planning: decomposing task".into()),
+        RunProgress::Planning => Some("plan  planning work".into()),
         RunProgress::Planned { sub_task_count } => {
-            Some(format!("Planned: {} sub-task(s)", sub_task_count))
+            Some(format!("plan  plan ready · {} sub-task(s)", sub_task_count))
         }
-        RunProgress::Critiquing { round } => Some(format!("Critiquing: round {}", round)),
+        RunProgress::Critiquing { round } => {
+            Some(format!("critic  checking plan · round {}", round))
+        }
         RunProgress::CritiqueResult { approved, issues } => {
             if *approved {
-                Some("Critique: approved".into())
+                Some("critic  plan approved".into())
             } else {
-                Some(format!("Critique: rejected with {} issue(s)", issues))
+                Some(format!("critic  plan needs changes · {} issue(s)", issues))
             }
         }
-        RunProgress::Replanning { attempt } => Some(format!("Replanning: attempt {}", attempt)),
+        RunProgress::Replanning { attempt } => {
+            Some(format!("plan  updating plan · attempt {}", attempt))
+        }
         RunProgress::Executing { sub_task_count } => {
-            Some(format!("Executing: {} sub-task(s)", sub_task_count))
+            Some(format!("run  running {} sub-task(s)", sub_task_count))
         }
         RunProgress::WorkerStarted {
             task_id,
-            agent,
+            agent: _,
             role,
             runtime,
             model,
             provider,
             ..
         } => Some(format!(
-            "Worker started: {} via {} ({}, {}, {})",
+            "worker  {} started · {} · {} · {}",
             role,
             runtime,
             provider_model_label(provider.as_deref(), model),
-            agent,
             &task_id.to_string()[..8]
         )),
         RunProgress::WorkerOutput {
@@ -580,10 +690,10 @@ fn format_run_event_for_recording(event: &RunProgress) -> Option<String> {
             }
             let display = summarize_worker_content(content, 160)?;
             Some(format!(
-                "Worker output: {} {}: {}",
+                "worker output  {} {}: {}",
                 &task_id.to_string()[..8],
                 agent,
-                truncate_chars(&display, 160)
+                compact_event_summary(&display, 160)
             ))
         }
         RunProgress::RoleOutput { role, content } => {
@@ -591,44 +701,48 @@ fn format_run_event_for_recording(event: &RunProgress) -> Option<String> {
                 return None;
             }
             let display = summarize_execution_output(content, 180)?;
-            Some(format!("{} output: {}", role, display))
+            Some(format!(
+                "{}  {}",
+                role_label(role),
+                compact_event_summary(&display, 180)
+            ))
         }
         RunProgress::WorkerDone {
             task_id,
-            agent,
+            agent: _,
             role,
             duration_ms,
             ok,
         } => Some(format!(
-            "Worker {}: {} ({}, {}, {})",
-            if *ok { "done" } else { "failed" },
+            "worker  {} {} · {} · {}",
             role,
-            agent,
+            if *ok { "done" } else { "failed" },
             &task_id.to_string()[..8],
-            format_duration_ms(*duration_ms)
+            format_duration_ms(*duration_ms),
         )),
-        RunProgress::Reviewing { task_id } => {
-            Some(format!("Reviewing: {}", &task_id.to_string()[..8]))
-        }
+        RunProgress::Reviewing { task_id } => Some(format!(
+            "review  checking worker output · {}",
+            &task_id.to_string()[..8]
+        )),
         RunProgress::ReviewResult {
             task_id,
             approved,
             issues,
         } => {
             if *approved {
-                Some(format!("Review approved: {}", &task_id.to_string()[..8]))
+                Some(format!("review  passed · {}", &task_id.to_string()[..8]))
             } else {
                 Some(format!(
-                    "Review rejected: {} with {} issue(s)",
+                    "review  needs fixes · {} · {} issue(s)",
                     &task_id.to_string()[..8],
                     issues
                 ))
             }
         }
         RunProgress::Done { task_count } => {
-            Some(format!("Done: {} sub-task(s) completed", task_count))
+            Some(format!("done  {} sub-task(s) completed", task_count))
         }
-        RunProgress::Failed(msg) => Some(format!("Failed: {}", humanize_jsonish(msg, 180))),
+        RunProgress::Failed(msg) => Some(format!("error  {}", humanize_jsonish(msg, 180))),
     }
 }
 
@@ -781,6 +895,9 @@ fn process_event_is_important(line: &str) -> bool {
         || body.starts_with("Review approved:")
         || body.starts_with("Done:")
         || body.starts_with("Failed:")
+        || compact_process_body_view(body).is_some_and(|(kind, _)| kind != "worker")
+        || body.starts_with("worker  ")
+        || body.starts_with("error  ")
         || body == "Cancelled by user"
 }
 
@@ -802,12 +919,21 @@ fn humanize_process_event_line(line: &str) -> String {
         return humanize_jsonish(line, 260);
     };
     let body = body.trim();
+    if let Some(compact) = legacy_process_body_to_compact(body) {
+        return format!("{time}  {compact}");
+    }
     if let Some(output) = body.strip_prefix("Worker output: ") {
         return format!(
             "{}  Worker output: {}",
             time,
             summarize_worker_output(output)
         );
+    }
+    if let Some(output) = body.strip_prefix("worker output  ") {
+        return format!("{time}  worker output  {}", summarize_worker_output(output));
+    }
+    if compact_process_body_view(body).is_some() {
+        return format!("{time}  {body}");
     }
     if let Some((head, raw)) = body.split_once(": ") {
         return format!("{}  {}: {}", time, head, humanize_jsonish(raw, 220));
@@ -936,8 +1062,8 @@ mod tests {
 
         let formatted = format_process_capture(&input, 20);
 
-        assert!(formatted.contains("Worker started"));
-        assert!(!formatted.contains("Planning:"));
+        assert!(formatted.contains("worker  agent-a"));
+        assert!(!formatted.contains("plan  planning work"));
         assert!(formatted.contains("total 2"));
     }
 
@@ -986,10 +1112,48 @@ mod tests {
             content: r#"{"approved":false,"issues":["missing test"]}"#.into(),
         });
 
-        assert!(line.contains("critic output"));
+        assert!(line.contains("critic  needs changes: 1 issue(s)"));
         assert!(line.contains("needs changes: 1 issue(s)"));
         assert!(line.contains("missing test"));
         assert!(!line.contains('{'));
+    }
+
+    #[test]
+    fn run_events_record_compact_waterfall_lifecycle() {
+        let task_id = uuid::Uuid::nil();
+
+        let started = format_run_event(&RunProgress::WorkerStarted {
+            task_id,
+            agent: "claude-code".into(),
+            role: "worker-cc".into(),
+            runtime: "claude-code".into(),
+            model: "MiniMax-M3".into(),
+            provider: Some("minimax".into()),
+            prompt: "do the task".into(),
+        });
+        assert_eq!(
+            started,
+            "worker  worker-cc started · claude-code · minimax/MiniMax-M3 · 00000000"
+        );
+
+        let done = format_run_event(&RunProgress::WorkerDone {
+            task_id,
+            agent: "claude-code".into(),
+            role: "worker-cc".into(),
+            duration_ms: 1_250,
+            ok: true,
+        });
+        assert_eq!(done, "worker  worker-cc done · 00000000 · 1.2s");
+
+        let review = format_run_event(&RunProgress::ReviewResult {
+            task_id,
+            approved: false,
+            issues: 2,
+        });
+        assert_eq!(review, "review  needs fixes · 00000000 · 2 issue(s)");
+
+        assert!(!started.contains("Worker started:"));
+        assert!(!review.contains("Review rejected:"));
     }
 
     #[test]
@@ -1056,9 +1220,9 @@ mod tests {
         let formatted = format_process_summary(&input);
 
         assert!(formatted.contains("Process summary"));
-        assert!(formatted.contains("Planning:"));
-        assert!(formatted.contains("Worker started"));
-        assert!(formatted.contains("Done:"));
+        assert!(formatted.contains("plan  planning work"));
+        assert!(formatted.contains("worker  claude-code (abcdef12)"));
+        assert!(formatted.contains("done  1 sub-task(s) completed"));
         assert!(!formatted.contains("incremental log line"));
         assert!(formatted.contains("/process full"));
     }
@@ -1076,9 +1240,9 @@ mod tests {
         let formatted = format_failure_context(&input).expect("failure context");
 
         assert!(formatted.contains("Recent process:"));
-        assert!(formatted.contains("Planning:"));
-        assert!(formatted.contains("Worker started"));
-        assert!(formatted.contains("Failed: command exited 1"));
+        assert!(formatted.contains("plan  planning work"));
+        assert!(formatted.contains("worker  claude-code (abcdef12)"));
+        assert!(formatted.contains("error  command exited 1"));
         assert!(!formatted.contains("verbose progress"));
         assert!(formatted.contains("/process full"));
     }

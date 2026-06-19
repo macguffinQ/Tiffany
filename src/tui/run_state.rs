@@ -233,14 +233,14 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
         }
         RunProgress::CritiqueResult { approved, issues } => {
             let msg = if approved {
-                "▸ Critic approved ✓ (round ok, no issues)".to_string()
+                "✓ critic  plan approved".to_string()
             } else {
-                format!("▸ Critic rejected ({} issues). Replanning…", issues)
+                format!("● critic  plan needs changes · {} issue(s)", issues)
             };
             input.current_stage = if approved {
-                "Critic approved ✓".into()
+                "critic: plan approved".into()
             } else {
-                format!("Critic rejected ({} issues)", issues)
+                format!("critic: needs changes · {} issue(s)", issues)
             };
             input.current_stage_detail.clear();
             update_last_assistant(input, msg, "thinking");
@@ -279,7 +279,7 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
             ..
         } => {
             let id8 = &task_id.to_string()[..8];
-            input.current_stage = format!("Worker: {} ({})", role, id8);
+            input.current_stage = format!("worker: {} started · {}", role, id8);
             input.current_stage_detail = format!(
                 "{} · {} · {}",
                 runtime,
@@ -289,7 +289,7 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
             update_last_assistant(
                 input,
                 format!(
-                    "▸ Worker started: {} via {} ({}, {})",
+                    "● worker  {} started · {} · {} · {}",
                     role,
                     runtime,
                     provider_model_label(provider.as_deref(), &model),
@@ -316,14 +316,14 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
             }
             input.current_stage = if ok {
                 format!(
-                    "Worker done ✓: {} ({}, {})",
+                    "worker: {} done · {} · {}",
                     role,
                     id8,
                     format_duration_ms(duration_ms)
                 )
             } else {
                 format!(
-                    "Worker failed: {} ({}, {})",
+                    "worker: {} failed · {} · {}",
                     role,
                     id8,
                     format_duration_ms(duration_ms)
@@ -333,11 +333,11 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
         }
         RunProgress::Reviewing { task_id } => {
             let id8 = &task_id.to_string()[..8];
-            input.current_stage = format!("Reviewing ({})", id8);
-            input.current_stage_detail = "checking output + diff".into();
+            input.current_stage = format!("review: checking worker output · {}", id8);
+            input.current_stage_detail = "checking output".into();
             update_last_assistant(
                 input,
-                format!("▸ Reviewing ({}) — checking output + diff…", id8),
+                format!("● review  checking worker output · {}", id8),
                 "thinking",
             );
         }
@@ -351,9 +351,9 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
                 input.run_review_issue_count += issues.max(1);
             }
             input.current_stage = if approved {
-                format!("Approved ✓ ({})", id8)
+                format!("review: passed · {}", id8)
             } else {
-                format!("Rejected ({} issues)", issues)
+                format!("review: needs fixes · {} · {} issue(s)", id8, issues)
             };
         }
         RunProgress::Done { task_count } => {
