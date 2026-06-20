@@ -48,7 +48,7 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 Name: HOMEBREW_TAP_TOKEN
 ```
 
-After that, pushing a tag like `v0.1.12` will:
+After that, pushing a tag like `v0.1.13` will:
 
 1. Run `./scripts/tiffany-release-preflight --quick --tag <tag>` on the tagged commit.
 2. Build the macOS Apple Silicon release archive used by Homebrew.
@@ -74,7 +74,7 @@ git ls-remote --heads https://github.com/macguffinQ/homebrew-tap.git main
 Manual tap update fallback:
 
 ```bash
-tag=v0.1.12
+tag=v0.1.13
 version="${tag#v}"
 asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
 
@@ -116,7 +116,7 @@ From a source checkout with matching binaries built, maintainers can also run
 the isolated install smoke against a binary directory:
 
 ```bash
-./scripts/tiffany-install-smoke --bin-dir /path/to/tiffany-loop-v0.1.12-aarch64-apple-darwin
+./scripts/tiffany-install-smoke --bin-dir /path/to/tiffany-loop-v0.1.13-aarch64-apple-darwin
 ```
 
 ## Formula template

@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.13] - 2026-06-20
+
+### Fixed
+
+- Suppressed upstream OpenAI Codex update prompts in `tiffany-loop`
+  orchestrator mode.
+- Resolved the sibling `orchestrator` binary before falling back to `PATH`, so
+  the TUI event bridge works from Homebrew and archived installs even when the
+  shell `PATH` is minimal.
+- Made release Homebrew tap updates fail loudly when `HOMEBREW_TAP_TOKEN` is
+  missing, preventing GitHub Releases and the tap formula from drifting.
+
 ### Added
 
 - Added a zero-dependency Python Fibonacci example for validating setup,

@@ -197,8 +197,8 @@ strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v ti
 
 ```bash
 # 示例：安装下载好的 macOS Apple Silicon 压缩包
-tar -xzf tiffany-loop-v0.1.12-aarch64-apple-darwin.tar.gz
-cd tiffany-loop-v0.1.12-aarch64-apple-darwin
+tar -xzf tiffany-loop-v0.1.13-aarch64-apple-darwin.tar.gz
+cd tiffany-loop-v0.1.13-aarch64-apple-darwin
 chmod +x orchestrator tiffany-loop tiffany
 ./orchestrator setup
 ./orchestrator doctor
@@ -548,7 +548,7 @@ cargo build --release
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --quick
-./scripts/tiffany-release-preflight --full --tag v0.1.12   # 打 tag 前
+./scripts/tiffany-release-preflight --full --tag v0.1.13   # 打 tag 前
 
 # 直接在 tiffany-ui/codex-rs 中执行 cargo，也会使用根目录 ./target。
 # 用 ./scripts/tiffany-clean-targets --top 定位体积来源；
