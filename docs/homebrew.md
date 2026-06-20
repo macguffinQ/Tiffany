@@ -73,34 +73,21 @@ gh run view <run-id> --repo macguffinQ/Tiffany --json jobs
 git ls-remote --heads https://github.com/macguffinQ/homebrew-tap.git main
 ```
 
-Manual tap update fallback:
+Manual tap update fallback from this repository:
 
 ```bash
 tag=v0.1.13
-version="${tag#v}"
-asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
+./scripts/tiffany-update-homebrew-tap --tag "$tag" --tap-dir ../homebrew-tap
 
-arm_sha="$(
-  gh release view "$tag" \
-    --repo macguffinQ/Tiffany \
-    --json assets \
-    --jq ".assets[] | select(.name == \"${asset}\") | .digest" |
-    sed 's/^sha256://'
-)"
-source_sha="$(
-  gh api "repos/macguffinQ/Tiffany/tarball/${tag}" |
-    shasum -a 256 |
-    awk '{print $1}'
-)"
-
-git clone https://github.com/macguffinQ/homebrew-tap.git /tmp/homebrew-tap
-cd /tmp/homebrew-tap
-# Edit Formula/tiffany-loop.rb to use $version, $tag, $arm_sha, and $source_sha.
+cd ../homebrew-tap
 ruby -c Formula/tiffany-loop.rb
 git add Formula/tiffany-loop.rb
 git commit -m "Update tiffany-loop to ${tag}"
 git push
 ```
+
+Use `--dry-run` to print the generated formula without writing files, or
+`--commit --push` when the tap remote and credentials are already correct.
 
 After pushing the tap, verify the published archive before telling users to install:
 

@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/tiffany-update-homebrew-tap [--tag vX.Y.Z] [options]
+
+Updates the Homebrew tap formula from an already-published GitHub Release.
+
+Options:
+  --tag TAG        Release tag to publish. Defaults to v<root Cargo.toml version>.
+  --repo REPO      GitHub release repo. Default: macguffinQ/Tiffany.
+  --tap-repo REPO  Homebrew tap repo to clone when --tap-dir is absent.
+                  Default: macguffinQ/homebrew-tap.
+  --tap-dir DIR    Existing tap checkout. Default: ../homebrew-tap, cloned if missing.
+  --dry-run        Print the generated Formula/tiffany-loop.rb and do not write files.
+  --commit         Commit the formula change in the tap checkout.
+  --push           Commit and push the formula change.
+
+Examples:
+  ./scripts/tiffany-update-homebrew-tap --tag v0.1.13 --dry-run
+  ./scripts/tiffany-update-homebrew-tap --tag v0.1.13 --tap-dir ../homebrew-tap
+  ./scripts/tiffany-update-homebrew-tap --tag v0.1.13 --tap-dir ../homebrew-tap --commit --push
+EOF
+}
+
+root_package_version() {
+  awk '
+    /^\[package\]/ { in_package = 1; next }
+    /^\[/ && in_package { exit }
+    in_package && $1 == "version" {
+      gsub(/"/, "", $3)
+      print $3
+      exit
+    }
+  ' "$repo_dir/Cargo.toml"
+}
+
+sha256_stream() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  else
+    echo "sha256sum or shasum is required" >&2
+    exit 1
+  fi
+}
+
+release_repo="macguffinQ/Tiffany"
+tap_repo="macguffinQ/homebrew-tap"
+tap_dir="${TIFFANY_HOMEBREW_TAP_DIR:-}"
+tag=""
+dry_run=false
+commit_formula=false
+push_formula=false
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --tag)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      tag="$2"
+      shift
+      ;;
+    --tag=*)
+      tag="${1#--tag=}"
+      ;;
+    --repo)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      release_repo="$2"
+      shift
+      ;;
+    --repo=*)
+      release_repo="${1#--repo=}"
+      ;;
+    --tap-repo)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      tap_repo="$2"
+      shift
+      ;;
+    --tap-repo=*)
+      tap_repo="${1#--tap-repo=}"
+      ;;
+    --tap-dir)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      tap_dir="$2"
+      shift
+      ;;
+    --tap-dir=*)
+      tap_dir="${1#--tap-dir=}"
+      ;;
+    --dry-run)
+      dry_run=true
+      ;;
+    --commit)
+      commit_formula=true
+      ;;
+    --push)
+      commit_formula=true
+      push_formula=true
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ -z "$tag" ]]; then
+  package_version="$(root_package_version)"
+  if [[ -z "$package_version" ]]; then
+    echo "Could not read root package version from Cargo.toml" >&2
+    exit 1
+  fi
+  tag="v${package_version}"
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "GitHub CLI (gh) is required to read release assets and source archives" >&2
+  exit 1
+fi
+
+asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
+asset_digest="$(
+  gh release view "$tag" \
+    --repo "$release_repo" \
+    --json assets \
+    --jq ".assets[] | select(.name == \"${asset}\") | .digest"
+)"
+arm_sha="${asset_digest#sha256:}"
+source_sha="$(gh api "repos/${release_repo}/tarball/${tag}" | sha256_stream)"
+
+if [[ -z "$arm_sha" || "$arm_sha" == "$asset_digest" || -z "$source_sha" ]]; then
+  echo "Failed to calculate checksums for $tag in $release_repo" >&2
+  echo "Expected asset: $asset" >&2
+  exit 1
+fi
+
+arm_url="https://github.com/${release_repo}/releases/download/${tag}/${asset}"
+source_url="https://github.com/${release_repo}/archive/refs/tags/${tag}.tar.gz"
+
+formula_tmp="$(mktemp)"
+cleanup() {
+  rm -f "$formula_tmp"
+}
+trap cleanup EXIT
+
+cat > "$formula_tmp" <<EOF
+class TiffanyLoop < Formula
+  desc "Lightweight multi-agent orchestration shell for LLM CLIs"
+  homepage "https://github.com/${release_repo}"
+
+  if OS.mac? && Hardware::CPU.arm?
+    url "${arm_url}"
+    sha256 "${arm_sha}"
+  else
+    url "${source_url}"
+    sha256 "${source_sha}"
+    depends_on "rust" => :build
+  end
+
+  def install
+    if OS.mac? && Hardware::CPU.arm?
+      bin.install "orchestrator", "tiffany-loop", "tiffany"
+    else
+      system "cargo", "install", *std_cargo_args, "--profile", "tiffany-dist"
+      system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/tiffany-cli"), "--profile", "tiffany-dist"
+    end
+
+    system "strip", bin/"orchestrator", bin/"tiffany-loop", bin/"tiffany" if OS.mac? || OS.linux?
+  end
+
+  test do
+    assert_match "orchestrator", shell_output("#{bin}/orchestrator --help")
+    assert_match "orchestrator", shell_output("#{bin}/tiffany-loop orchestrator --help 2>/dev/null")
+  end
+end
+EOF
+
+if command -v ruby >/dev/null 2>&1; then
+  ruby -c "$formula_tmp" >/dev/null
+fi
+
+if [[ "$dry_run" == "true" ]]; then
+  cat "$formula_tmp"
+  exit 0
+fi
+
+if [[ -z "$tap_dir" ]]; then
+  tap_dir="$(cd "$repo_dir/.." && pwd)/homebrew-tap"
+fi
+case "$tap_dir" in
+  /*) ;;
+  *) tap_dir="$repo_dir/$tap_dir" ;;
+esac
+
+if [[ ! -d "$tap_dir/.git" ]]; then
+  if [[ -e "$tap_dir" ]]; then
+    echo "$tap_dir exists but is not a git checkout" >&2
+    exit 1
+  fi
+  git clone "https://github.com/${tap_repo}.git" "$tap_dir"
+fi
+
+formula_path="$tap_dir/Formula/tiffany-loop.rb"
+mkdir -p "$(dirname "$formula_path")"
+cp "$formula_tmp" "$formula_path"
+
+if command -v ruby >/dev/null 2>&1; then
+  ruby -c "$formula_path"
+fi
+
+echo "updated $formula_path for $tag"
+echo "asset sha256:  $arm_sha"
+echo "source sha256: $source_sha"
+
+if [[ "$commit_formula" == "true" ]]; then
+  (
+    cd "$tap_dir"
+    git add Formula/tiffany-loop.rb
+    if git diff --cached --quiet; then
+      echo "Formula already up to date"
+      exit 0
+    fi
+    git commit -m "Update tiffany-loop to ${tag}"
+  )
+fi
+
+if [[ "$push_formula" == "true" ]]; then
+  (cd "$tap_dir" && git push)
+elif [[ "$commit_formula" != "true" ]]; then
+  cat <<EOF
+
+Next steps:
+  cd "$tap_dir"
+  git diff -- Formula/tiffany-loop.rb
+  git add Formula/tiffany-loop.rb
+  git commit -m "Update tiffany-loop to ${tag}"
+  git push
+EOF
+fi
