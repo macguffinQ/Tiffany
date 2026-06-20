@@ -52,6 +52,10 @@ enum Cmd {
         #[arg(long)]
         worker: Option<String>,
 
+        /// Claude Code subagent name to pass to Claude workers, for example reviewer
+        #[arg(long)]
+        agent: Option<String>,
+
         /// Override reviewer model
         #[arg(long)]
         reviewer: Option<String>,
@@ -107,6 +111,10 @@ enum Cmd {
         /// Force worker route: claude, codex, auto, or any configured worker role
         #[arg(long)]
         worker: Option<String>,
+
+        /// Claude Code subagent name to pass to Claude workers, for example reviewer
+        #[arg(long)]
+        agent: Option<String>,
 
         /// Override reviewer model
         #[arg(long)]
@@ -572,6 +580,48 @@ mod tests {
         let cli = Cli::parse_from(["orchestrator", "run", "ship it", "--detach"]);
 
         assert!(matches!(cli.cmd, Cmd::Run { detach: true, .. }));
+    }
+
+    #[test]
+    fn run_agent_parses_as_claude_subagent_hint() {
+        let cli = Cli::parse_from([
+            "orchestrator",
+            "run",
+            "ship it",
+            "--worker",
+            "worker-cc",
+            "--agent",
+            "reviewer",
+        ]);
+
+        match cli.cmd {
+            Cmd::Run { worker, agent, .. } => {
+                assert_eq!(worker.as_deref(), Some("worker-cc"));
+                assert_eq!(agent.as_deref(), Some("reviewer"));
+            }
+            _ => panic!("unexpected run command"),
+        }
+    }
+
+    #[test]
+    fn events_agent_parses_as_claude_subagent_hint() {
+        let cli = Cli::parse_from([
+            "orchestrator",
+            "events",
+            "ship it",
+            "--worker",
+            "worker-cc",
+            "--agent",
+            "reviewer",
+        ]);
+
+        match cli.cmd {
+            Cmd::Events { worker, agent, .. } => {
+                assert_eq!(worker.as_deref(), Some("worker-cc"));
+                assert_eq!(agent.as_deref(), Some("reviewer"));
+            }
+            _ => panic!("unexpected events command"),
+        }
     }
 
     #[test]

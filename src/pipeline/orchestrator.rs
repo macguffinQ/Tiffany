@@ -44,6 +44,7 @@ pub enum RunProgress {
         agent: String,
         role: String,
         runtime: String,
+        cc_agent: Option<String>,
         model: String,
         provider: Option<String>,
         prompt: String,
@@ -146,6 +147,7 @@ impl Orchestrator {
                     "message": top_task.prompt.clone(),
                     "tags": top_task.tags.clone(),
                     "agent_hint": top_task.agent_hint.clone(),
+                    "cc_agent_hint": top_task.cc_agent_hint.clone(),
                     "model_hint": top_task.model_hint.clone(),
                     "model_provider_hint": top_task.model_provider_hint.clone(),
                 }),
@@ -427,6 +429,7 @@ impl Orchestrator {
                     agent: agent.clone(),
                     role: worker_role.clone(),
                     runtime: assignment.runtime.clone(),
+                    cc_agent: t.cc_agent_hint.clone(),
                     model: assignment.model.clone(),
                     provider: assignment.provider.clone(),
                     prompt: t.prompt.clone(),
@@ -647,6 +650,7 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
             agent,
             role,
             runtime,
+            cc_agent,
             model,
             provider,
             prompt,
@@ -660,6 +664,7 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "agent": agent,
                 "worker_role": role,
                 "runtime": runtime,
+                "cc_agent": cc_agent,
                 "model": model,
                 "provider": provider,
                 "task_prompt": prompt,
@@ -777,6 +782,11 @@ fn apply_top_task_agent_hint(top_task: &Task, sub_tasks: &mut [Task]) {
                 task.agent_hint = Some(agent_hint.clone());
             }
         }
+        if task.cc_agent_hint.is_none() {
+            if let Some(cc_agent_hint) = &top_task.cc_agent_hint {
+                task.cc_agent_hint = Some(cc_agent_hint.clone());
+            }
+        }
         if task.worktree.is_none() {
             if let Some(worktree) = &top_task.worktree {
                 task.worktree = Some(worktree.clone());
@@ -814,13 +824,17 @@ mod tests {
     fn top_task_agent_hint_is_applied_to_unhinted_subtasks() {
         let mut top = Task::new("top");
         top.agent_hint = Some("worker-cc".into());
+        top.cc_agent_hint = Some("reviewer".into());
         let mut sub_tasks = vec![Task::new("a"), Task::new("b")];
         sub_tasks[1].agent_hint = Some("custom".into());
+        sub_tasks[1].cc_agent_hint = Some("executor".into());
 
         apply_top_task_agent_hint(&top, &mut sub_tasks);
 
         assert_eq!(sub_tasks[0].agent_hint.as_deref(), Some("worker-cc"));
         assert_eq!(sub_tasks[1].agent_hint.as_deref(), Some("custom"));
+        assert_eq!(sub_tasks[0].cc_agent_hint.as_deref(), Some("reviewer"));
+        assert_eq!(sub_tasks[1].cc_agent_hint.as_deref(), Some("executor"));
     }
 
     #[test]
@@ -1253,12 +1267,14 @@ mod tests {
                     runtime,
                     model,
                     prompt,
+                    cc_agent,
                     ..
                 } => {
                     saw_worker_started = role == "worker-cc"
                         && runtime == "test-runtime"
                         && model == "test-model"
-                        && prompt == "stream me";
+                        && prompt == "stream me"
+                        && cc_agent.is_none();
                 }
                 RunProgress::WorkerOutput { role, content, .. } => {
                     saw_worker_output = role == "worker-cc"

@@ -760,6 +760,7 @@ fn single_task_plan(top_task: &Task, rationale: impl Into<String>) -> PlanOutput
     task.tags = top_task.tags.clone();
     task.worktree = top_task.worktree.clone();
     task.agent_hint = top_task.agent_hint.clone();
+    task.cc_agent_hint = top_task.cc_agent_hint.clone();
     PlanOutput {
         sub_tasks: vec![task],
         rationale: rationale.into(),

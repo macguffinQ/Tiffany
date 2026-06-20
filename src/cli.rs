@@ -35,6 +35,7 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             planner,
             critic,
             worker,
+            agent,
             reviewer,
             ab,
             no_critic,
@@ -49,6 +50,7 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                     planner: planner.as_deref(),
                     critic: critic.as_deref(),
                     worker: worker.as_deref(),
+                    cc_agent: agent.as_deref(),
                     reviewer: reviewer.as_deref(),
                     no_critic,
                     no_reviewer,
@@ -65,9 +67,25 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             )
             .await?;
             if ab {
-                run_ab_mode(&cfg, &orch, prompt, tag, worker.as_deref()).await
+                run_ab_mode(
+                    &cfg,
+                    &orch,
+                    prompt,
+                    tag,
+                    worker.as_deref(),
+                    agent.as_deref(),
+                )
+                .await
             } else {
-                run_single_mode(&cfg, &orch, prompt, tag, worker.as_deref()).await
+                run_single_mode(
+                    &cfg,
+                    &orch,
+                    prompt,
+                    tag,
+                    worker.as_deref(),
+                    agent.as_deref(),
+                )
+                .await
             }
         }
 
@@ -79,6 +97,7 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             planner,
             critic,
             worker,
+            agent,
             reviewer,
             no_critic,
             no_reviewer,
@@ -99,6 +118,7 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             if let Some(w) = worker {
                 task.agent_hint = runtime::normalize_agent_hint_with_roles(&w, &cfg.roles);
             }
+            task.cc_agent_hint = sanitize_cc_agent_hint(agent.as_deref());
 
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let run = tokio::spawn(async move { orch.run_with_progress(task, tx).await });
@@ -503,12 +523,14 @@ async fn run_single_mode(
     prompt: String,
     tags: Vec<String>,
     worker: Option<&str>,
+    cc_agent: Option<&str>,
 ) -> Result<()> {
     let mut task = Task::new(prompt);
     task.tags = tags;
     if let Some(worker) = worker {
         task.agent_hint = runtime::normalize_agent_hint_with_roles(worker, &cfg.roles);
     }
+    task.cc_agent_hint = sanitize_cc_agent_hint(cc_agent);
     let results = orch.run(task).await?;
     print_completed_tasks(&results);
     Ok(())
@@ -531,6 +553,7 @@ struct DetachRunRequest<'a> {
     planner: Option<&'a str>,
     critic: Option<&'a str>,
     worker: Option<&'a str>,
+    cc_agent: Option<&'a str>,
     reviewer: Option<&'a str>,
     no_critic: bool,
     no_reviewer: bool,
@@ -571,6 +594,10 @@ fn detach_run(request: DetachRunRequest<'_>) -> Result<()> {
     if let Some(worker) = request.worker {
         event_args.push("--worker".to_string());
         event_args.push(worker.to_string());
+    }
+    if let Some(cc_agent) = sanitize_cc_agent_hint(request.cc_agent) {
+        event_args.push("--agent".to_string());
+        event_args.push(cc_agent);
     }
     if let Some(reviewer) = request.reviewer {
         event_args.push("--reviewer".to_string());
@@ -797,14 +824,23 @@ fn process_is_running(_pid: u32) -> bool {
     false
 }
 
+fn sanitize_cc_agent_hint(agent: Option<&str>) -> Option<String> {
+    agent
+        .map(str::trim)
+        .filter(|agent| !agent.is_empty())
+        .map(str::to_string)
+}
+
 async fn run_ab_mode(
     cfg: &Config,
     orch: &Orchestrator,
     prompt: String,
     tags: Vec<String>,
     worker: Option<&str>,
+    cc_agent: Option<&str>,
 ) -> Result<()> {
     let routes = ab_worker_routes(cfg, worker)?;
+    let cc_agent = sanitize_cc_agent_hint(cc_agent);
     println!(
         "A/B dual-run: {} vs {}",
         routes[0].as_str(),
@@ -817,6 +853,7 @@ async fn run_ab_mode(
         let mut task = Task::new(prompt.clone());
         task.tags = tags.clone();
         task.agent_hint = Some(route.clone());
+        task.cc_agent_hint = cc_agent.clone();
         let run = orch.run(task).await;
         let summary = AbRunSummary::from_run(idx, route.clone(), run, orch).await;
         println!(

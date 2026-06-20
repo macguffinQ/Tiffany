@@ -50,17 +50,21 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
             task_id,
             role,
             runtime,
+            cc_agent,
             model,
             provider,
             ..
-        } => Some(running(format_worker_lifecycle_line(
-            role,
-            "started",
-            Some(runtime.as_str()),
-            Some(provider_model_label(provider.as_deref(), model)),
-            task_id,
-            None,
-        ))),
+        } => {
+            let runtime_label = runtime_with_cc_agent(runtime, cc_agent.as_deref());
+            Some(running(format_worker_lifecycle_line(
+                role,
+                "started",
+                Some(runtime_label.as_str()),
+                Some(provider_model_label(provider.as_deref(), model)),
+                task_id,
+                None,
+            )))
+        }
         RunProgress::WorkerDone {
             task_id,
             role,
@@ -166,17 +170,19 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
             agent,
             role,
             runtime,
+            cc_agent,
             model,
             provider,
             ..
         } => {
             let id = short_task_id(task_id);
             let provider_model = provider_model_label(provider.as_deref(), model);
+            let runtime_label = runtime_with_cc_agent(runtime, cc_agent.as_deref());
             Some(status(
                 format!("worker: {role} started · {id}"),
-                format!("{runtime} · {provider_model} · {agent}"),
+                format!("{runtime_label} · {provider_model} · {agent}"),
                 Some(format!(
-                    "● worker  {role} started · {runtime} · {provider_model} · {id}"
+                    "● worker  {role} started · {runtime_label} · {provider_model} · {id}"
                 )),
             ))
         }
@@ -294,6 +300,14 @@ fn format_worker_lifecycle_line(
     format!("worker  {}", parts.join(" · "))
 }
 
+fn runtime_with_cc_agent(runtime: &str, cc_agent: Option<&str>) -> String {
+    cc_agent
+        .map(str::trim)
+        .filter(|agent| !agent.is_empty())
+        .map(|agent| format!("{runtime} · agent {agent}"))
+        .unwrap_or_else(|| runtime.to_string())
+}
+
 fn format_review_lifecycle_line(
     action: &str,
     task_id: &uuid::Uuid,
@@ -329,6 +343,7 @@ mod tests {
             agent: "claude-code".into(),
             role: "worker-cc".into(),
             runtime: "claude-code".into(),
+            cc_agent: None,
             model: "MiniMax-M3".into(),
             provider: Some("minimax".into()),
             prompt: "do it".into(),

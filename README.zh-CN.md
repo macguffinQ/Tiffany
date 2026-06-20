@@ -332,7 +332,7 @@ behavior:
 | `tiffany-loop` | 安装后打开主 tiffany-loop UI |
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | 引导式配置 provider、model、role |
-| `orchestrator run "..."` | 执行一个任务；`--ab` 会比较两个已配置 worker 路线 |
+| `orchestrator run "..."` | 执行一个任务；`--worker` 选择 worker 路线，`--agent` 选择 Claude Code 子 agent，`--ab` 会比较两个已配置 worker 路线 |
 | `orchestrator run "..." --detach` | 后台执行任务，并把可读事件日志写到 `~/.orchestrator/runs/` |
 | `orchestrator attach [id|prefix|last]` | 查看最近或指定后台任务的状态和日志尾部 |
 | `orchestrator events "..."` | 流式输出进度事件；默认 JSONL 给 UI adapter/脚本使用，`--format text` 输出可读的 planner/critic/worker/reviewer 瀑布流 |
@@ -486,6 +486,16 @@ orchestrator roles register critic --model glm51 --provider openai --model-name 
 orchestrator roles register worker-cc --model minimax-m3 --provider openai --model-name minimax-m3 --runtime claude-code --agent-teams
 ```
 
+Claude Code 子 agent 可以直接指定：
+
+```bash
+orchestrator run "审查当前改动" --worker worker-cc --agent reviewer
+orchestrator events "审查当前改动" --worker worker-cc --agent reviewer --format text
+tiffany-loop orchestrator --worker worker-cc --agent reviewer
+```
+
+`--worker` 选择 orchestrator 的 worker 路线；`--agent` 只传给 Claude Code，相当于 `claude --agent <name>`。
+
 ## 读取现有项目上下文
 
 orchestrator 会读取并注入这些上下文：
@@ -587,6 +597,7 @@ cargo run -- config
 - Session 导出为 Markdown/HTML
 - 成本预算告警
 - 后台任务和 attach
+- orchestrator 调用 Claude Code 子 agent（`--agent reviewer`）
 
 计划中：
 

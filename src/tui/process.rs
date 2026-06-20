@@ -751,6 +751,8 @@ pub(super) fn format_process_summary(input: &InputState) -> String {
     out.push_str(&process_flow_summary(&source));
     out.push_str("\n  route: ");
     out.push_str(input.agent_hint.as_deref().unwrap_or("auto"));
+    out.push_str("\n  claude subagent: ");
+    out.push_str(input.cc_agent_hint.as_deref().unwrap_or("default"));
     out.push_str("\n  context: ");
     out.push_str(&process_context_summary(input));
     if let Some(current) = source.last().map(|line| humanize_trace_event(line)) {
@@ -1328,6 +1330,7 @@ mod tests {
             agent: "claude-code".into(),
             role: "worker-cc".into(),
             runtime: "claude-code".into(),
+            cc_agent: None,
             model: "MiniMax-M3".into(),
             provider: Some("minimax".into()),
             prompt: "do the task".into(),

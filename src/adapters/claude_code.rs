@@ -129,19 +129,17 @@ impl WorkerAdapter for ClaudeCodeAdapter {
         // per worker spawn, and the OS reclaims on process exit.)
 
         let mut cmd = Command::new(&self.binary);
-        cmd.arg("--print")
-            .arg("--setting-sources")
-            .arg("project,local")
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--model")
-            .arg(&model)
-            .arg("--add-dir")
-            .arg(&worktree)
-            .arg("--verbose")
-            .kill_on_drop(true)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.args(claude_worker_args(
+            &model,
+            &worktree,
+            task.cc_agent_hint.as_deref(),
+            self.bypass_permissions,
+            (!full_system_prompt.is_empty()).then_some(full_system_prompt.as_str()),
+            &task.prompt,
+        ))
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
         if self.use_agent_teams {
             cmd.env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1");
@@ -153,16 +151,6 @@ impl WorkerAdapter for ClaudeCodeAdapter {
             }
         }
 
-        if self.bypass_permissions {
-            // Lets CC edit files and run bash without prompting — required
-            // for non-interactive orchestrator runs.
-            cmd.arg("--permission-mode").arg("bypassPermissions");
-        }
-
-        if !full_system_prompt.is_empty() {
-            cmd.arg("--append-system-prompt").arg(&full_system_prompt);
-        }
-
         // Log what we injected (helps debugging)
         tracing::debug!(
             "injected system prompt: {} chars (AGENTS.md: {}, CC config: {}, history: {}, CC prior: {})",
@@ -172,8 +160,6 @@ impl WorkerAdapter for ClaudeCodeAdapter {
             history_len,
             cc_context_len,
         );
-
-        cmd.arg(&task.prompt);
 
         let mut child = cmd.spawn()?;
         let stdout = child.stdout.take().expect("piped stdout");
@@ -331,6 +317,45 @@ impl WorkerAdapter for ClaudeCodeAdapter {
     }
 }
 
+fn claude_worker_args(
+    model: &str,
+    worktree: &std::path::Path,
+    cc_agent_hint: Option<&str>,
+    bypass_permissions: bool,
+    system_prompt: Option<&str>,
+    prompt: &str,
+) -> Vec<String> {
+    let mut args = vec![
+        "--print".to_string(),
+        "--setting-sources".to_string(),
+        "project,local".to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+        "--model".to_string(),
+        model.to_string(),
+        "--add-dir".to_string(),
+        worktree.display().to_string(),
+        "--verbose".to_string(),
+    ];
+    if let Some(agent) = cc_agent_hint
+        .map(str::trim)
+        .filter(|agent| !agent.is_empty())
+    {
+        args.push("--agent".to_string());
+        args.push(agent.to_string());
+    }
+    if bypass_permissions {
+        args.push("--permission-mode".to_string());
+        args.push("bypassPermissions".to_string());
+    }
+    if let Some(system_prompt) = system_prompt.filter(|prompt| !prompt.trim().is_empty()) {
+        args.push("--append-system-prompt".to_string());
+        args.push(system_prompt.to_string());
+    }
+    args.push(prompt.to_string());
+    args
+}
+
 fn apply_claude_provider_env(
     cmd: &mut Command,
     provider_id: &str,
@@ -378,4 +403,46 @@ fn claude_base_url_for_provider(provider_id: &str, provider: &ProviderConfig) ->
         return Some(format!("{}/anthropic", root.trim_end_matches('/')));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_worker_args_include_cc_subagent_when_set() {
+        let args = claude_worker_args(
+            "sonnet",
+            std::path::Path::new("/tmp/project"),
+            Some("reviewer"),
+            true,
+            Some("system"),
+            "do the work",
+        );
+
+        assert!(args.windows(2).any(|pair| pair == ["--agent", "reviewer"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--permission-mode", "bypassPermissions"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--append-system-prompt", "system"]));
+        assert_eq!(args.last().map(String::as_str), Some("do the work"));
+    }
+
+    #[test]
+    fn claude_worker_args_skip_empty_cc_subagent() {
+        let args = claude_worker_args(
+            "sonnet",
+            std::path::Path::new("/tmp/project"),
+            Some("  "),
+            false,
+            None,
+            "do the work",
+        );
+
+        assert!(!args.iter().any(|arg| arg == "--agent"));
+        assert!(!args.iter().any(|arg| arg == "--permission-mode"));
+        assert!(!args.iter().any(|arg| arg == "--append-system-prompt"));
+    }
 }

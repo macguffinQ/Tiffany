@@ -37,6 +37,10 @@ pub(crate) struct TiffanyOrchestratorCommand {
     #[arg(long)]
     pub(crate) worker: Option<String>,
 
+    /// Claude Code subagent name passed through to Claude workers.
+    #[arg(long)]
+    pub(crate) agent: Option<String>,
+
     /// Override reviewer model.
     #[arg(long)]
     pub(crate) reviewer: Option<String>,
@@ -82,6 +86,15 @@ impl TiffanyOrchestratorCommand {
                 .clone()
                 .unwrap_or_else(|| "worker-cc".to_string()),
         );
+        if let Some(agent) = self
+            .agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|agent| !agent.is_empty())
+        {
+            args.push("--agent".to_string());
+            args.push(agent.to_string());
+        }
         if let Some(reviewer) = &self.reviewer {
             args.push("--reviewer".to_string());
             args.push(reviewer.clone());
@@ -179,7 +192,7 @@ fn resolve_tiffany_sqlite_home(sqlite_home_env: Option<OsString>, home: &PathBuf
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_tiffany_home;
+    use super::{TiffanyOrchestratorCommand, resolve_tiffany_home};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -207,5 +220,32 @@ mod tests {
         let home = PathBuf::from("/home/alice/.tiffany");
 
         assert_eq!(super::resolve_tiffany_sqlite_home(None, &home), home);
+    }
+
+    #[test]
+    fn orchestrator_event_args_forward_worker_and_claude_agent() {
+        let command = TiffanyOrchestratorCommand {
+            bin: "orchestrator".into(),
+            config: None,
+            legacy: false,
+            planner: None,
+            critic: None,
+            worker: Some("worker-cc".into()),
+            agent: Some("reviewer".into()),
+            reviewer: None,
+            no_critic: false,
+            no_reviewer: false,
+            args: vec![],
+        };
+
+        assert_eq!(
+            command.event_args(),
+            vec![
+                "--worker".to_string(),
+                "worker-cc".to_string(),
+                "--agent".to_string(),
+                "reviewer".to_string()
+            ]
+        );
     }
 }

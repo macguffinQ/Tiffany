@@ -88,6 +88,7 @@ struct TiffanyProgressEvent {
     agent: Option<String>,
     worker_role: Option<String>,
     runtime: Option<String>,
+    cc_agent: Option<String>,
     model: Option<String>,
     provider: Option<String>,
     task_prompt: Option<String>,
@@ -112,6 +113,7 @@ struct WorkerMeta {
     agent: Option<String>,
     worker_role: Option<String>,
     runtime: Option<String>,
+    cc_agent: Option<String>,
     model: Option<String>,
     provider: Option<String>,
 }
@@ -1626,6 +1628,7 @@ impl BridgeState {
         fill_present(&mut meta.agent, event.agent.as_deref());
         fill_present(&mut meta.worker_role, event.worker_role.as_deref());
         fill_present(&mut meta.runtime, event.runtime.as_deref());
+        fill_present(&mut meta.cc_agent, event.cc_agent.as_deref());
         fill_present(&mut meta.model, event.model.as_deref());
         fill_present(&mut meta.provider, event.provider.as_deref());
     }
@@ -1644,6 +1647,7 @@ impl BridgeState {
         fill_missing(&mut event.agent, meta.agent.as_deref());
         fill_missing(&mut event.worker_role, meta.worker_role.as_deref());
         fill_missing(&mut event.runtime, meta.runtime.as_deref());
+        fill_missing(&mut event.cc_agent, meta.cc_agent.as_deref());
         fill_missing(&mut event.model, meta.model.as_deref());
         fill_missing(&mut event.provider, meta.provider.as_deref());
     }
@@ -1672,6 +1676,9 @@ fn worker_context_line(task_id: &str, meta: &WorkerMeta) -> String {
         && !parts.iter().any(|part| part == runtime)
     {
         parts.push(format!("runtime {runtime}"));
+    }
+    if let Some(agent) = meta.cc_agent.as_deref().and_then(nonempty_trimmed) {
+        parts.push(format!("claude agent {agent}"));
     }
     if let Some(provider_model) = worker_meta_provider_model_label(meta) {
         parts.push(provider_model);
@@ -2196,6 +2203,9 @@ fn worker_lifecycle_title(event: &TiffanyProgressEvent) -> String {
     let mut parts = vec![format!("{role} {action}")];
     if let Some(runtime) = runtime.filter(|runtime| *runtime != role) {
         parts.push(runtime.to_string());
+    }
+    if let Some(agent) = event.cc_agent.as_deref().and_then(nonempty_trimmed) {
+        parts.push(format!("agent {agent}"));
     }
     if let Some(model) = provider_model_label(event) {
         parts.push(model);
@@ -2782,6 +2792,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -2814,6 +2825,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -2831,6 +2843,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
             runtime: Some("claude-code".to_string()),
+            cc_agent: None,
             model: Some("MiniMax-M3".to_string()),
             provider: Some("minimax".to_string()),
             task_prompt: None,
@@ -2848,6 +2861,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -2882,6 +2896,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -2931,6 +2946,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -2964,6 +2980,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -2993,6 +3010,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
             runtime: Some("claude-code".to_string()),
+            cc_agent: Some("reviewer".to_string()),
             model: Some("MiniMax-M3".to_string()),
             provider: Some("minimax".to_string()),
             task_prompt: Some("do the work".to_string()),
@@ -3012,6 +3030,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3035,6 +3054,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3047,11 +3067,13 @@ mod tests {
         state.apply_worker_metadata(&mut done);
         assert_eq!(
             event_title(&done),
-            "worker-cc done · claude-code · minimax/MiniMax-M3 · 12345678 · 1.2s"
+            "worker-cc done · claude-code · agent reviewer · minimax/MiniMax-M3 · 12345678 · 1.2s"
         );
         assert_eq!(
             state.worker_context_lines(),
-            vec!["worker: worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"]
+            vec![
+                "worker: worker-cc · claude-code · claude agent reviewer · minimax/MiniMax-M3 · 12345678"
+            ]
         );
     }
 
@@ -3065,6 +3087,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
             runtime: Some("claude-code".to_string()),
+            cc_agent: Some("reviewer".to_string()),
             model: Some("MiniMax-M3".to_string()),
             provider: Some("minimax".to_string()),
             task_prompt: Some("回答用户的问题，并给出清晰结论".to_string()),
@@ -3081,7 +3104,7 @@ mod tests {
 
         assert!(text.contains("worker"));
         assert!(text.contains("worker-cc started"));
-        assert!(text.contains("claude-code · minimax/MiniMax-M3 · 12345678"));
+        assert!(text.contains("claude-code · agent reviewer · minimax/MiniMax-M3 · 12345678"));
         assert!(!text.contains("route "));
         assert!(text.contains("task  回答用户的问题"));
     }
@@ -3096,6 +3119,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3122,6 +3146,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3149,6 +3174,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3180,6 +3206,7 @@ mod tests {
             agent: Some("worker-codex".to_string()),
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3206,6 +3233,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3232,6 +3260,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3260,6 +3289,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3283,6 +3313,7 @@ mod tests {
             agent: Some("worker-codex".to_string()),
             worker_role: Some("worker-codex".to_string()),
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3309,6 +3340,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3351,6 +3383,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3378,6 +3411,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3418,6 +3452,7 @@ mod tests {
             agent: Some("claude-code".to_string()),
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3488,6 +3523,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3516,6 +3552,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3543,6 +3580,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3578,6 +3616,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,
@@ -3611,6 +3650,7 @@ mod tests {
             agent: None,
             worker_role: None,
             runtime: None,
+            cc_agent: None,
             model: None,
             provider: None,
             task_prompt: None,

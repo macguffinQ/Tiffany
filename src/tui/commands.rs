@@ -148,6 +148,10 @@ pub(super) fn handle_slash_command_with_runtime(
             let msg = handle_agent_command(config, input, &args);
             push_system(input, msg);
         }
+        "cc-agent" | "claude-agent" | "subagent" => {
+            let msg = handle_cc_agent_command(input, &args);
+            push_system(input, msg);
+        }
         "usage" | "u" => {
             let window = args.first().copied().unwrap_or("today");
             push_system(input, format_usage(store, config, window));
@@ -515,6 +519,10 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
             description: "route future worker tasks",
         },
         SlashCommandDef {
+            name: "cc-agent",
+            description: "choose Claude Code subagent",
+        },
+        SlashCommandDef {
             name: "trace",
             description: "control live trace",
         },
@@ -839,6 +847,16 @@ fn argument_candidates(
             &[
                 ("status", "show active role pipeline"),
                 ("route", "show configured role route"),
+            ],
+        ),
+        "cc-agent" | "claude-agent" | "subagent" if ctx.current_index == 0 => choice_candidates(
+            ctx,
+            0,
+            &[
+                ("reviewer", "Claude Code reviewer subagent"),
+                ("executor", "Claude Code executor subagent"),
+                ("planner", "Claude Code planner subagent"),
+                ("clear", "clear Claude Code subagent"),
             ],
         ),
         "handoff" | "continue" if ctx.current_index == 0 => choice_candidates(
@@ -1271,6 +1289,7 @@ fn help_text() -> String {
      /workflow                     Show active role pipeline\n\
      /model [role]                 Show model assignments\n\
      /agent [role|clear]           Route future worker tasks\n\
+     /cc-agent [name|clear]        Use a Claude Code subagent for Claude workers\n\
      /usage [today|week|month|all] Show token/cost usage\n\
      /sessions [n]                 List recent sessions with tree/log shortcuts\n\
      /import-cc [project]          Import Claude Code sessions into chat history\n\
@@ -1497,6 +1516,30 @@ fn handle_agent_command(config: &Config, input: &mut InputState, args: &[&str]) 
             }
             input.agent_hint = Some(role.to_string());
             format_agent_selection(config, role, Some(role))
+        }
+    }
+}
+
+fn handle_cc_agent_command(input: &mut InputState, args: &[&str]) -> String {
+    match args.first().copied() {
+        None => format!(
+            "Claude Code subagent\n  selected: {}\n  mode: passed to Claude workers as `claude --agent <name>`\n\nUse /cc-agent reviewer, /cc-agent executor, or /cc-agent clear.",
+            input.cc_agent_hint.as_deref().unwrap_or("default")
+        ),
+        Some("clear" | "default" | "none" | "off") => {
+            input.cc_agent_hint = None;
+            "Claude Code subagent cleared. Future Claude workers use their default agent.".into()
+        }
+        Some(agent) => {
+            let agent = agent.trim();
+            if agent.is_empty() {
+                return "Claude Code subagent was empty.".into();
+            }
+            input.cc_agent_hint = Some(agent.to_string());
+            format!(
+                "Claude Code subagent set to `{}`. Future Claude workers receive `--agent {}`.",
+                agent, agent
+            )
         }
     }
 }
@@ -1747,12 +1790,13 @@ fn format_role_workflow(config: &Config, input: &InputState) -> String {
     let reviewer = role_or_missing(config, "reviewer");
 
     format!(
-        "Role flow\n  1. plan      {}\n  2. critique  {}\n  3. execute   {}\n  4. review    {}\n  5. answer    final text\n\nCurrent worker: {}",
+        "Role flow\n  1. plan      {}\n  2. critique  {}\n  3. execute   {}\n  4. review    {}\n  5. answer    final text\n\nCurrent worker: {}\nClaude subagent: {}",
         planner,
         critic,
         worker,
         reviewer,
-        selected_route_label(input)
+        selected_route_label(input),
+        input.cc_agent_hint.as_deref().unwrap_or("default")
     )
 }
 
@@ -1777,7 +1821,7 @@ fn format_workflow_status(config: &Config, input: &InputState) -> String {
     };
 
     format!(
-        "Workflow status\n  run: {}\n  queue: {}\n  context: {}\n\nPipeline\n  1. plan      {}\n  2. critique  {}\n  3. execute   {}\n  4. review    {}\n  5. answer    final text\n\nWorker\n  selected: {}\n  details: {}",
+        "Workflow status\n  run: {}\n  queue: {}\n  context: {}\n\nPipeline\n  1. plan      {}\n  2. critique  {}\n  3. execute   {}\n  4. review    {}\n  5. answer    final text\n\nWorker\n  selected: {}\n  claude subagent: {}\n  details: {}",
         run,
         queue,
         context_summary(input),
@@ -1786,6 +1830,7 @@ fn format_workflow_status(config: &Config, input: &InputState) -> String {
         workflow_role_line(config, &worker),
         workflow_role_line(config, "reviewer"),
         selected_route_label(input),
+        input.cc_agent_hint.as_deref().unwrap_or("default"),
         format_role_detail_line(config, &worker)
     )
 }
@@ -2043,7 +2088,7 @@ fn format_tui_status(store: &SessionStore, config: &Config, input: &InputState) 
         .unwrap_or_else(|| "none".into());
 
     format!(
-        "Terminal chat status:\n  run: {}\n  messages: {}\n  process view: {}\n  context memory: {}\n  queued messages: {} ({})\n  agent hint: {}\n  configured roles: {}\n  configured models: {}\n  live trace: {}\n  captured process events: {}\n  process filter: {}\n  process file: {}\n  latest session: {}\n  log dir: {}",
+        "Terminal chat status:\n  run: {}\n  messages: {}\n  process view: {}\n  context memory: {}\n  queued messages: {} ({})\n  agent hint: {}\n  claude subagent: {}\n  configured roles: {}\n  configured models: {}\n  live trace: {}\n  captured process events: {}\n  process filter: {}\n  process file: {}\n  latest session: {}\n  log dir: {}",
         run,
         input.transcript.len(),
         if input.history_folded {
@@ -2055,6 +2100,7 @@ fn format_tui_status(store: &SessionStore, config: &Config, input: &InputState) 
         input.queued_prompts.len(),
         QueueSnapshot::from_input(input, 0).state_label(),
         input.agent_hint.as_deref().unwrap_or("auto"),
+        input.cc_agent_hint.as_deref().unwrap_or("default"),
         config.roles.len(),
         config.models.len(),
         live_trace_summary(input),

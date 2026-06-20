@@ -55,7 +55,11 @@ pub struct Task {
     #[serde(default)]
     pub files_of_interest: Vec<String>,
     pub worktree: Option<PathBuf>,
+    /// Worker route hint, for example `worker-cc` or `worker-codex`.
     pub agent_hint: Option<String>,
+    /// Claude Code subagent name passed as `claude --agent <name>`.
+    #[serde(default)]
+    pub cc_agent_hint: Option<String>,
     #[serde(default)]
     pub model_hint: Option<String>,
     #[serde(default)]
@@ -79,6 +83,7 @@ impl Task {
             files_of_interest: vec![],
             worktree: None,
             agent_hint: None,
+            cc_agent_hint: None,
             model_hint: None,
             model_provider_hint: None,
             role: Role::Worker,

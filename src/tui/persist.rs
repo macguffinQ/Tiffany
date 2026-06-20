@@ -19,6 +19,8 @@ struct PersistedTuiSession {
     trace_live_enabled: bool,
     trace_expanded: bool,
     agent_hint: Option<String>,
+    #[serde(default)]
+    cc_agent_hint: Option<String>,
     context_mode: PersistedContextMode,
     context_cutoff: usize,
     #[serde(default)]
@@ -100,6 +102,7 @@ impl PersistedTuiSession {
             trace_live_enabled: input.trace_live_enabled,
             trace_expanded: input.trace_expanded,
             agent_hint: input.agent_hint.clone(),
+            cc_agent_hint: input.cc_agent_hint.clone(),
             context_mode: PersistedContextMode::from(input.context_mode),
             context_cutoff: input.context_cutoff.min(input.transcript.len()),
             context_summary_text: input.context_summary_text.clone(),
@@ -122,6 +125,7 @@ impl PersistedTuiSession {
             trace_expanded: self.trace_expanded,
             history_folded: self.history_folded,
             agent_hint: self.agent_hint,
+            cc_agent_hint: self.cc_agent_hint,
             context_mode: self.context_mode.into(),
             context_cutoff: self.context_cutoff,
             context_summary_text: self.context_summary_text,
@@ -225,6 +229,7 @@ mod tests {
             test_log_path: Some(tmp.path().join("test.log")),
             last_test_status: Some("finished: ok".into()),
             agent_hint: Some("worker-cc".into()),
+            cc_agent_hint: Some("reviewer".into()),
             queue_paused: true,
             ..InputState::default()
         };
@@ -270,5 +275,6 @@ mod tests {
         );
         assert_eq!(loaded.last_test_status.as_deref(), Some("finished: ok"));
         assert_eq!(loaded.agent_hint.as_deref(), Some("worker-cc"));
+        assert_eq!(loaded.cc_agent_hint.as_deref(), Some("reviewer"));
     }
 }

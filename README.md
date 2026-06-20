@@ -324,6 +324,7 @@ orchestrator run "refactor the auth module" --tag refactor
 
 # 7. Override worker route
 orchestrator run "fix typo" --planner opus --worker codex
+orchestrator run "review the diff" --worker worker-cc --agent reviewer
 
 # 8. Watch the live pipeline as readable text
 orchestrator events "fix typo" --format text
@@ -433,7 +434,7 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `tiffany-loop` | Open the primary tiffany-loop UI after install |
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | Guided first-run setup for providers, models, and roles |
-| `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
+| `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--agent`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
 | `orchestrator run "..." --detach` | Run a task in the background and write a readable event log under `~/.orchestrator/runs/` |
 | `orchestrator attach [id|prefix|last]` | Print the latest detached run status and log tail |
 | `orchestrator events "..."` | Stream progress events; default JSONL is stable for UI adapters/scripts, `--format text` prints a readable planner/critic/worker/reviewer waterfall |
@@ -627,7 +628,15 @@ model: sonnet
 You are a careful code reviewer.
 ```
 
-Orchestrator picks these up automatically for context.
+Use one explicitly with:
+
+```bash
+orchestrator run "review this change" --worker worker-cc --agent reviewer
+orchestrator events "review this change" --worker worker-cc --agent reviewer --format text
+tiffany-loop orchestrator --worker worker-cc --agent reviewer
+```
+
+`--worker` selects the orchestrator worker route; `--agent` is passed only to Claude Code as `claude --agent <name>`.
 
 ### MCP servers: `<project>/.mcp.json`
 
@@ -785,9 +794,9 @@ orchestrator/
 - [x] Session export (markdown / HTML)
 - [x] Cost budget alerts
 - [x] Background task mode (`orchestrator run --detach` + `orchestrator attach`)
+- [x] CC agent invocation from orchestrator (`--agent reviewer`)
 - [ ] Remove copied partial TUI modules after the fork adapter is stable
 - [ ] Full-token streaming final responses in terminal chat
-- [ ] CC agent invocation from orchestrator (`--agent reviewer`)
 - [ ] VS Code extension
 
 ---

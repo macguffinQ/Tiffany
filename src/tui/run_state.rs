@@ -114,6 +114,9 @@ impl RunController {
         if let Some(agent) = input.agent_hint.clone() {
             record_run_event(input, &format!("Agent hint: {}", agent));
         }
+        if let Some(agent) = input.cc_agent_hint.clone() {
+            record_run_event(input, &format!("Claude subagent: {}", agent));
+        }
         start_live_trace(input);
 
         let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -121,9 +124,11 @@ impl RunController {
 
         let orch = self.orch.clone();
         let agent_hint = input.agent_hint.clone();
+        let cc_agent_hint = input.cc_agent_hint.clone();
         let handle = tokio::spawn(async move {
             let mut task = Task::new(task_prompt);
             task.agent_hint = agent_hint;
+            task.cc_agent_hint = cc_agent_hint;
             let _ = run_with_cancel(orch, task, tx, cancel_flag).await;
         });
         input.run_handle = Some(handle);
@@ -141,8 +146,9 @@ fn initial_run_status(input: &InputState, prompt: &str) -> String {
         )
     };
     format!(
-        "Working\n  status: starting orchestrator\n  worker: {}\n  context: {}\n  request: {}\n\nDetails: /process 200 · /o detail",
+        "Working\n  status: starting orchestrator\n  worker: {}\n  claude agent: {}\n  context: {}\n  request: {}\n\nDetails: /process 200 · /o detail",
         worker,
+        input.cc_agent_hint.as_deref().unwrap_or("default"),
         context,
         truncate_chars(prompt, 120)
     )

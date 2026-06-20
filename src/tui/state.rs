@@ -91,6 +91,8 @@ pub(super) struct InputState {
     pub(super) trace_message_index: Option<usize>,
     /// Optional role hint used to route future worker tasks.
     pub(super) agent_hint: Option<String>,
+    /// Optional Claude Code subagent passed to Claude worker tasks.
+    pub(super) cc_agent_hint: Option<String>,
     /// How much transcript context is injected into future task prompts.
     pub(super) context_mode: ContextMode,
     /// Transcript index before which messages are ignored for context memory.

@@ -645,6 +645,7 @@ mod tests {
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
                 runtime: "claude-code".into(),
+                cc_agent: None,
                 model: "MiniMax-M3".into(),
                 provider: Some("minimax".into()),
                 prompt: "do the task".into(),

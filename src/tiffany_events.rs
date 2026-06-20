@@ -20,6 +20,8 @@ pub struct TiffanyProgressEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cc_agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -48,6 +50,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: None,
                 worker_role: None,
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -65,6 +68,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: None,
                 worker_role: None,
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -82,6 +86,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: None,
                 worker_role: None,
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -103,6 +108,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: None,
                 worker_role: None,
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -120,6 +126,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: None,
                 worker_role: None,
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -137,6 +144,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: None,
                 worker_role: None,
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -151,6 +159,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent,
                 role,
                 runtime,
+                cc_agent,
                 model,
                 provider,
                 prompt,
@@ -162,6 +171,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: Some(agent),
                 worker_role: Some(role),
                 runtime: Some(runtime),
+                cc_agent,
                 model: Some(model),
                 provider,
                 task_prompt: Some(prompt),
@@ -184,6 +194,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: Some(agent),
                 worker_role: Some(role),
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -209,6 +220,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                     agent: None,
                     worker_role: None,
                     runtime: None,
+                    cc_agent: None,
                     model: None,
                     provider: None,
                     task_prompt: None,
@@ -237,6 +249,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: Some(agent),
                 worker_role: Some(role),
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -254,6 +267,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: None,
                 worker_role: None,
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -279,6 +293,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: None,
                 worker_role: None,
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -296,6 +311,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: None,
                 worker_role: None,
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -313,6 +329,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 agent: None,
                 worker_role: None,
                 runtime: None,
+                cc_agent: None,
                 model: None,
                 provider: None,
                 task_prompt: None,
@@ -405,14 +422,21 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
             task_id,
             role,
             runtime,
+            cc_agent,
             model,
             provider,
             ..
-        } => Some(format!(
-            "● worker   {role} started · {runtime} · {} · {}",
-            provider_model_label(provider.as_deref(), model),
-            short_id(task_id)
-        )),
+        } => {
+            let cc_agent = cc_agent
+                .as_deref()
+                .map(|agent| format!(" · agent {agent}"))
+                .unwrap_or_default();
+            Some(format!(
+                "● worker   {role} started · {runtime}{cc_agent} · {} · {}",
+                provider_model_label(provider.as_deref(), model),
+                short_id(task_id)
+            ))
+        }
         RunProgress::WorkerOutput {
             task_id,
             agent,
@@ -505,14 +529,21 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
             task_id,
             role,
             runtime,
+            cc_agent,
             model,
             provider,
             ..
-        } => Some(format!(
-            "worker  {role} started · {runtime} · {} · {}",
-            provider_model_label(provider.as_deref(), model),
-            short_id(task_id)
-        )),
+        } => {
+            let cc_agent = cc_agent
+                .as_deref()
+                .map(|agent| format!(" · agent {agent}"))
+                .unwrap_or_default();
+            Some(format!(
+                "worker  {role} started · {runtime}{cc_agent} · {} · {}",
+                provider_model_label(provider.as_deref(), model),
+                short_id(task_id)
+            ))
+        }
         RunProgress::WorkerOutput {
             task_id,
             agent,
@@ -732,6 +763,7 @@ mod tests {
             agent: "claude-code".into(),
             role: "worker-cc".into(),
             runtime: "claude-code".into(),
+            cc_agent: Some("reviewer".into()),
             model: "MiniMax-M3".into(),
             provider: Some("minimax".into()),
             prompt: "do work".into(),
@@ -740,7 +772,7 @@ mod tests {
 
         assert_eq!(
             line,
-            "● worker   worker-cc started · claude-code · minimax/MiniMax-M3 · 12345678"
+            "● worker   worker-cc started · claude-code · agent reviewer · minimax/MiniMax-M3 · 12345678"
         );
     }
 
@@ -753,6 +785,7 @@ mod tests {
             agent: "claude-code".into(),
             role: "worker-cc".into(),
             runtime: "claude-code".into(),
+            cc_agent: None,
             model: "MiniMax-M3".into(),
             provider: Some("minimax".into()),
             prompt: "do work".into(),
