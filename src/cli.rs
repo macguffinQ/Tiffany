@@ -9,6 +9,7 @@ use orchestrator::session_export::SessionExportFormat;
 use orchestrator::tiffany_events::{TiffanyProgressEvent, TiffanyTextProgressFormatter};
 use orchestrator::tiffany_install;
 use orchestrator::{adapters, cc_config, mux, roles, runtime, storage};
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -408,7 +409,7 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             );
             println!("\nBy provider:");
             let mut provs: Vec<_> = u.by_provider.iter().collect();
-            provs.sort_by(|a, b| b.1.tokens_in.cmp(&a.1.tokens_in));
+            provs.sort_by_key(|provider| Reverse(provider.1.tokens_in));
             for (name, p) in provs {
                 println!(
                     "  {:<20} {} in / {} out / ${:.4} ({} sessions)",
