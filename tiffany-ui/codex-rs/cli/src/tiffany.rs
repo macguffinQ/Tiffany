@@ -148,12 +148,19 @@ fn resolve_bin_from(
     configured_bin: Option<OsString>,
     current_exe: Option<PathBuf>,
 ) -> String {
-    if bin != "orchestrator" {
-        return bin.to_string();
+    let requested = bin.trim();
+    let requested = if requested.is_empty() {
+        "orchestrator"
+    } else {
+        requested
+    };
+
+    if requested != "orchestrator" {
+        return requested.to_string();
     }
 
     if let Some(configured) = configured_bin
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.to_string_lossy().trim().is_empty())
         .map(PathBuf::from)
     {
         return configured.to_string_lossy().into_owned();
@@ -168,7 +175,7 @@ fn resolve_bin_from(
         }
     }
 
-    bin.to_string()
+    requested.to_string()
 }
 
 fn exe_name(name: &str) -> String {
@@ -294,6 +301,20 @@ mod tests {
                 None
             ),
             "/tmp/custom-orchestrator"
+        );
+    }
+
+    #[test]
+    fn resolve_empty_bin_uses_default_orchestrator() {
+        assert_eq!(resolve_bin_from("", None, None), "orchestrator");
+        assert_eq!(resolve_bin_from("   ", None, None), "orchestrator");
+    }
+
+    #[test]
+    fn resolve_orchestrator_ignores_blank_env_override() {
+        assert_eq!(
+            resolve_bin_from("orchestrator", Some(OsString::from("   ")), None),
+            "orchestrator"
         );
     }
 

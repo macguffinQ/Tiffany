@@ -331,7 +331,8 @@ async fn run_event_bridge(
     app_event_tx: AppEventSender,
     launch: TiffanyOrchestratorLaunch,
 ) -> anyhow::Result<()> {
-    let mut command = orchestrator_command(&launch.bin, launch.config_path.as_deref());
+    let bin = normalized_orchestrator_bin(&launch.bin);
+    let mut command = orchestrator_command(bin, launch.config_path.as_deref());
     let mut child = command
         .arg("events")
         .arg(&launch.prompt)
@@ -342,7 +343,7 @@ async fn run_event_bridge(
         .map_err(|err| {
             anyhow::anyhow!(
                 "failed to start `{}` - {err}; install the `orchestrator` binary next to `tiffany-loop`, pass `--bin /path/to/orchestrator`, or set TIFFANY_ORCHESTRATOR_BIN",
-                launch.bin
+                bin
             )
         })?;
 
@@ -414,11 +415,16 @@ async fn run_orchestrator_command(
 }
 
 fn orchestrator_command(bin: &str, config_path: Option<&str>) -> Command {
-    let mut command = Command::new(bin);
+    let mut command = Command::new(normalized_orchestrator_bin(bin));
     if let Some(config_path) = config_path.filter(|path| !path.trim().is_empty()) {
         command.arg("--config").arg(config_path);
     }
     command
+}
+
+fn normalized_orchestrator_bin(bin: &str) -> &str {
+    let bin = bin.trim();
+    if bin.is_empty() { "orchestrator" } else { bin }
 }
 
 fn roles_command_args(args: &str) -> Result<Vec<String>, String> {
@@ -3919,6 +3925,18 @@ mod tests {
                 "--endpoint",
                 "http://localhost:11434"
             ])]
+        );
+    }
+
+    #[test]
+    fn orchestrator_command_defaults_empty_bin() {
+        assert_eq!(
+            orchestrator_command("", None).as_std().get_program(),
+            "orchestrator"
+        );
+        assert_eq!(
+            orchestrator_command("   ", None).as_std().get_program(),
+            "orchestrator"
         );
     }
 
