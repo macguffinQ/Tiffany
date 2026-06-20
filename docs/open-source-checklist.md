@@ -10,11 +10,14 @@ Use this before making the repository public.
 - [x] Review `README.md` and `README.zh-CN.md` for public-facing install and development accuracy.
 - [x] Add preview-stage and non-affiliation language.
 - [x] Preserve Codex fork license and notice files.
+- [x] Configure or manually update the Homebrew tap for the current release.
+  Future tagged releases require `HOMEBREW_TAP_TOKEN`; see
+  [docs/homebrew.md](homebrew.md).
 - [ ] Run full release preflight before publishing the next tag:
 
 ```bash
 ./scripts/tiffany-install-smoke --smoke
-./scripts/tiffany-release-preflight --full --tag v0.1.11
+./scripts/tiffany-release-preflight --full --tag v0.1.12
 ./scripts/tiffany-clean-targets --sizes
 ```
 
@@ -42,7 +45,7 @@ find . -path './target' -prune -o -path './tiffany-ui/codex-rs/target' -prune -o
 ## Release Commands
 
 ```bash
-./scripts/tiffany-release-preflight --full --tag v0.1.11
+./scripts/tiffany-release-preflight --full --tag v0.1.12
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-install-smoke --dist
 ```

@@ -34,9 +34,12 @@ Inside the TUI, use `/provider` and `/role`.
 
 Note: if `macguffinQ/Tiffany` is private, public Homebrew installs cannot download the release archive or source archive. Maintainers with repository access can still use the formula for validation.
 
-## Optional automatic tap updates
+## Required automatic tap updates
 
-The release workflow includes a `homebrew` job. It runs only when the repository has a `HOMEBREW_TAP_TOKEN` secret.
+The release workflow includes a `homebrew` job. Tagged releases require a
+`HOMEBREW_TAP_TOKEN` secret so the GitHub Release and Homebrew tap cannot drift.
+If the secret is missing, the release workflow fails after publishing assets
+instead of silently leaving the tap on an older formula.
 
 Create a fine-grained GitHub token with contents read/write access to `macguffinQ/homebrew-tap`, then add it to this repository:
 
@@ -45,7 +48,7 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 Name: HOMEBREW_TAP_TOKEN
 ```
 
-After that, pushing a tag like `v0.1.11` will:
+After that, pushing a tag like `v0.1.12` will:
 
 1. Run `./scripts/tiffany-release-preflight --quick --tag <tag>` on the tagged commit.
 2. Build the macOS Apple Silicon release archive used by Homebrew.
@@ -60,7 +63,7 @@ additional release archives are wired into the workflow and formula.
 
 The workflow computes checksums from authenticated GitHub APIs, so it works while the main repository is private and continues to work after the repository is public.
 
-If the secret is missing, the release still succeeds and publishes GitHub assets, but the tap stays on its previous version. Confirm this with:
+If the tap job fails, confirm the GitHub Release, tap commit, and formula with:
 
 ```bash
 gh run list --repo macguffinQ/Tiffany --workflow Release --limit 5
@@ -71,7 +74,7 @@ git ls-remote --heads https://github.com/macguffinQ/homebrew-tap.git main
 Manual tap update fallback:
 
 ```bash
-tag=v0.1.11
+tag=v0.1.12
 version="${tag#v}"
 asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
 
@@ -113,7 +116,7 @@ From a source checkout with matching binaries built, maintainers can also run
 the isolated install smoke against a binary directory:
 
 ```bash
-./scripts/tiffany-install-smoke --bin-dir /path/to/tiffany-loop-v0.1.11-aarch64-apple-darwin
+./scripts/tiffany-install-smoke --bin-dir /path/to/tiffany-loop-v0.1.12-aarch64-apple-darwin
 ```
 
 ## Formula template

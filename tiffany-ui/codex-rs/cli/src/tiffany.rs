@@ -136,10 +136,42 @@ fn config_args(config: Option<&str>) -> Vec<String> {
 }
 
 fn resolve_bin(bin: &str) -> String {
-    if bin == "orchestrator" {
-        env::var("TIFFANY_ORCHESTRATOR_BIN").unwrap_or_else(|_| bin.to_string())
+    resolve_bin_from(bin, env::var_os("TIFFANY_ORCHESTRATOR_BIN"), env::current_exe().ok())
+}
+
+fn resolve_bin_from(
+    bin: &str,
+    configured_bin: Option<OsString>,
+    current_exe: Option<PathBuf>,
+) -> String {
+    if bin != "orchestrator" {
+        return bin.to_string();
+    }
+
+    if let Some(configured) = configured_bin
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    {
+        return configured.to_string_lossy().into_owned();
+    }
+
+    if let Some(current_exe) = current_exe
+        && let Some(parent) = current_exe.parent()
+    {
+        let adjacent = parent.join(exe_name("orchestrator"));
+        if adjacent.is_file() {
+            return adjacent.to_string_lossy().into_owned();
+        }
+    }
+
+    bin.to_string()
+}
+
+fn exe_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
     } else {
-        bin.to_string()
+        name.to_string()
     }
 }
 
@@ -192,7 +224,7 @@ fn resolve_tiffany_sqlite_home(sqlite_home_env: Option<OsString>, home: &PathBuf
 
 #[cfg(test)]
 mod tests {
-    use super::{TiffanyOrchestratorCommand, resolve_tiffany_home};
+    use super::{TiffanyOrchestratorCommand, exe_name, resolve_bin_from, resolve_tiffany_home};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -247,5 +279,44 @@ mod tests {
                 "reviewer".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn resolve_orchestrator_prefers_env_override() {
+        assert_eq!(
+            resolve_bin_from(
+                "orchestrator",
+                Some(OsString::from("/tmp/custom-orchestrator")),
+                None
+            ),
+            "/tmp/custom-orchestrator"
+        );
+    }
+
+    #[test]
+    fn resolve_orchestrator_prefers_sibling_binary() -> std::io::Result<()> {
+        let temp = std::env::temp_dir().join(format!(
+            "tiffany-cli-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp)?;
+        let tiffany = temp.join(exe_name("tiffany-loop"));
+        let orchestrator = temp.join(exe_name("orchestrator"));
+        std::fs::write(&tiffany, "")?;
+        std::fs::write(&orchestrator, "")?;
+
+        assert_eq!(
+            resolve_bin_from("orchestrator", None, Some(tiffany)),
+            orchestrator.to_string_lossy()
+        );
+
+        let _ = std::fs::remove_dir_all(temp);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_non_default_bin_keeps_user_value() {
+        assert_eq!(resolve_bin_from("/tmp/orch", None, None), "/tmp/orch");
     }
 }

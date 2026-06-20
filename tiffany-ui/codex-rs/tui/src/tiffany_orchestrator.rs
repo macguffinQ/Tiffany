@@ -338,7 +338,13 @@ async fn run_event_bridge(
         .args(&launch.extra_args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
+        .spawn()
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "failed to start `{}` - {err}; install the `orchestrator` binary next to `tiffany-loop`, pass `--bin /path/to/orchestrator`, or set TIFFANY_ORCHESTRATOR_BIN",
+                launch.bin
+            )
+        })?;
 
     let stdout = child
         .stdout

@@ -190,19 +190,19 @@ jobs:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Skip if tap token is not configured
+      - name: Require Homebrew tap token
         if: ${{ env.HOMEBREW_TAP_TOKEN == '' }}
-        run: echo "Set HOMEBREW_TAP_TOKEN to update the Homebrew tap automatically."
+        run: |
+          echo "::error::HOMEBREW_TAP_TOKEN is not configured. Add a repository secret with write access to ${HOMEBREW_TAP_REPO}, or update the tap manually before publishing."
+          exit 1
 
       - name: Checkout tap
-        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
         uses: actions/checkout@v5
         with:
           repository: ${{ env.HOMEBREW_TAP_REPO }}
           token: ${{ env.HOMEBREW_TAP_TOKEN }}
 
       - name: Update formula
-        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -263,7 +263,6 @@ jobs:
           sed -i 's/^          //' Formula/tiffany-loop.rb
 
       - name: Commit formula
-        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
         shell: bash
         run: |
           set -euo pipefail
