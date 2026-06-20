@@ -39,13 +39,13 @@ It's designed for software engineering tasks where:
 
 ## Which command should I use?
 
-For normal interactive use, run `orchestrator setup` once, then start the UI with `tiffany-loop`. From a source checkout, use `./scripts/tiffany-dev setup` and `./scripts/tiffany-dev`.
+For normal interactive use, run `tiffany-loop setup` once, then start the UI with `tiffany-loop`. From a source checkout, use `./scripts/tiffany-dev setup` and `./scripts/tiffany-dev`.
 
 The shortest path is:
 
 ```bash
 # Installed with Homebrew or a release archive:
-orchestrator setup
+tiffany-loop setup
 tiffany-loop
 
 # Source checkout:
@@ -64,10 +64,13 @@ fails because of a provider, model, key, or runtime mismatch.
 | `orchestrator` | Runtime/control binary | Config, events, ACP server, non-interactive runs, scripting |
 | `./scripts/tiffany-dev` | Source checkout helper | Local development without installing binaries |
 
-The split is intentional: `tiffany-loop` owns the terminal experience, while
+The split is intentional: `tiffany-loop` is the user-facing shell, while
 `orchestrator` owns provider config, role routing, event streaming, and runtime
-execution. `orchestrator tui` delegates to `tiffany-loop orchestrator` when the UI
-binary is installed.
+execution. Common runtime commands are available at the top level, so
+`tiffany-loop setup`, `tiffany-loop status`, `tiffany-loop doctor`, and
+`tiffany-loop config ...` forward to the matching `orchestrator` commands.
+`orchestrator tui` delegates to `tiffany-loop orchestrator` when the UI binary is
+installed.
 
 ## Try The Minimal Example
 
@@ -241,7 +244,7 @@ Recommended for users:
 ```bash
 brew tap macguffinQ/tap
 brew install tiffany-loop
-orchestrator setup
+tiffany-loop setup
 tiffany-loop
 ```
 
@@ -254,9 +257,9 @@ The Homebrew package installs three commands:
 After install:
 
 ```bash
-orchestrator init
-orchestrator setup
-orchestrator doctor
+tiffany-loop init
+tiffany-loop setup
+tiffany-loop doctor
 tiffany-loop
 ```
 
@@ -290,8 +293,8 @@ strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v ti
 tar -xzf tiffany-loop-v0.1.14-aarch64-apple-darwin.tar.gz
 cd tiffany-loop-v0.1.14-aarch64-apple-darwin
 chmod +x orchestrator tiffany-loop tiffany
-./orchestrator setup
-./orchestrator doctor
+./tiffany-loop setup
+./tiffany-loop doctor
 ./tiffany-loop
 ```
 
@@ -303,17 +306,17 @@ Public Homebrew installs require the `macguffinQ/Tiffany` repository and release
 
 ```bash
 # 1. Initialize
-orchestrator init
+tiffany-loop init
 # writes ~/.orchestrator/config.yaml
 
 # 2. Configure providers, models, and roles
-orchestrator setup
+tiffany-loop setup
 # Or use the TUI forms:
 tiffany-loop
 # then run /provider and /role
 
 # 3. Check the full provider -> model -> role -> runtime wiring
-orchestrator doctor
+tiffany-loop doctor
 
 # 4. Run interactively
 cd ~/your-project
@@ -436,8 +439,11 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--commit --push]` | Generate and optionally commit/push the Homebrew tap formula for a published release |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` | Inspect or trim shared and legacy Cargo build caches; default removes only the old fork-local target |
 | `tiffany-loop` | Open the primary tiffany-loop UI after install |
-| `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
-| `orchestrator setup` | Guided first-run setup for providers, models, and roles |
+| `tiffany-loop init` | Generate `~/.orchestrator/config.yaml` through the primary command |
+| `tiffany-loop setup` | Guided first-run setup for providers, models, and roles |
+| `tiffany-loop status` | Show installed commands, config roots, bridge command, mux, and logs |
+| `tiffany-loop doctor` | Diagnose UI discovery, config, runtime binaries, API keys, role wiring, and local tools |
+| `tiffany-loop config ...` | Inspect and edit orchestrator configuration through the primary command |
 | `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--agent`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
 | `orchestrator run "..." --detach` | Run a task in the background and write a readable event log under `~/.orchestrator/runs/` |
 | `orchestrator attach [id|prefix|last]` | Print the latest detached run status and log tail |

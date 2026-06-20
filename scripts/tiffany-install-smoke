@@ -12,6 +12,7 @@ Checks the installed/source-built command surface in an isolated HOME:
   - tiffany-loop
   - tiffany compatibility alias
   - init/status/doctor/provider dry-run
+  - top-level tiffany-loop setup/status/doctor/config passthroughs
   - tiffany-loop orchestrator help and legacy bridge help
 
 Modes:
@@ -194,26 +195,38 @@ log="$(run_log tiffany-orchestrator-help "$tiffany_bin" orchestrator --help)"
 assert_log_contains "$log" "--orchestrator-config"
 assert_log_contains "$log" "--worker"
 
-log="$(run_log init "$orchestrator_bin" --config "$config" init)"
+log="$(run_log tiffany-setup-help "$tiffany_bin" setup --help)"
+assert_log_contains "$log" "Guided first-run setup"
+
+log="$(run_log tiffany-status-help "$tiffany_bin" status --help)"
+assert_log_contains "$log" "orchestrator status"
+
+log="$(run_log tiffany-doctor-help "$tiffany_bin" doctor --help)"
+assert_log_contains "$log" "orchestrator doctor"
+
+log="$(run_log tiffany-config-help "$tiffany_bin" config --help)"
+assert_log_contains "$log" "orchestrator config"
+
+log="$(run_log tiffany-init "$tiffany_bin" init --bin "$orchestrator_bin" --orchestrator-config "$config")"
 assert_log_contains "$log" "Wrote default config"
 if [[ ! -f "$config" ]]; then
   echo "init did not create $config" >&2
   exit 1
 fi
 
-log="$(run_log status "$orchestrator_bin" --config "$config" status)"
+log="$(run_log tiffany-status "$tiffany_bin" status --bin "$orchestrator_bin" --orchestrator-config "$config")"
 assert_log_contains "$log" "tiffany-loop"
 assert_log_contains "$log" "$tiffany_bin"
 assert_log_contains "$log" "$config"
 assert_log_contains "$log" "bridge:"
 
-log="$(run_log doctor "$orchestrator_bin" --config "$config" doctor)"
+log="$(run_log tiffany-doctor "$tiffany_bin" doctor --bin "$orchestrator_bin" --orchestrator-config "$config")"
 assert_log_contains "$log" "orchestrator doctor"
 assert_log_contains "$log" "tiffany-loop binary:"
 assert_log_contains "$log" "config parsed"
 assert_log_contains "$log" "Roles:"
 
-log="$(run_log provider-dry-run "$orchestrator_bin" --config "$config" config provider setup custom --type openai --env TIFFANY_INSTALL_SMOKE_API_KEY --endpoint https://example.invalid/v1 --dry-run)"
+log="$(run_log tiffany-provider-dry-run "$tiffany_bin" config --bin "$orchestrator_bin" --orchestrator-config "$config" provider setup custom --type openai --env TIFFANY_INSTALL_SMOKE_API_KEY --endpoint https://example.invalid/v1 --dry-run)"
 assert_log_contains "$log" "Provider setup dry-run"
 assert_log_contains "$log" '${TIFFANY_INSTALL_SMOKE_API_KEY}'
 assert_log_contains "$log" "https://example.invalid/v1"

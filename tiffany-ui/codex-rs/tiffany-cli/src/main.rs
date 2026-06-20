@@ -30,7 +30,7 @@ const CODEX_SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
     version,
     bin_name = "tiffany-loop",
     subcommand_negates_reqs = true,
-    override_usage = "tiffany-loop [OPTIONS] [PROMPT]\n       tiffany-loop [OPTIONS] orchestrator [ARGS]"
+    override_usage = "tiffany-loop [OPTIONS] [PROMPT]\n       tiffany-loop [OPTIONS] orchestrator [ARGS]\n       tiffany-loop <setup|status|doctor|config|roles|sessions|usage|init> [ARGS]"
 )]
 struct TiffanyCli {
     /// Optional initial prompt to send through the orchestrator.
@@ -46,6 +46,50 @@ enum Subcommand {
     /// Run orchestrator inside the Tiffany Loop TUI.
     #[clap(name = "orchestrator", visible_aliases = ["orch", "team"])]
     Orchestrator(TiffanyOrchestratorCommand),
+
+    /// Guided first-run setup for providers, models, and roles.
+    #[command(
+        long_about = "Guided first-run setup for providers, models, and roles.\n\nForwards to `orchestrator setup`."
+    )]
+    Setup(TiffanyPassthroughCommand),
+
+    /// Show installed commands, config roots, roles, providers, and next steps.
+    #[command(
+        long_about = "Show installed commands, config roots, roles, providers, and next steps.\n\nForwards to `orchestrator status`."
+    )]
+    Status(TiffanyPassthroughCommand),
+
+    /// Diagnose config, runtime binaries, API keys, roles, and local tools.
+    #[command(
+        long_about = "Diagnose config, runtime binaries, API keys, roles, and local tools.\n\nForwards to `orchestrator doctor`."
+    )]
+    Doctor(TiffanyPassthroughCommand),
+
+    /// Inspect and edit orchestrator configuration.
+    #[command(
+        long_about = "Inspect and edit orchestrator configuration.\n\nForwards to `orchestrator config`."
+    )]
+    Config(TiffanyPassthroughCommand),
+
+    /// Register and inspect orchestrator roles.
+    #[command(
+        long_about = "Register and inspect orchestrator roles.\n\nForwards to `orchestrator roles`."
+    )]
+    Roles(TiffanyPassthroughCommand),
+
+    /// Browse past sessions.
+    #[command(long_about = "Browse past sessions.\n\nForwards to `orchestrator sessions`.")]
+    Sessions(TiffanyPassthroughCommand),
+
+    /// Show token usage and budget.
+    #[command(long_about = "Show token usage and budget.\n\nForwards to `orchestrator usage`.")]
+    Usage(TiffanyPassthroughCommand),
+
+    /// Initialize config in ~/.orchestrator/.
+    #[command(
+        long_about = "Initialize config in ~/.orchestrator/.\n\nForwards to `orchestrator init`."
+    )]
+    Init(TiffanyPassthroughCommand),
 }
 
 #[derive(Debug, Args, Clone, Default)]
@@ -87,6 +131,21 @@ struct TiffanyOrchestratorCommand {
     no_reviewer: bool,
 
     /// Optional initial prompt for native TUI mode, or arguments forwarded with --legacy.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+struct TiffanyPassthroughCommand {
+    /// Orchestrator executable to invoke.
+    #[arg(long = "bin", default_value = "orchestrator")]
+    bin: String,
+
+    /// Orchestrator config file. Kept separate from Tiffany Loop UI config.
+    #[arg(long = "orchestrator-config", visible_alias = "orch-config")]
+    config: Option<String>,
+
+    /// Arguments forwarded to the orchestrator subcommand.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
 }
@@ -189,10 +248,23 @@ async fn run_tiffany(cli: TiffanyCli, arg0_paths: Arg0DispatchPaths) -> anyhow::
     let TiffanyCli { prompt, subcommand } = cli;
 
     let command = match subcommand {
-        Some(Subcommand::Orchestrator(command)) => command,
+        Some(Subcommand::Orchestrator(command)) => {
+            return run_tiffany_orchestrator(command, arg0_paths).await;
+        }
+        Some(subcommand) => {
+            run_orchestrator_passthrough(subcommand)?;
+            return Ok(());
+        }
         None => command_from_default_prompt(prompt),
     };
 
+    run_tiffany_orchestrator(command, arg0_paths).await
+}
+
+async fn run_tiffany_orchestrator(
+    command: TiffanyOrchestratorCommand,
+    arg0_paths: Arg0DispatchPaths,
+) -> anyhow::Result<()> {
     if command.legacy {
         run_orchestrator_bridge(command)?;
         return Ok(());
@@ -210,6 +282,40 @@ async fn run_tiffany(cli: TiffanyCli, arg0_paths: Arg0DispatchPaths) -> anyhow::
     )
     .await?;
     handle_exit(exit_info)
+}
+
+fn run_orchestrator_passthrough(subcommand: Subcommand) -> anyhow::Result<()> {
+    let Some((name, command)) = passthrough_command(subcommand) else {
+        anyhow::bail!("internal error: unsupported Tiffany passthrough command");
+    };
+    let bin = resolve_bin(&command.bin);
+    let status = Command::new(&bin)
+        .args(config_args(command.config.as_deref()))
+        .arg(name)
+        .args(&command.args)
+        .status()
+        .with_context(|| format!("failed to run Tiffany passthrough `{bin} {name}`"))?;
+
+    if !status.success() {
+        anyhow::bail!("Tiffany passthrough `{name}` exited with status {status}");
+    }
+    Ok(())
+}
+
+fn passthrough_command(
+    subcommand: Subcommand,
+) -> Option<(&'static str, TiffanyPassthroughCommand)> {
+    match subcommand {
+        Subcommand::Setup(command) => Some(("setup", command)),
+        Subcommand::Status(command) => Some(("status", command)),
+        Subcommand::Doctor(command) => Some(("doctor", command)),
+        Subcommand::Config(command) => Some(("config", command)),
+        Subcommand::Roles(command) => Some(("roles", command)),
+        Subcommand::Sessions(command) => Some(("sessions", command)),
+        Subcommand::Usage(command) => Some(("usage", command)),
+        Subcommand::Init(command) => Some(("init", command)),
+        Subcommand::Orchestrator(_) => None,
+    }
 }
 
 fn command_from_default_prompt(prompt: Option<String>) -> TiffanyOrchestratorCommand {
@@ -406,6 +512,39 @@ mod tests {
 
         assert_eq!(command.args, vec!["hello"]);
         assert_eq!(command.event_args(), vec!["--worker", "worker-cc"]);
+    }
+
+    #[test]
+    fn top_level_config_is_orchestrator_passthrough() {
+        let cli = TiffanyCli::parse_from([
+            "tiffany-loop",
+            "config",
+            "--orchestrator-config",
+            "/tmp/orch.yaml",
+            "provider",
+            "list",
+        ]);
+        let Some(Subcommand::Config(command)) = cli.subcommand else {
+            panic!("expected config passthrough");
+        };
+
+        assert_eq!(command.config.as_deref(), Some("/tmp/orch.yaml"));
+        assert_eq!(command.args, vec!["provider", "list"]);
+    }
+
+    #[test]
+    fn passthrough_command_maps_top_level_names() {
+        let Some((name, command)) =
+            passthrough_command(Subcommand::Doctor(TiffanyPassthroughCommand {
+                args: vec!["--format".to_string(), "json".to_string()],
+                ..TiffanyPassthroughCommand::default()
+            }))
+        else {
+            panic!("expected doctor passthrough");
+        };
+
+        assert_eq!(name, "doctor");
+        assert_eq!(command.args, vec!["--format", "json"]);
     }
 
     #[test]

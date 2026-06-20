@@ -48,13 +48,13 @@ tiffany-loop orchestration mode
 
 ## 到底该运行哪个命令？
 
-正常交互使用：安装后先运行一次 `orchestrator setup`，再用 `tiffany-loop` 进入主界面；源码开发时用 `./scripts/tiffany-dev setup` 和 `./scripts/tiffany-dev`。
+正常交互使用：安装后先运行一次 `tiffany-loop setup`，再用 `tiffany-loop` 进入主界面；源码开发时用 `./scripts/tiffany-dev setup` 和 `./scripts/tiffany-dev`。
 
 最短路径：
 
 ```bash
 # Homebrew 或 release 包安装后：
-orchestrator setup
+tiffany-loop setup
 tiffany-loop
 
 # 源码 checkout：
@@ -71,9 +71,12 @@ tiffany-loop
 | `orchestrator` | runtime / 控制二进制 | 配置、事件流、ACP server、非交互运行、脚本化 |
 | `./scripts/tiffany-dev` | 源码开发辅助脚本 | 不安装二进制时从当前 checkout 启动 |
 
-这个拆分是有意的：`tiffany-loop` 负责终端交互体验，`orchestrator` 负责
-provider 配置、角色路由、事件流和 runtime 执行。`orchestrator tui` 在
-安装了 `tiffany-loop` 时会自动转到 `tiffany-loop orchestrator`。
+这个拆分是有意的：`tiffany-loop` 是用户面对的轻量壳，`orchestrator` 负责
+provider 配置、角色路由、事件流和 runtime 执行。常用 runtime 命令已经挂到
+顶层，`tiffany-loop setup`、`tiffany-loop status`、`tiffany-loop doctor`
+和 `tiffany-loop config ...` 会转发到对应的 `orchestrator` 命令。
+`orchestrator tui` 在安装了 `tiffany-loop` 时会自动转到
+`tiffany-loop orchestrator`。
 
 ## 先用最小示例试跑
 
@@ -153,7 +156,7 @@ tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.
 ```bash
 brew tap macguffinQ/tap
 brew install tiffany-loop
-orchestrator setup
+tiffany-loop setup
 tiffany-loop
 ```
 
@@ -166,9 +169,9 @@ Homebrew 包会同时安装三个命令：
 安装后：
 
 ```bash
-orchestrator init
-orchestrator setup
-orchestrator doctor
+tiffany-loop init
+tiffany-loop setup
+tiffany-loop doctor
 tiffany-loop
 ```
 
@@ -201,8 +204,8 @@ strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v ti
 tar -xzf tiffany-loop-v0.1.14-aarch64-apple-darwin.tar.gz
 cd tiffany-loop-v0.1.14-aarch64-apple-darwin
 chmod +x orchestrator tiffany-loop tiffany
-./orchestrator setup
-./orchestrator doctor
+./tiffany-loop setup
+./tiffany-loop doctor
 ./tiffany-loop
 ```
 
@@ -214,15 +217,15 @@ tag release 目前优先提供 Homebrew 使用的 macOS Apple Silicon 压缩包�
 
 ```bash
 # 1. 初始化配置
-orchestrator init
+tiffany-loop init
 # 写入 ~/.orchestrator/config.yaml
 
 # 2. 配置 provider、model、role
-orchestrator setup
+tiffany-loop setup
 # 也可以进入 TUI 后用 /provider 和 /role
 
 # 3. 检查 provider -> model -> role -> runtime 是否连通
-orchestrator doctor
+tiffany-loop doctor
 
 # 4. 进入主 TUI
 cd ~/your-project
@@ -334,8 +337,11 @@ behavior:
 | `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--commit --push]` | 为已发布版本生成并可选提交/推送 Homebrew tap 公式 |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
 | `tiffany-loop` | 安装后打开主 tiffany-loop UI |
-| `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
-| `orchestrator setup` | 引导式配置 provider、model、role |
+| `tiffany-loop init` | 通过主命令生成 `~/.orchestrator/config.yaml` |
+| `tiffany-loop setup` | 引导式配置 provider、model、role |
+| `tiffany-loop status` | 查看安装命令、配置根目录、桥接命令、mux 和日志路径 |
+| `tiffany-loop doctor` | 诊断 UI 查找、配置、runtime、API key、角色绑定和本地工具 |
+| `tiffany-loop config ...` | 通过主命令查看和修改 orchestrator 配置 |
 | `orchestrator run "..."` | 执行一个任务；`--worker` 选择 worker 路线，`--agent` 选择 Claude Code 子 agent，`--ab` 会比较两个已配置 worker 路线 |
 | `orchestrator run "..." --detach` | 后台执行任务，并把可读事件日志写到 `~/.orchestrator/runs/` |
 | `orchestrator attach [id|prefix|last]` | 查看最近或指定后台任务的状态和日志尾部 |

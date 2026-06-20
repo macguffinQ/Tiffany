@@ -13,6 +13,7 @@ Homebrew is the recommended install path for users:
 ```bash
 brew tap macguffinQ/tap
 brew install tiffany-loop
+tiffany-loop setup
 tiffany-loop
 ```
 
@@ -23,10 +24,12 @@ The formula installs three binaries:
 - `tiffany-loop` for the primary TUI. Use this command first.
 - `tiffany` as a compatibility alias for older scripts.
 
-After install, initialize runtime config and configure providers/roles from the TUI:
+After install, initialize runtime config and configure providers/roles from the
+TUI-facing command:
 
 ```bash
-orchestrator init
+tiffany-loop init
+tiffany-loop setup
 tiffany-loop
 ```
 
