@@ -521,6 +521,7 @@ The bottom status line follows tiffany-loop-style run HUD behavior: it keeps one
 Troubleshooting first:
 
 - Run `orchestrator status` when you are unsure which `tiffany-loop` / `orchestrator` binaries or config roots are being used.
+- `orchestrator status` prints targeted next actions, for example `/provider env minimax <ENV_NAME>`, `/provider endpoint minimax <url>`, or `orchestrator roles register worker-cc ...` when provider/model/runtime wiring is incomplete.
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
 - Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, and worker CLI binaries.
 - For model errors, confirm the role points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`. Use `--model <id>` only when binding to an existing internal model id.

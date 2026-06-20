@@ -1400,12 +1400,34 @@ fn missing_provider_base_url(issue: &str) -> Option<&str> {
     issue.strip_suffix(" base_url missing")
 }
 
+fn missing_provider_auth(issue: &str) -> Option<&str> {
+    issue.strip_suffix(" api key missing")
+}
+
+fn missing_model_provider_link(issue: &str) -> Option<(&str, &str)> {
+    let (model, rest) = issue.split_once(" provider ")?;
+    let provider = rest.strip_suffix(" missing")?;
+    Some((model, provider))
+}
+
 fn is_role_setup_issue(issue: &str) -> bool {
     issue == "no models"
         || issue == "no roles"
         || issue == "no default worker"
         || issue.contains(" model ")
         || issue.contains(" runtime ")
+}
+
+fn missing_role_model(issue: &str) -> Option<(&str, &str)> {
+    let (role, rest) = issue.split_once(" model ")?;
+    let model = rest.strip_suffix(" missing")?;
+    Some((role, model))
+}
+
+fn missing_role_runtime(issue: &str) -> Option<(&str, &str)> {
+    let (role, rest) = issue.split_once(" runtime ")?;
+    let runtime = rest.strip_suffix(" missing")?;
+    Some((role, runtime))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1452,6 +1474,7 @@ fn status_actions(
             .iter()
             .any(|issue| is_provider_setup_issue(issue))
         {
+            let provider_action_start = actions.len();
             if let Some(provider) = config_issues
                 .iter()
                 .find_map(|issue| missing_provider_base_url(issue))
@@ -1463,16 +1486,74 @@ fn status_actions(
                     ),
                 });
             }
-            actions.push(StatusAction {
-                label: "fix provider",
-                command: "tiffany-loop then /provider, or `orchestrator config provider setup <provider> --env <ENV_NAME>`".into(),
-            });
+            if let Some(provider) = config_issues
+                .iter()
+                .find_map(|issue| missing_provider_auth(issue))
+            {
+                actions.push(StatusAction {
+                    label: "fix auth",
+                    command: format!(
+                        "tiffany-loop then `/provider env {provider} <ENV_NAME>`, or `orchestrator config provider setup {provider} --env <ENV_NAME>`"
+                    ),
+                });
+            }
+            if let Some((model, provider)) = config_issues
+                .iter()
+                .find_map(|issue| missing_model_provider_link(issue))
+            {
+                actions.push(StatusAction {
+                    label: "fix provider",
+                    command: format!(
+                        "configure provider `{provider}` for model `{model}`: `orchestrator config provider setup {provider} --env <ENV_NAME>`"
+                    ),
+                });
+            }
+            if actions.len() == provider_action_start {
+                actions.push(StatusAction {
+                    label: "fix provider",
+                    command: "tiffany-loop then /provider, or `orchestrator config provider setup <provider> --env <ENV_NAME>`".into(),
+                });
+            }
         }
         if config_issues.iter().any(|issue| is_role_setup_issue(issue)) {
-            actions.push(StatusAction {
-                label: "fix role",
-                command: "tiffany-loop then /role, or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime-id>`".into(),
-            });
+            let role_action_start = actions.len();
+            if let Some((role, runtime)) = config_issues
+                .iter()
+                .find_map(|issue| missing_role_runtime(issue))
+            {
+                actions.push(StatusAction {
+                    label: "fix runtime",
+                    command: format!(
+                        "fix `{role}` runtime with `/role {role}` or `orchestrator roles register {role} --provider <provider> --model-name <api-model> --runtime {runtime}`"
+                    ),
+                });
+            }
+            if let Some((role, model)) = config_issues
+                .iter()
+                .find_map(|issue| missing_role_model(issue))
+            {
+                actions.push(StatusAction {
+                    label: "fix role",
+                    command: format!(
+                        "fix `{role}` model with `/role {role}` or `orchestrator roles register {role} --provider <provider> --model-name <api-model> --runtime <runtime-id>`; use `--model {model}` only if reusing that internal id"
+                    ),
+                });
+            }
+            if config_issues
+                .iter()
+                .any(|issue| issue == "no default worker")
+            {
+                actions.push(StatusAction {
+                    label: "add worker",
+                    command: "add worker with `orchestrator roles register worker-cc --provider <provider> --model-name <api-model> --runtime claude-code --agent-teams`".into(),
+                });
+            }
+            if actions.len() == role_action_start {
+                actions.push(StatusAction {
+                    label: "fix role",
+                    command: "tiffany-loop then /role, or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime-id>`".into(),
+                });
+            }
         }
         if actions.is_empty() {
             actions.push(StatusAction {
@@ -5196,10 +5277,13 @@ mod tests {
 
         assert_eq!(actions[0].label, "fix role");
         assert!(actions[0].command.contains("/role"));
-        assert!(actions[0].command.contains("orchestrator roles register"));
+        assert!(actions[0]
+            .command
+            .contains("orchestrator roles register planner"));
         assert!(actions[0]
             .command
             .contains("--provider <provider> --model-name <api-model>"));
+        assert!(actions[0].command.contains("--model missing-model"));
         assert_eq!(actions[1].command, "orchestrator doctor".to_string());
     }
 
@@ -5211,9 +5295,11 @@ mod tests {
         ];
         let actions = status_actions(true, &issues, true, false);
 
-        assert_eq!(actions[0].label, "fix provider");
-        assert!(actions[0].command.contains("/provider"));
-        assert!(actions[0].command.contains("config provider setup"));
+        assert_eq!(actions[0].label, "fix auth");
+        assert!(actions[0].command.contains("/provider env anthropic"));
+        assert!(actions[0]
+            .command
+            .contains("config provider setup anthropic --env <ENV_NAME>"));
         assert!(!actions[0].command.contains("orchestrator setup"));
         assert_eq!(actions[1].command, "orchestrator doctor".to_string());
     }
@@ -5230,8 +5316,7 @@ mod tests {
         assert!(actions[0]
             .command
             .contains("config provider setup minimax --endpoint <url>"));
-        assert_eq!(actions[1].label, "fix provider");
-        assert_eq!(actions[2].command, "orchestrator doctor".to_string());
+        assert_eq!(actions[1].command, "orchestrator doctor".to_string());
     }
 
     #[test]
@@ -5243,14 +5328,29 @@ mod tests {
         ];
         let actions = status_actions(true, &issues, true, false);
 
-        assert_eq!(actions[0].label, "fix provider");
-        assert!(actions[0].command.contains("/provider"));
-        assert_eq!(actions[1].label, "fix role");
-        assert!(actions[1].command.contains("/role"));
-        assert!(actions[1]
+        assert_eq!(actions[0].label, "fix auth");
+        assert!(actions[0].command.contains("/provider env google"));
+        assert_eq!(actions[1].label, "fix provider");
+        assert!(actions[1].command.contains("provider `openai`"));
+        assert_eq!(actions[2].label, "fix runtime");
+        assert!(actions[2].command.contains("/role worker-cc"));
+        assert!(actions[2]
             .command
             .contains("--provider <provider> --model-name <api-model>"));
-        assert_eq!(actions[2].command, "orchestrator doctor".to_string());
+        assert_eq!(actions[3].command, "orchestrator doctor".to_string());
+    }
+
+    #[test]
+    fn status_actions_offer_worker_registration_when_default_worker_missing() {
+        let issues = vec!["no default worker".to_string()];
+        let actions = status_actions(true, &issues, true, false);
+
+        assert_eq!(actions[0].label, "add worker");
+        assert!(actions[0]
+            .command
+            .contains("orchestrator roles register worker-cc"));
+        assert!(actions[0].command.contains("--agent-teams"));
+        assert_eq!(actions[1].command, "orchestrator doctor".to_string());
     }
 
     #[test]

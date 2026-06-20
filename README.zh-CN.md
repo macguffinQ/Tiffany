@@ -429,6 +429,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 优先排障：
 
 - 不确定当前用的是哪个 `tiffany-loop` / `orchestrator` binary 或配置根目录时，先运行 `orchestrator status`。
+- `orchestrator status` 会给出更具体的下一步，例如 `/provider env minimax <ENV_NAME>`、`/provider endpoint minimax <url>`，或 provider/model/runtime 未连通时的 `orchestrator roles register worker-cc ...`。
 - worker 提前退出、provider 报 `model not found` / `模型不存在` / `401/403`、或者 API key 看起来没生效时，先运行 `/doctor` 或 `orchestrator doctor`。
 - doctor 会在不打印密钥的前提下检查环境变量 key 引用，验证 `role -> model -> provider -> runtime` 是否连通，提示重复/缺失 model，并显示本机安装/构建环境：Homebrew tap/package、Rust/cargo、Xcode/CLT 和 worker CLI 二进制。
 - 模型报错时，重点确认角色是否指向正确的 provider API model name：用 `/role <role>`，或 `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 修正；只有绑定已有内部 model id 时才需要 `--model <id>`。
