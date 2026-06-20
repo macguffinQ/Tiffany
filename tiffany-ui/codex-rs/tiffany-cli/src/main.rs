@@ -19,6 +19,7 @@ use supports_color::Stream;
 
 const TIFFANY_HOME_ENV: &str = "TIFFANY_HOME";
 const TIFFANY_SQLITE_HOME_ENV: &str = "TIFFANY_SQLITE_HOME";
+const TIFFANY_RUNTIME_ENV: &str = "TIFFANY_LOOP_RUNTIME";
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const CODEX_SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 
@@ -473,6 +474,7 @@ fn install_tiffany_config_home() -> anyhow::Result<()> {
     unsafe {
         env::set_var(TIFFANY_HOME_ENV, &home);
         env::set_var(TIFFANY_SQLITE_HOME_ENV, &sqlite_home);
+        env::set_var(TIFFANY_RUNTIME_ENV, "1");
         env::set_var(CODEX_HOME_ENV, &home);
         env::set_var(CODEX_SQLITE_HOME_ENV, &sqlite_home);
     }
