@@ -11,8 +11,8 @@ Use this before making the repository public.
 - [x] Add preview-stage and non-affiliation language.
 - [x] Preserve Codex fork license and notice files.
 - [x] Configure or manually update the Homebrew tap for the current release.
-  Future tagged releases require `HOMEBREW_TAP_TOKEN`; see
-  [docs/homebrew.md](homebrew.md).
+  `HOMEBREW_TAP_TOKEN` enables automatic tap updates for future tagged releases;
+  without it, update the tap manually after release. See [docs/homebrew.md](homebrew.md).
 - [ ] Run full release preflight before publishing the next tag:
 
 ```bash
