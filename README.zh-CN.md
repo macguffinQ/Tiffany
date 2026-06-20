@@ -185,6 +185,8 @@ cd ~/code/orchestrator
 ./scripts/tiffany-dev
 ```
 
+macOS 源码构建如果在 Xcode 更新后失败，或 `xcode-select` 指向 `/Applications/Xcode-beta.app`，先运行 `orchestrator doctor`；doctor 会显示当前 developer dir、`clang`、`xcodebuild`，并给出切回稳定 Xcode 或 Command Line Tools 的 `sudo xcode-select -s ...` 命令。
+
 如果不用 Homebrew，又想把命令安装进 `PATH`：
 
 ```bash
@@ -432,6 +434,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `orchestrator status` 会给出更具体的下一步，例如 `/provider env minimax <ENV_NAME>`、`/provider endpoint minimax <url>`，或 provider/model/runtime 未连通时的 `orchestrator roles register worker-cc ...`。
 - worker 提前退出、provider 报 `model not found` / `模型不存在` / `401/403`、或者 API key 看起来没生效时，先运行 `/doctor` 或 `orchestrator doctor`。
 - doctor 会在不打印密钥的前提下检查环境变量 key 引用，验证 `role -> model -> provider -> runtime` 是否连通，提示重复/缺失 model，并显示本机安装/构建环境：Homebrew tap/package、Rust/cargo、Xcode/CLT 和 worker CLI 二进制。
+- macOS 下 doctor 也会提示是否选中了 Xcode beta，并在源码构建失败时给出切换到稳定 Xcode 或 Command Line Tools 的 `xcode-select` 命令。
 - 模型报错时，重点确认角色是否指向正确的 provider API model name：用 `/role <role>`，或 `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 修正；只有绑定已有内部 model id 时才需要 `--model <id>`。
 - 运行失败包含 `model not found`、`模型不存在` 或 `[1211]` 时，`/process` 和失败摘要会给出可复制修复模板，例如 `/roles save worker-codex --provider openai --model-name <api-model> --runtime codex`。
 

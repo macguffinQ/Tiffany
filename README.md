@@ -274,6 +274,8 @@ cd ~/code/orchestrator
 ./scripts/tiffany-dev
 ```
 
+On macOS source builds, run `orchestrator doctor` if compilation fails after an Xcode update or when `xcode-select` points at `/Applications/Xcode-beta.app`; doctor reports the selected developer directory, `clang`, `xcodebuild`, and the exact `sudo xcode-select -s ...` command to switch to stable Xcode or Command Line Tools.
+
 Manual source install, if you want the commands in `PATH` without Homebrew:
 
 ```bash
@@ -524,6 +526,7 @@ Troubleshooting first:
 - `orchestrator status` prints targeted next actions, for example `/provider env minimax <ENV_NAME>`, `/provider endpoint minimax <url>`, or `orchestrator roles register worker-cc ...` when provider/model/runtime wiring is incomplete.
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
 - Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, and worker CLI binaries.
+- On macOS, doctor also calls out Xcode beta selections and gives the `xcode-select` command to switch to stable Xcode or Command Line Tools when source builds fail.
 - For model errors, confirm the role points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`. Use `--model <id>` only when binding to an existing internal model id.
 - When a run fails with `model not found`, `模型不存在`, or `[1211]`, `/process` and the failure summary include a copyable repair template such as `/roles save worker-codex --provider openai --model-name <api-model> --runtime codex`.
 
