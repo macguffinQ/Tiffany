@@ -177,7 +177,11 @@ enum Cmd {
     Status,
 
     /// Diagnose config, runtime binaries, API keys, and local state
-    Doctor,
+    Doctor {
+        /// Output format
+        #[arg(long, value_enum, default_value_t = DoctorFormat::Text)]
+        format: DoctorFormat,
+    },
 
     /// Show token usage and budget
     Usage {
@@ -197,6 +201,12 @@ enum Cmd {
 pub(crate) enum EventsFormat {
     Json,
     Text,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum DoctorFormat {
+    Text,
+    Json,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -744,6 +754,21 @@ mod tests {
         match cli.cmd {
             Cmd::Events { format, .. } => assert_eq!(format, EventsFormat::Text),
             _ => panic!("unexpected events command"),
+        }
+    }
+
+    #[test]
+    fn doctor_format_defaults_to_text_and_accepts_json() {
+        let cli = Cli::parse_from(["orchestrator", "doctor"]);
+        match cli.cmd {
+            Cmd::Doctor { format } => assert_eq!(format, DoctorFormat::Text),
+            _ => panic!("unexpected doctor command"),
+        }
+
+        let cli = Cli::parse_from(["orchestrator", "doctor", "--format", "json"]);
+        match cli.cmd {
+            Cmd::Doctor { format } => assert_eq!(format, DoctorFormat::Json),
+            _ => panic!("unexpected doctor command"),
         }
     }
 }

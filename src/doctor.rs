@@ -3,13 +3,15 @@
 use crate::config::{self, Config, RoleConfig};
 use crate::runtime;
 use crate::tiffany_install;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DoctorLevel {
     Ok,
     Warn,
@@ -18,19 +20,33 @@ pub enum DoctorLevel {
     Header,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DoctorLine {
     pub level: DoctorLevel,
     pub message: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DoctorReport {
     pub lines: Vec<DoctorLine>,
     pub issue_count: usize,
+    #[serde(skip_serializing)]
+    pub check_count: usize,
 }
 
 impl DoctorReport {
+    pub fn status(&self) -> &'static str {
+        if self.issue_count == 0 {
+            "ok"
+        } else {
+            "issues"
+        }
+    }
+
+    pub fn render_json_pretty(&self) -> serde_json::Result<String> {
+        serde_json::to_string_pretty(&DoctorReportJson::from(self))
+    }
+
     pub fn render_text(&self) -> String {
         let mut out = String::from("orchestrator doctor\n");
         for line in &self.lines {
@@ -71,7 +87,7 @@ impl DoctorReport {
         out
     }
 
-    fn issue_summary(&self) -> Vec<String> {
+    pub fn issue_summary(&self) -> Vec<String> {
         let fail_messages = self
             .lines
             .iter()
@@ -147,7 +163,7 @@ impl DoctorReport {
         summary
     }
 
-    fn next_steps(&self) -> Vec<String> {
+    pub fn next_steps(&self) -> Vec<String> {
         let mut steps = Vec::new();
         let messages = self
             .lines
@@ -242,6 +258,29 @@ impl DoctorReport {
         }
         steps.truncate(4);
         steps
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct DoctorReportJson<'a> {
+    pub status: &'static str,
+    pub issue_count: usize,
+    pub check_count: usize,
+    pub issue_summary: Vec<String>,
+    pub next_steps: Vec<String>,
+    pub lines: &'a [DoctorLine],
+}
+
+impl<'a> From<&'a DoctorReport> for DoctorReportJson<'a> {
+    fn from(report: &'a DoctorReport) -> Self {
+        Self {
+            status: report.status(),
+            issue_count: report.issue_count,
+            check_count: report.check_count,
+            issue_summary: report.issue_summary(),
+            next_steps: report.next_steps(),
+            lines: &report.lines,
+        }
     }
 }
 
@@ -522,9 +561,20 @@ impl DoctorReportBuilder {
     }
 
     fn finish(self) -> DoctorReport {
+        let check_count = self
+            .lines
+            .iter()
+            .filter(|line| {
+                matches!(
+                    line.level,
+                    DoctorLevel::Ok | DoctorLevel::Warn | DoctorLevel::Fail
+                )
+            })
+            .count();
         DoctorReport {
             lines: self.lines,
             issue_count: self.issue_count,
+            check_count,
         }
     }
 }
@@ -1406,10 +1456,27 @@ mod tests {
     };
     use std::collections::HashMap;
 
+    fn test_report(lines: Vec<DoctorLine>, issue_count: usize) -> DoctorReport {
+        let check_count = lines
+            .iter()
+            .filter(|line| {
+                matches!(
+                    line.level,
+                    DoctorLevel::Ok | DoctorLevel::Warn | DoctorLevel::Fail
+                )
+            })
+            .count();
+        DoctorReport {
+            lines,
+            issue_count,
+            check_count,
+        }
+    }
+
     #[test]
     fn report_renders_icons_and_summary() {
-        let report = DoctorReport {
-            lines: vec![
+        let report = test_report(
+            vec![
                 DoctorLine {
                     level: DoctorLevel::Ok,
                     message: "config parsed".into(),
@@ -1423,8 +1490,8 @@ mod tests {
                     message: "export OPENAI_API_KEY".into(),
                 },
             ],
-            issue_count: 1,
-        };
+            1,
+        );
 
         let rendered = report.render_text();
 
@@ -1440,13 +1507,13 @@ mod tests {
 
     #[test]
     fn report_with_no_required_issues_suggests_launching_ui() {
-        let report = DoctorReport {
-            lines: vec![DoctorLine {
+        let report = test_report(
+            vec![DoctorLine {
                 level: DoctorLevel::Ok,
                 message: "config parsed".into(),
             }],
-            issue_count: 0,
-        };
+            0,
+        );
 
         let rendered = report.render_text();
 
@@ -1457,8 +1524,8 @@ mod tests {
 
     #[test]
     fn report_next_steps_prioritize_config_and_roles() {
-        let report = DoctorReport {
-            lines: vec![
+        let report = test_report(
+            vec![
                 DoctorLine {
                     level: DoctorLevel::Fail,
                     message: "config missing: /tmp/config.yaml".into(),
@@ -1468,8 +1535,8 @@ mod tests {
                     message: "planner: missing role config".into(),
                 },
             ],
-            issue_count: 2,
-        };
+            2,
+        );
 
         let rendered = report.render_text();
 
@@ -1477,6 +1544,40 @@ mod tests {
         assert!(rendered.contains("Register roles with `/role`"));
         assert!(rendered.contains("--provider <provider> --model-name <api-model>"));
         assert!(rendered.contains("Rerun `orchestrator doctor`"));
+    }
+
+    #[test]
+    fn report_renders_machine_readable_json() {
+        let report = test_report(
+            vec![
+                DoctorLine {
+                    level: DoctorLevel::Header,
+                    message: "Config".into(),
+                },
+                DoctorLine {
+                    level: DoctorLevel::Fail,
+                    message: "openai: api key missing".into(),
+                },
+            ],
+            1,
+        );
+
+        let json = report.render_json_pretty().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["status"], "issues");
+        assert_eq!(parsed["issue_count"], 1);
+        assert_eq!(parsed["check_count"], 1);
+        assert_eq!(parsed["lines"][0]["level"], "header");
+        assert_eq!(parsed["lines"][1]["level"], "fail");
+        assert!(parsed["issue_summary"][0]
+            .as_str()
+            .unwrap()
+            .contains("Provider auth missing"));
+        assert!(parsed["next_steps"][0]
+            .as_str()
+            .unwrap()
+            .contains("Configure provider auth"));
     }
 
     #[test]

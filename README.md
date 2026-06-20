@@ -458,7 +458,7 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `orchestrator sessions import-cc` | Import your existing CC sessions from `~/.claude/projects/<slug>/sessions/` |
 | `orchestrator config` | Inspect and edit orchestrator configuration |
 | `orchestrator status` | Show installed commands, config roots, bridge command, mux, and logs |
-| `orchestrator doctor` | Diagnose tiffany UI discovery, config, runtime binaries, API keys, role wiring, and local tools |
+| `orchestrator doctor [--format text\|json]` | Diagnose tiffany UI discovery, config, runtime binaries, API keys, role wiring, and local tools |
 
 ---
 
@@ -526,6 +526,7 @@ Troubleshooting first:
 - `orchestrator status` prints targeted next actions, for example `/provider env minimax <ENV_NAME>`, `/provider endpoint minimax <url>`, or `orchestrator roles register worker-cc ...` when provider/model/runtime wiring is incomplete.
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
 - Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, and worker CLI binaries.
+- Use `orchestrator doctor --format json` from scripts, CI, or UI bridges that need stable `status`, `issue_count`, `issue_summary`, `next_steps`, and diagnostic lines without parsing human text.
 - On macOS, doctor also calls out Xcode beta selections and gives the `xcode-select` command to switch to stable Xcode or Command Line Tools when source builds fail.
 - For model errors, confirm the role points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`. Use `--model <id>` only when binding to an existing internal model id.
 - When a run fails with `model not found`, `模型不存在`, or `[1211]`, `/process` and the failure summary include a copyable repair template such as `/roles save worker-codex --provider openai --model-name <api-model> --runtime codex`.

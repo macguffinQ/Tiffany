@@ -378,8 +378,12 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             Ok(())
         }
 
-        crate::Cmd::Doctor => {
-            println!("{}", orchestrator::doctor::run(config_path).render_text());
+        crate::Cmd::Doctor { format } => {
+            let report = orchestrator::doctor::run(config_path);
+            match format {
+                crate::DoctorFormat::Text => println!("{}", report.render_text()),
+                crate::DoctorFormat::Json => println!("{}", report.render_json_pretty()?),
+            }
             Ok(())
         }
 
