@@ -333,6 +333,8 @@ behavior:
 | `orchestrator init` | 生成 `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | 引导式配置 provider、model、role |
 | `orchestrator run "..."` | 执行一个任务；`--ab` 会比较两个已配置 worker 路线 |
+| `orchestrator run "..." --detach` | 后台执行任务，并把可读事件日志写到 `~/.orchestrator/runs/` |
+| `orchestrator attach [id|prefix|last]` | 查看最近或指定后台任务的状态和日志尾部 |
 | `orchestrator events "..."` | 流式输出进度事件；默认 JSONL 给 UI adapter/脚本使用，`--format text` 输出可读的 planner/critic/worker/reviewer 瀑布流 |
 | `orchestrator config provider setup <provider>` | 按预设配置 provider |
 | `orchestrator config provider list|presets` | 查看 provider 配置或内置预设 |
@@ -584,12 +586,12 @@ cargo run -- config
 - Release/Homebrew 同时安装 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`
 - Session 导出为 Markdown/HTML
 - 成本预算告警
+- 后台任务和 attach
 
 计划中：
 
 - fork adapter 稳定后删除旧的局部复制 TUI 模块
 - 更完整的 token 级最终答案流式输出
-- 后台任务和 attach
 - VS Code 扩展
 
 ## License

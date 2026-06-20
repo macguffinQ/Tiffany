@@ -11,7 +11,7 @@ use orchestrator::tiffany_install;
 use orchestrator::{adapters, cc_config, mux, roles, runtime, storage};
 use std::collections::HashSet;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -39,7 +39,21 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             ab,
             no_critic,
             no_reviewer,
+            detach,
         } => {
+            if detach {
+                return detach_run(DetachRunRequest {
+                    config_path,
+                    prompt: &prompt,
+                    tags: &tag,
+                    planner: planner.as_deref(),
+                    critic: critic.as_deref(),
+                    worker: worker.as_deref(),
+                    reviewer: reviewer.as_deref(),
+                    no_critic,
+                    no_reviewer,
+                });
+            }
             let cfg = Config::load(config_path)?;
             let orch = build_orchestrator(
                 &cfg,
@@ -56,6 +70,8 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                 run_single_mode(&cfg, &orch, prompt, tag, worker.as_deref()).await
             }
         }
+
+        crate::Cmd::Attach { id, tail, status } => attach_run(id.as_deref(), tail, status),
 
         crate::Cmd::Events {
             prompt,
@@ -496,6 +512,289 @@ async fn run_single_mode(
     let results = orch.run(task).await?;
     print_completed_tasks(&results);
     Ok(())
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+struct DetachedRunRecord {
+    id: String,
+    pid: u32,
+    prompt: String,
+    created_at: String,
+    log_path: PathBuf,
+    exit_path: PathBuf,
+}
+
+struct DetachRunRequest<'a> {
+    config_path: &'a Path,
+    prompt: &'a str,
+    tags: &'a [String],
+    planner: Option<&'a str>,
+    critic: Option<&'a str>,
+    worker: Option<&'a str>,
+    reviewer: Option<&'a str>,
+    no_critic: bool,
+    no_reviewer: bool,
+}
+
+fn detach_run(request: DetachRunRequest<'_>) -> Result<()> {
+    let run_dir = detached_runs_dir()?;
+    std::fs::create_dir_all(&run_dir)?;
+    let id = detached_run_id();
+    let log_path = run_dir.join(format!("{id}.log"));
+    let exit_path = run_dir.join(format!("{id}.exit"));
+    let status_path = run_dir.join(format!("{id}.json"));
+    let latest_path = run_dir.join("last.json");
+
+    let exe = std::env::current_exe().context("could not resolve current executable")?;
+    let log_file = std::fs::File::create(&log_path)
+        .with_context(|| format!("creating {}", log_path.display()))?;
+    let mut event_args = vec![
+        "--config".to_string(),
+        request.config_path.display().to_string(),
+        "events".to_string(),
+        request.prompt.to_string(),
+        "--format".to_string(),
+        "text".to_string(),
+    ];
+    for tag in request.tags {
+        event_args.push("--tag".to_string());
+        event_args.push(tag.clone());
+    }
+    if let Some(planner) = request.planner {
+        event_args.push("--planner".to_string());
+        event_args.push(planner.to_string());
+    }
+    if let Some(critic) = request.critic {
+        event_args.push("--critic".to_string());
+        event_args.push(critic.to_string());
+    }
+    if let Some(worker) = request.worker {
+        event_args.push("--worker".to_string());
+        event_args.push(worker.to_string());
+    }
+    if let Some(reviewer) = request.reviewer {
+        event_args.push("--reviewer".to_string());
+        event_args.push(reviewer.to_string());
+    }
+    if request.no_critic {
+        event_args.push("--no-critic".to_string());
+    }
+    if request.no_reviewer {
+        event_args.push("--no-reviewer".to_string());
+    }
+
+    let shell_script = detached_run_shell_script(&exe, &event_args, &exit_path);
+    let mut command = Command::new(default_shell_program());
+    command
+        .arg(default_shell_flag())
+        .arg(shell_script)
+        .stdin(Stdio::null())
+        .stdout(log_file.try_clone()?)
+        .stderr(log_file);
+
+    let child = prepare_detached_process(&mut command)
+        .spawn()
+        .context("starting detached orchestrator run")?;
+    let record = DetachedRunRecord {
+        id: id.clone(),
+        pid: child.id(),
+        prompt: request.prompt.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        log_path,
+        exit_path,
+    };
+    write_detached_run_record(&status_path, &record)?;
+    write_detached_run_record(&latest_path, &record)?;
+
+    println!("detached run started: {}", record.id);
+    println!("pid: {}", record.pid);
+    println!("log: {}", record.log_path.display());
+    println!("attach: orchestrator attach {}", record.id);
+    Ok(())
+}
+
+fn attach_run(selector: Option<&str>, tail: usize, show_status: bool) -> Result<()> {
+    let record = resolve_detached_run(selector)?;
+    let state = detached_run_state(&record);
+    println!("Detached run {}", record.id);
+    println!("  status: {}", state);
+    println!("  pid: {}", record.pid);
+    println!("  started: {}", record.created_at);
+    println!("  log: {}", record.log_path.display());
+    println!("  prompt: {}", truncate_for_cli(&record.prompt, 180));
+    if show_status && state == "running" {
+        println!("  follow: tail -f {}", record.log_path.display());
+        println!("  stop: kill {}", record.pid);
+    }
+    println!();
+    print_file_tail(&record.log_path, tail)?;
+    Ok(())
+}
+
+fn detached_run_state(record: &DetachedRunRecord) -> String {
+    if let Ok(code) = std::fs::read_to_string(&record.exit_path) {
+        let code = code.trim();
+        if code == "0" {
+            return "completed".to_string();
+        }
+        if !code.is_empty() {
+            return format!("exited {code}");
+        }
+    }
+    if process_is_running(record.pid) {
+        "running".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+fn detached_runs_dir() -> Result<PathBuf> {
+    let home = home::home_dir().context("could not determine home directory")?;
+    Ok(home.join(".orchestrator").join("runs"))
+}
+
+fn detached_run_id() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    format!("run-{millis}-{}", std::process::id())
+}
+
+fn write_detached_run_record(path: &Path, record: &DetachedRunRecord) -> Result<()> {
+    let body = serde_json::to_string_pretty(record)?;
+    std::fs::write(path, body).with_context(|| format!("writing {}", path.display()))
+}
+
+fn detached_run_shell_script(exe: &Path, args: &[String], exit_path: &Path) -> String {
+    let mut command = shell_quote(&exe.display().to_string());
+    for arg in args {
+        command.push(' ');
+        command.push_str(&shell_quote(arg));
+    }
+    format!(
+        "{}; status=$?; printf '%s\\n' \"$status\" > {}; exit \"$status\"",
+        command,
+        shell_quote(&exit_path.display().to_string())
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn default_shell_program() -> &'static str {
+    if cfg!(windows) {
+        "cmd"
+    } else {
+        "sh"
+    }
+}
+
+fn default_shell_flag() -> &'static str {
+    if cfg!(windows) {
+        "/C"
+    } else {
+        "-c"
+    }
+}
+
+fn resolve_detached_run(selector: Option<&str>) -> Result<DetachedRunRecord> {
+    let run_dir = detached_runs_dir()?;
+    let path = match selector.filter(|value| !value.trim().is_empty()) {
+        None | Some("last") | Some(".") => run_dir.join("last.json"),
+        Some(selector) => find_detached_run_record(&run_dir, selector)?,
+    };
+    let body = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "reading detached run record {}; start one with `orchestrator run --detach ...`",
+            path.display()
+        )
+    })?;
+    serde_json::from_str(&body).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn find_detached_run_record(run_dir: &Path, selector: &str) -> Result<PathBuf> {
+    let exact = run_dir.join(format!("{selector}.json"));
+    if exact.exists() {
+        return Ok(exact);
+    }
+    let mut matches = vec![];
+    if run_dir.exists() {
+        for entry in std::fs::read_dir(run_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.file_name().and_then(|name| name.to_str()) == Some("last.json") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if path.extension().and_then(|ext| ext.to_str()) == Some("json")
+                && stem.starts_with(selector)
+            {
+                matches.push(path);
+            }
+        }
+    }
+    match matches.len() {
+        0 => anyhow::bail!("detached run not found: {selector}"),
+        1 => Ok(matches.remove(0)),
+        count => anyhow::bail!("ambiguous detached run prefix: {selector} ({count} matches)"),
+    }
+}
+
+fn print_file_tail(path: &Path, lines: usize) -> Result<()> {
+    let body =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let raw_lines = body.lines().collect::<Vec<_>>();
+    let start = raw_lines.len().saturating_sub(lines);
+    if raw_lines.is_empty() {
+        println!("(log is empty)");
+        return Ok(());
+    }
+    for line in &raw_lines[start..] {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+fn truncate_for_cli(value: &str, max_chars: usize) -> String {
+    let mut out = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
+}
+
+#[cfg(unix)]
+fn prepare_detached_process(command: &mut Command) -> &mut Command {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0)
+}
+
+#[cfg(not(unix))]
+fn prepare_detached_process(command: &mut Command) -> &mut Command {
+    command
+}
+
+#[cfg(unix)]
+fn process_is_running(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn process_is_running(_pid: u32) -> bool {
+    false
 }
 
 async fn run_ab_mode(
@@ -4685,6 +4984,61 @@ mod tests {
         write_session_export(&path, "body").unwrap();
 
         assert_eq!(std::fs::read_to_string(path).unwrap(), "body");
+    }
+
+    #[test]
+    fn detached_run_record_roundtrips_and_resolves_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = DetachedRunRecord {
+            id: "run-12345-99".into(),
+            pid: 42,
+            prompt: "finish work".into(),
+            created_at: "2026-06-20T00:00:00Z".into(),
+            log_path: dir.path().join("run-12345-99.log"),
+            exit_path: dir.path().join("run-12345-99.exit"),
+        };
+        let path = dir.path().join("run-12345-99.json");
+
+        write_detached_run_record(&path, &record).unwrap();
+        let resolved = find_detached_run_record(dir.path(), "run-123").unwrap();
+        let body = std::fs::read_to_string(resolved).unwrap();
+        let parsed: DetachedRunRecord = serde_json::from_str(&body).unwrap();
+
+        assert_eq!(parsed.id, record.id);
+        assert_eq!(parsed.prompt, "finish work");
+    }
+
+    #[test]
+    fn detached_run_state_reads_exit_code_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let exit_path = dir.path().join("run.exit");
+        let record = DetachedRunRecord {
+            id: "run-1".into(),
+            pid: 999_999,
+            prompt: "done".into(),
+            created_at: "2026-06-20T00:00:00Z".into(),
+            log_path: dir.path().join("run.log"),
+            exit_path: exit_path.clone(),
+        };
+
+        std::fs::write(&exit_path, "0\n").unwrap();
+        assert_eq!(detached_run_state(&record), "completed");
+        std::fs::write(&exit_path, "2\n").unwrap();
+        assert_eq!(detached_run_state(&record), "exited 2");
+    }
+
+    #[test]
+    fn detached_shell_script_quotes_arguments_and_writes_exit_code() {
+        let script = detached_run_shell_script(
+            Path::new("/tmp/orch bin"),
+            &["events".into(), "can't fail".into()],
+            Path::new("/tmp/run exit"),
+        );
+
+        assert!(script.contains("'/tmp/orch bin'"));
+        assert!(script.contains("'can'\\''t fail'"));
+        assert!(script.contains("'/tmp/run exit'"));
+        assert!(script.contains("printf '%s\\n' \"$status\""));
     }
 
     #[test]

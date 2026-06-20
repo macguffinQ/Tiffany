@@ -328,10 +328,14 @@ orchestrator run "fix typo" --planner opus --worker codex
 # 8. Watch the live pipeline as readable text
 orchestrator events "fix typo" --format text
 
-# 9. Source checkout UI
+# 9. Run in the background and attach later
+orchestrator run "fix the flaky test" --detach
+orchestrator attach
+
+# 10. Source checkout UI
 ./scripts/tiffany-dev
 
-# 10. Browse past sessions
+# 11. Browse past sessions
 orchestrator sessions list
 orchestrator sessions show                    # latest session, human-readable
 orchestrator sessions show <id|prefix|last>          # human-readable by default
@@ -341,10 +345,10 @@ orchestrator sessions show <id|prefix|last> --flow   # readable orchestration/wo
 orchestrator sessions export <id|prefix|last> --format html
 orchestrator sessions grep "rate limit" --limit 10
 
-# 11. See everything the orchestrator loaded
+# 12. See everything the orchestrator loaded
 orchestrator config
 
-# 12. Import your existing CC sessions
+# 13. Import your existing CC sessions
 cd ~/your-project  # where you used CC before
 orchestrator sessions import-cc
 ```
@@ -430,6 +434,8 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `orchestrator init` | Generate `~/.orchestrator/config.yaml` |
 | `orchestrator setup` | Guided first-run setup for providers, models, and roles |
 | `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
+| `orchestrator run "..." --detach` | Run a task in the background and write a readable event log under `~/.orchestrator/runs/` |
+| `orchestrator attach [id|prefix|last]` | Print the latest detached run status and log tail |
 | `orchestrator events "..."` | Stream progress events; default JSONL is stable for UI adapters/scripts, `--format text` prints a readable planner/critic/worker/reviewer waterfall |
 | `orchestrator config provider` | Open the guided provider selector |
 | `orchestrator config provider setup <provider>` | Configure a provider from built-in presets |
@@ -778,9 +784,9 @@ orchestrator/
 - [x] Release/Homebrew packaging installs `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias
 - [x] Session export (markdown / HTML)
 - [x] Cost budget alerts
+- [x] Background task mode (`orchestrator run --detach` + `orchestrator attach`)
 - [ ] Remove copied partial TUI modules after the fork adapter is stable
 - [ ] Full-token streaming final responses in terminal chat
-- [ ] Background task mode (`orchestrator run --detach` + `orchestrator attach`)
 - [ ] CC agent invocation from orchestrator (`--agent reviewer`)
 - [ ] VS Code extension
 

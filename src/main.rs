@@ -67,6 +67,24 @@ enum Cmd {
         /// Skip reviewer
         #[arg(long)]
         no_reviewer: bool,
+
+        /// Run in the background and write a text event log
+        #[arg(long, conflicts_with = "ab")]
+        detach: bool,
+    },
+
+    /// Attach to the latest detached run log, or one by id prefix
+    Attach {
+        /// Detached run id or prefix. Defaults to the latest run.
+        id: Option<String>,
+
+        /// Only print the last N lines
+        #[arg(long, default_value = "80")]
+        tail: usize,
+
+        /// Also print attach guidance when the process is still running
+        #[arg(long)]
+        status: bool,
     },
 
     /// Stream orchestrator progress events for tiffany-loop TUI or humans
@@ -449,7 +467,10 @@ async fn main() -> ExitCode {
     let level = cli.log_level.as_deref().unwrap_or("info");
     let use_file_logging = matches!(
         cli.cmd,
-        crate::Cmd::Tui { .. } | crate::Cmd::Acp { .. } | crate::Cmd::Events { .. }
+        crate::Cmd::Tui { .. }
+            | crate::Cmd::Acp { .. }
+            | crate::Cmd::Events { .. }
+            | crate::Cmd::Run { detach: true, .. }
     );
     if use_file_logging {
         setup_file_logging(level);
@@ -544,6 +565,27 @@ mod tests {
         let cli = Cli::parse_from(["orchestrator", "setup"]);
 
         assert!(matches!(cli.cmd, Cmd::Setup));
+    }
+
+    #[test]
+    fn run_detach_parses() {
+        let cli = Cli::parse_from(["orchestrator", "run", "ship it", "--detach"]);
+
+        assert!(matches!(cli.cmd, Cmd::Run { detach: true, .. }));
+    }
+
+    #[test]
+    fn attach_defaults_to_recent_run() {
+        let cli = Cli::parse_from(["orchestrator", "attach"]);
+
+        match cli.cmd {
+            Cmd::Attach { id, tail, status } => {
+                assert_eq!(id, None);
+                assert_eq!(tail, 80);
+                assert!(!status);
+            }
+            _ => panic!("unexpected attach command"),
+        }
     }
 
     #[test]
