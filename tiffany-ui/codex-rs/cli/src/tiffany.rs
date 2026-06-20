@@ -136,7 +136,11 @@ fn config_args(config: Option<&str>) -> Vec<String> {
 }
 
 fn resolve_bin(bin: &str) -> String {
-    resolve_bin_from(bin, env::var_os("TIFFANY_ORCHESTRATOR_BIN"), env::current_exe().ok())
+    resolve_bin_from(
+        bin,
+        env::var_os("TIFFANY_ORCHESTRATOR_BIN"),
+        env::current_exe().ok(),
+    )
 }
 
 fn resolve_bin_from(
@@ -295,10 +299,7 @@ mod tests {
 
     #[test]
     fn resolve_orchestrator_prefers_sibling_binary() -> std::io::Result<()> {
-        let temp = std::env::temp_dir().join(format!(
-            "tiffany-cli-test-{}",
-            std::process::id()
-        ));
+        let temp = std::env::temp_dir().join(format!("tiffany-cli-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp);
         std::fs::create_dir_all(&temp)?;
         let tiffany = temp.join(exe_name("tiffany-loop"));
