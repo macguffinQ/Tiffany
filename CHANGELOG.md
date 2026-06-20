@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.14] - 2026-06-20
+
+### Fixed
+
+- Handled blank `--bin` and blank `TIFFANY_ORCHESTRATOR_BIN` values so the
+  tiffany-loop orchestrator TUI no longer tries to start an empty executable
+  path.
+- Added a defensive TUI bridge fallback that reports `orchestrator` instead of
+  `""` when launch state contains a blank binary path.
+
+### Added
+
+- Added CI and release-preflight coverage for the Homebrew tap formula update
+  helper.
+
 ## [0.1.13] - 2026-06-20
 
 ### Fixed
