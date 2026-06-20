@@ -130,6 +130,9 @@ if [[ -f "$formula_template" ]]; then
   fi
 fi
 
+step "homebrew tap helper"
+"$repo_dir/scripts/tiffany-check-homebrew-tap-helper"
+
 if [[ "$mode" == "full" ]]; then
   step "tiffany fork targeted format"
   (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" fmt -p codex-tui -p tiffany-cli -- --check)

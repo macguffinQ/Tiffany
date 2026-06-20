@@ -41,6 +41,7 @@ jobs:
           cargo test --all
           cargo test --manifest-path crates/tiffany-event-format/Cargo.toml
           ./scripts/tiffany-check-examples
+          ./scripts/tiffany-check-homebrew-tap-helper
 
       - name: Build
         run: cargo build --all

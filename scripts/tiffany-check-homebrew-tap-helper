@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+tmp_root="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_root"
+}
+trap cleanup EXIT
+
+fake_bin="$tmp_root/bin"
+mkdir -p "$fake_bin"
+
+cat > "$fake_bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -ge 3 && "$1" == "release" && "$2" == "view" ]]; then
+  printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+  exit 0
+fi
+
+if [[ "$#" -ge 2 && "$1" == "api" ]]; then
+  printf 'source archive bytes for tiffany-loop test\n'
+  exit 0
+fi
+
+echo "unexpected fake gh invocation: $*" >&2
+exit 2
+EOF
+chmod +x "$fake_bin/gh"
+
+formula="$tmp_root/tiffany-loop.rb"
+PATH="$fake_bin:$PATH" "$repo_dir/scripts/tiffany-update-homebrew-tap" \
+  --tag v9.8.7 \
+  --repo example/tiffany-loop \
+  --dry-run > "$formula"
+
+source_sha="$(printf 'source archive bytes for tiffany-loop test\n' | {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  else
+    shasum -a 256 | awk '{print $1}'
+  fi
+})"
+
+assert_contains() {
+  local needle="$1"
+  if ! grep -F -- "$needle" "$formula" >/dev/null; then
+    echo "expected generated formula to contain: $needle" >&2
+    echo "---- formula ----" >&2
+    cat "$formula" >&2
+    exit 1
+  fi
+}
+
+assert_contains 'homepage "https://github.com/example/tiffany-loop"'
+assert_contains 'url "https://github.com/example/tiffany-loop/releases/download/v9.8.7/tiffany-loop-v9.8.7-aarch64-apple-darwin.tar.gz"'
+assert_contains 'sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
+assert_contains 'url "https://github.com/example/tiffany-loop/archive/refs/tags/v9.8.7.tar.gz"'
+assert_contains "sha256 \"${source_sha}\""
+
+if command -v ruby >/dev/null 2>&1; then
+  ruby -c "$formula" >/dev/null
+fi
+
+echo "homebrew tap helper check passed"
