@@ -9,7 +9,7 @@ use super::state::{ChatMsg, InputState, TuiRuntimeConfig};
 use super::util::{
     copy_to_clipboard, humanize_jsonish, is_low_value_execution_output, truncate_chars,
 };
-use crate::config::{Config, RoleConfig};
+use crate::config::{Config, ModelConfig, RoleConfig};
 use crate::core::session_store::SessionStore;
 use crate::core::types::Session;
 use crate::runtime::{self, AGENT_RUNTIME_ROUTES};
@@ -819,20 +819,22 @@ fn argument_candidates(
             role_name_template_candidates(ctx)
         }
         "roles" | "role"
+            if matches!(
+                ctx.args.first().map(String::as_str),
+                Some("save" | "add" | "set")
+            ) =>
+        {
+            role_save_candidates(config, ctx)
+        }
+        "roles" | "role"
             if ctx.current_index == 2
-                && matches!(
-                    ctx.args.first().map(String::as_str),
-                    Some("snippet" | "save" | "add" | "set")
-                ) =>
+                && ctx.args.first().map(String::as_str) == Some("snippet") =>
         {
             any_model_candidates(config, ctx)
         }
         "roles" | "role"
             if ctx.current_index == 3
-                && matches!(
-                    ctx.args.first().map(String::as_str),
-                    Some("snippet" | "save" | "add" | "set")
-                ) =>
+                && ctx.args.first().map(String::as_str) == Some("snippet") =>
         {
             runtime_candidates(config, ctx)
         }
@@ -1202,6 +1204,54 @@ fn runtime_candidates(config: &Config, ctx: &SlashArgContext) -> Vec<SlashArgCan
             description: "configured runtime".into(),
         })
         .collect()
+}
+
+fn provider_candidates(config: &Config, ctx: &SlashArgContext) -> Vec<SlashArgCandidate> {
+    let mut providers: Vec<_> = config.providers.iter().collect();
+    providers.sort_by(|a, b| a.0.cmp(b.0));
+    providers
+        .into_iter()
+        .filter(|(provider, _)| candidate_matches(provider, &ctx.current_prefix))
+        .map(|(provider, cfg)| SlashArgCandidate {
+            value: provider.clone(),
+            label: provider.clone(),
+            description: format!("{} provider", cfg.kind),
+        })
+        .collect()
+}
+
+fn role_save_candidates(config: &Config, ctx: &SlashArgContext) -> Vec<SlashArgCandidate> {
+    if ctx.current_index == 1 {
+        return role_name_template_candidates(ctx);
+    }
+    if ctx.current_index > 1 {
+        match ctx
+            .args
+            .get(ctx.current_index.saturating_sub(1))
+            .map(String::as_str)
+        {
+            Some("--provider") => return provider_candidates(config, ctx),
+            Some("--runtime") => return runtime_candidates(config, ctx),
+            Some("--model") => return any_model_candidates(config, ctx),
+            Some("--model-name" | "--api-model" | "--name") => return Vec::new(),
+            _ => {}
+        }
+    }
+    if ctx.current_prefix.starts_with("--") || ctx.current_index >= 2 {
+        return choice_candidates(
+            ctx,
+            ctx.current_index,
+            &[
+                ("--provider", "create/update model from provider"),
+                ("--model-name", "provider API model name"),
+                ("--runtime", "runtime for this role"),
+                ("--model", "existing internal model id"),
+                ("--agent-teams", "enable Claude Code agent teams"),
+                ("--no-agent-teams", "disable agent teams"),
+            ],
+        );
+    }
+    any_model_candidates(config, ctx)
 }
 
 fn agent_candidates(config: &Config, ctx: &SlashArgContext) -> Vec<SlashArgCandidate> {
@@ -1636,7 +1686,7 @@ fn handle_roles_command(
         }
         "snippet" => format_role_config_snippet(config, args),
         "save" | "add" | "set" => save_role_config(config, runtime, args),
-        other => format!("Unknown roles option: {}\nUsage: /roles [show|route|use <role>|snippet <role> <model> <runtime>|save <role> <model> <runtime>|clear]", other),
+        other => format!("Unknown roles option: {}\nUsage: /roles [show|route|use <role>|snippet <role> <model> <runtime>|save <role> --provider <provider> --model-name <api-model> --runtime <runtime>|clear]", other),
     }
 }
 
@@ -1672,56 +1722,211 @@ fn save_role_config(config: &Config, runtime: &TuiRuntimeConfig, args: &[&str]) 
     let Some(path) = runtime.config_path.as_deref() else {
         return "Config path is unavailable in this context. Use /roles snippet <role> <model> <runtime> and add it to ~/.orchestrator/config.yaml.".into();
     };
-    let Some(role) = args.get(1).copied() else {
-        return "Usage: /roles save <role> <model> <runtime>".into();
+    let spec = match parse_role_save_args(args) {
+        Ok(spec) => spec,
+        Err(msg) => return msg,
     };
-    let Some(model) = args.get(2).copied() else {
-        return "Usage: /roles save <role> <model> <runtime>".into();
-    };
-    let Some(runtime_id) = args.get(3).copied() else {
-        return "Usage: /roles save <role> <model> <runtime>".into();
-    };
-    let teams = args
-        .get(4)
-        .map(|raw| matches!(*raw, "true" | "yes" | "1" | "teams"))
-        .unwrap_or_else(|| matches!(runtime_id, "claude-code" | "claude"));
 
-    if !config
-        .models
-        .iter()
-        .any(|m| m.id == model || m.name == model)
-    {
-        return format!(
-            "Unknown model: {}\nAvailable models: {}",
-            model,
-            available_model_names(config)
-        );
-    }
-    if !config.runtimes.contains_key(runtime_id) {
+    if !config.runtimes.contains_key(spec.runtime) {
         return format!(
             "Unknown runtime: {}\nAvailable runtimes: {}",
-            runtime_id,
+            spec.runtime,
             available_runtime_names(config)
         );
     }
 
+    let model_id = match resolve_tui_role_model_id(config, &spec) {
+        Ok(model_id) => model_id,
+        Err(msg) => return msg,
+    };
+    if let Some(provider) = spec.provider {
+        if !config.providers.contains_key(provider) {
+            return format!(
+                "Unknown provider: {}\nAvailable providers: {}",
+                provider,
+                available_provider_names(config)
+            );
+        }
+    }
+    let mut wrote_model = None;
+    if let Some(model_cfg) = tui_role_model_write(config, &spec, &model_id) {
+        if let Err(e) = Config::write_model_to_config_file(path, &model_cfg) {
+            return format!("Could not save model {}: {:#}", model_cfg.id, e);
+        }
+        wrote_model = Some(model_cfg);
+    }
+
+    let teams = spec.teams.unwrap_or_else(|| {
+        matches!(spec.runtime, "claude-code" | "claude")
+            && (spec.role.contains("worker") || spec.role.contains("executor"))
+    });
     let role_cfg = RoleConfig {
-        model: model.to_string(),
-        runtime: runtime_id.to_string(),
+        model: model_id.clone(),
+        runtime: spec.runtime.to_string(),
         agent_teams: teams,
     };
-    match Config::write_role_to_config_file(path, role, &role_cfg) {
-        Ok(()) => format!(
-            "Saved role {} to {}.\n  model: {}\n  runtime: {}\n  agent teams: {}\n\nRestart terminal chat for planner/critic/reviewer changes to rebuild the execution pipeline. Worker roles can be selected in this session with /roles use {}.",
-            role,
-            crate::config::expand_home(path).display(),
-            model_label(config, model),
-            runtime_id,
-            teams,
-            role
-        ),
-        Err(e) => format!("Could not save role {}: {:#}", role, e),
+    match Config::write_role_to_config_file(path, spec.role, &role_cfg) {
+        Ok(()) => {
+            let model_line = match wrote_model.as_ref() {
+                Some(model_cfg) => {
+                    format!(
+                        "{} -> {}/{} (model registered)",
+                        model_cfg.id, model_cfg.provider, model_cfg.name
+                    )
+                }
+                None => model_label(config, &model_id),
+            };
+            format!(
+                "Saved role {} to {}.\n  model: {}\n  runtime: {}\n  agent teams: {}\n\nRestart terminal chat for planner/critic/reviewer changes to rebuild the execution pipeline. Worker roles can be selected in this session with /roles use {}.",
+                spec.role,
+                crate::config::expand_home(path).display(),
+                model_line,
+                spec.runtime,
+                teams,
+                spec.role
+            )
+        }
+        Err(e) => format!("Could not save role {}: {:#}", spec.role, e),
     }
+}
+
+struct RoleSaveSpec<'a> {
+    role: &'a str,
+    model: Option<&'a str>,
+    runtime: &'a str,
+    provider: Option<&'a str>,
+    model_name: Option<&'a str>,
+    teams: Option<bool>,
+}
+
+fn parse_role_save_args<'a>(args: &'a [&'a str]) -> Result<RoleSaveSpec<'a>, String> {
+    let Some(role) = args.get(1).copied() else {
+        return Err(role_save_usage());
+    };
+    let mut model = None;
+    let mut runtime = None;
+    let mut provider = None;
+    let mut model_name = None;
+    let mut teams = None;
+    let mut positional = Vec::new();
+    let mut idx = 2;
+    while idx < args.len() {
+        match args[idx] {
+            "--model" => {
+                idx += 1;
+                model = args.get(idx).copied();
+            }
+            "--runtime" => {
+                idx += 1;
+                runtime = args.get(idx).copied();
+            }
+            "--provider" => {
+                idx += 1;
+                provider = args.get(idx).copied();
+            }
+            "--model-name" | "--api-model" | "--name" => {
+                idx += 1;
+                model_name = args.get(idx).copied();
+            }
+            "--agent-teams" | "--teams" => teams = Some(true),
+            "--no-agent-teams" | "--no-teams" => teams = Some(false),
+            value if value.starts_with("--") => {
+                return Err(format!(
+                    "Unknown role option: {value}\n{}",
+                    role_save_usage()
+                ));
+            }
+            value => positional.push(value),
+        }
+        idx += 1;
+    }
+    if model.is_none() {
+        model = positional.first().copied();
+    }
+    if runtime.is_none() {
+        runtime = positional.get(1).copied();
+    }
+    if teams.is_none() {
+        teams = positional
+            .get(2)
+            .map(|raw| matches!(*raw, "true" | "yes" | "1" | "teams"));
+    }
+    let Some(runtime) = runtime else {
+        return Err(role_save_usage());
+    };
+    Ok(RoleSaveSpec {
+        role,
+        model,
+        runtime,
+        provider,
+        model_name,
+        teams,
+    })
+}
+
+fn role_save_usage() -> String {
+    "Usage: /roles save <role> <model> <runtime>\n   or: /roles save <role> --provider <provider> --model-name <api-model> --runtime <runtime>".into()
+}
+
+fn resolve_tui_role_model_id(config: &Config, spec: &RoleSaveSpec<'_>) -> Result<String, String> {
+    if let Some(model) = spec.model.map(str::trim).filter(|model| !model.is_empty()) {
+        if config
+            .models
+            .iter()
+            .any(|m| m.id == model || m.name == model)
+        {
+            return Ok(config
+                .models
+                .iter()
+                .find(|m| m.id == model || m.name == model)
+                .map(|m| m.id.clone())
+                .unwrap_or_else(|| model.to_string()));
+        }
+        if spec.provider.is_none() {
+            return Err(format!(
+                "Unknown model: {}\nAvailable models: {}\nTo create it inline: /roles save {} --provider <provider> --model-name {} --runtime {}",
+                model,
+                available_model_names(config),
+                spec.role,
+                model,
+                spec.runtime
+            ));
+        }
+        return Ok(model.to_string());
+    }
+    let Some(provider) = spec
+        .provider
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(role_save_usage());
+    };
+    let Some(model_name) = spec
+        .model_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(role_save_usage());
+    };
+    Ok(config.derive_model_id(provider, model_name))
+}
+
+fn tui_role_model_write(
+    config: &Config,
+    spec: &RoleSaveSpec<'_>,
+    model_id: &str,
+) -> Option<ModelConfig> {
+    let provider = spec.provider?;
+    let existing = config.models.iter().find(|m| m.id == model_id);
+    let model_name = spec
+        .model_name
+        .or_else(|| existing.map(|m| m.name.as_str()))
+        .unwrap_or(model_id);
+    Some(ModelConfig {
+        id: model_id.to_string(),
+        provider: provider.to_string(),
+        name: model_name.to_string(),
+    })
 }
 
 fn format_roles_registry(config: &Config, input: &InputState) -> String {
@@ -1749,7 +1954,7 @@ fn format_roles_registry(config: &Config, input: &InputState) -> String {
         }
     }
     out.push_str(
-        "\n\nActions: /roles use <role>, /role <role>, /roles route, /roles save <role> <model> <runtime>",
+        "\n\nActions: /roles use <role>, /role <role>, /roles route, /roles save <role> --provider <provider> --model-name <api-model> --runtime <runtime>",
     );
     out.push_str("\nHealth: fix provider/auth with /provider, fix role/model/runtime with /role <role>, verify with /doctor.");
     out
@@ -2050,6 +2255,16 @@ fn available_model_names(config: &Config) -> String {
         "(none)".into()
     } else {
         models.join(", ")
+    }
+}
+
+fn available_provider_names(config: &Config) -> String {
+    let mut providers: Vec<_> = config.providers.keys().cloned().collect();
+    providers.sort();
+    if providers.is_empty() {
+        "(none)".into()
+    } else {
+        providers.join(", ")
     }
 }
 
@@ -4361,6 +4576,55 @@ behavior:
             .unwrap()
             .content
             .contains("Saved role executor"));
+    }
+
+    #[test]
+    fn roles_save_can_register_model_from_provider_and_api_model_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap(),
+        );
+        let mut cfg = test_config();
+        cfg.providers.insert(
+            "minimax".into(),
+            crate::config::ProviderConfig {
+                kind: "openai".into(),
+                api_key: Some("present".into()),
+                base_url: Some("https://api.minimax.io/v1".into()),
+            },
+        );
+        let cfg = Arc::new(cfg);
+        let config_path = tmp.path().join("config.yaml");
+        std::fs::write(
+            &config_path,
+            "providers:\n  minimax:\n    type: openai\n    api_key: ${MINIMAX_API_KEY}\nruntimes:\n  claude-code:\n    type: subprocess\n    binary: claude\n    supports_agent_teams: true\nmodels: []\nroles: {}\nbehavior: {}\n",
+        )
+        .unwrap();
+        let runtime = TuiRuntimeConfig {
+            config_path: Some(config_path.clone()),
+        };
+        let mut input = InputState::default();
+
+        handle_slash_command_with_runtime(
+            "/roles save worker-cc --provider minimax --model-name MiniMax-M3 --runtime claude-code --agent-teams",
+            &store,
+            &cfg,
+            &runtime,
+            &mut input,
+        );
+
+        let body = std::fs::read_to_string(&config_path).unwrap();
+        assert!(body.contains("${MINIMAX_API_KEY}"));
+        assert!(body.contains("id: minimax-m3"));
+        assert!(body.contains("provider: minimax"));
+        assert!(body.contains("name: MiniMax-M3"));
+        assert!(body.contains("worker-cc:"));
+        assert!(body.contains("model: minimax-m3"));
+        assert!(body.contains("runtime: claude-code"));
+        assert!(body.contains("agent_teams: true"));
+        let response = &input.transcript.last().unwrap().content;
+        assert!(response.contains("model registered"));
+        assert!(response.contains("Saved role worker-cc"));
     }
 
     #[test]

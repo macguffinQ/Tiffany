@@ -1756,7 +1756,7 @@ fn handle_roles(config_path: &Path, action: crate::RolesCmd) -> Result<()> {
         } => register_role(
             config_path,
             &role,
-            &model,
+            model.as_deref(),
             &runtime,
             provider.as_deref(),
             model_name.as_deref(),
@@ -1790,7 +1790,7 @@ fn print_roles(config_path: &Path, selected_role: Option<&str>) -> Result<()> {
         println!("  {}", role_detail_for_cli(&cfg, role, role_cfg));
     }
     println!(
-        "\nRegister: orchestrator roles register <role> --model <model-id> --runtime <runtime-id>"
+        "\nRegister: orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime-id>"
     );
     Ok(())
 }
@@ -1799,7 +1799,7 @@ fn print_roles(config_path: &Path, selected_role: Option<&str>) -> Result<()> {
 fn register_role(
     config_path: &Path,
     role: &str,
-    model: &str,
+    model: Option<&str>,
     runtime: &str,
     provider: Option<&str>,
     model_name: Option<&str>,
@@ -1818,7 +1818,8 @@ fn register_role(
         );
     };
 
-    let existing_model = cfg.models.iter().find(|m| m.id == model);
+    let resolved_model_id = resolve_role_model_id(&cfg, model, provider, model_name)?;
+    let existing_model = cfg.models.iter().find(|m| m.id == resolved_model_id);
     let model_write = match existing_model {
         Some(existing) if provider.is_some() || model_name.is_some() => {
             let provider = provider.unwrap_or(existing.provider.as_str());
@@ -1830,7 +1831,7 @@ fn register_role(
                 );
             }
             Some(orchestrator::config::ModelConfig {
-                id: model.to_string(),
+                id: resolved_model_id.clone(),
                 provider: provider.to_string(),
                 name: model_name.unwrap_or(existing.name.as_str()).to_string(),
             })
@@ -1840,7 +1841,7 @@ fn register_role(
             let Some(provider) = provider else {
                 anyhow::bail!(
                     "unknown model '{}'. Available: {}\nTo register it inline, add --provider <provider> --model-name <provider-model-name>.",
-                    model,
+                    resolved_model_id,
                     available_models_for_cli(&cfg)
                 );
             };
@@ -1852,9 +1853,9 @@ fn register_role(
                 );
             }
             Some(orchestrator::config::ModelConfig {
-                id: model.to_string(),
+                id: resolved_model_id.clone(),
                 provider: provider.to_string(),
-                name: model_name.unwrap_or(model).to_string(),
+                name: model_name.unwrap_or(resolved_model_id.as_str()).to_string(),
             })
         }
     };
@@ -1875,13 +1876,13 @@ fn register_role(
         default_agent_teams(role, runtime, runtime_cfg)
     };
     let role_cfg = orchestrator::config::RoleConfig {
-        model: model.to_string(),
+        model: resolved_model_id.clone(),
         runtime: runtime.to_string(),
         agent_teams: teams,
     };
     Config::write_role_to_config_file(config_path, role, &role_cfg)?;
     println!("✓ role {} registered", role);
-    println!("  model: {}", model);
+    println!("  model: {}", resolved_model_id);
     println!("  runtime: {}", runtime);
     println!("  agent teams: {}", teams);
     match role {
@@ -1899,6 +1900,30 @@ fn register_role(
         }
     }
     Ok(())
+}
+
+fn resolve_role_model_id(
+    cfg: &Config,
+    model: Option<&str>,
+    provider: Option<&str>,
+    model_name: Option<&str>,
+) -> Result<String> {
+    if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
+        return Ok(model.to_string());
+    }
+    let Some(provider) = provider
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+    else {
+        anyhow::bail!("--model is required unless --provider and --model-name are supplied");
+    };
+    let Some(model_name) = model_name
+        .map(str::trim)
+        .filter(|model_name| !model_name.is_empty())
+    else {
+        anyhow::bail!("--model-name is required when --model is omitted");
+    };
+    Ok(cfg.derive_model_id(provider, model_name))
 }
 
 fn default_agent_teams(
@@ -4533,6 +4558,39 @@ mod tests {
         let detail = role_detail_for_cli(&cfg, "broken", &broken);
         assert!(detail.contains("health=model-missing:missing-model"));
         assert!(detail.contains("runtime-missing:missing-runtime"));
+    }
+
+    #[test]
+    fn register_role_can_create_model_from_provider_model_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        std::fs::write(
+            &config_path,
+            "providers:\n  minimax:\n    type: openai\n    api_key: ${MINIMAX_API_KEY}\nruntimes:\n  claude-code:\n    type: subprocess\n    binary: claude\n    supports_agent_teams: true\nmodels: []\nroles: {}\nbehavior: {}\n",
+        )
+        .unwrap();
+
+        register_role(
+            &config_path,
+            "worker-cc",
+            None,
+            "claude-code",
+            Some("minimax"),
+            Some("MiniMax-M3"),
+            true,
+            false,
+        )
+        .unwrap();
+
+        let body = std::fs::read_to_string(&config_path).unwrap();
+        assert!(body.contains("${MINIMAX_API_KEY}"));
+        assert!(body.contains("id: minimax-m3"));
+        assert!(body.contains("provider: minimax"));
+        assert!(body.contains("name: MiniMax-M3"));
+        assert!(body.contains("worker-cc:"));
+        assert!(body.contains("model: minimax-m3"));
+        assert!(body.contains("runtime: claude-code"));
+        assert!(body.contains("agent_teams: true"));
     }
 
     #[test]

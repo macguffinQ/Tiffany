@@ -385,9 +385,9 @@ enum RolesCmd {
         /// Role name, for example planner, critic, worker-cc, executor
         role: String,
 
-        /// Model id to bind to this role
+        /// Internal model id to bind to this role. Omit when using --provider and --model-name.
         #[arg(long)]
-        model: String,
+        model: Option<String>,
 
         /// Runtime id, for example claude-code or codex
         #[arg(long)]
@@ -621,6 +621,43 @@ mod tests {
                 assert_eq!(agent.as_deref(), Some("reviewer"));
             }
             _ => panic!("unexpected events command"),
+        }
+    }
+
+    #[test]
+    fn roles_register_can_omit_internal_model_id() {
+        let cli = Cli::parse_from([
+            "orchestrator",
+            "roles",
+            "register",
+            "worker-cc",
+            "--provider",
+            "minimax",
+            "--model-name",
+            "MiniMax-M3",
+            "--runtime",
+            "claude-code",
+        ]);
+
+        match cli.cmd {
+            Cmd::Roles {
+                action:
+                    RolesCmd::Register {
+                        role,
+                        model,
+                        provider,
+                        model_name,
+                        runtime,
+                        ..
+                    },
+            } => {
+                assert_eq!(role, "worker-cc");
+                assert_eq!(model, None);
+                assert_eq!(provider.as_deref(), Some("minimax"));
+                assert_eq!(model_name.as_deref(), Some("MiniMax-M3"));
+                assert_eq!(runtime, "claude-code");
+            }
+            _ => panic!("unexpected roles command"),
         }
     }
 

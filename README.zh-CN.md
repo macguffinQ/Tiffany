@@ -339,7 +339,7 @@ behavior:
 | `orchestrator config provider setup <provider>` | 按预设配置 provider |
 | `orchestrator config provider list|presets` | 查看 provider 配置或内置预设 |
 | `orchestrator roles list` | 查看已注册角色 |
-| `orchestrator roles register <role> --model <id> --runtime <runtime>` | 注册或更新角色绑定 |
+| `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` | 注册或更新角色，内部 model id 自动生成 |
 | `orchestrator tui` | 找到 `tiffany-loop` 时打开主 tiffany-loop UI；否则回退到旧终端对话 |
 | `orchestrator tui --ratatui` | 旧兼容参数；仅保留给老脚本 |
 | `orchestrator tui --new-tab` | 在 zellij 中打开新 tab |
@@ -402,13 +402,13 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `/help`：查看命令。
 - `/doctor`：诊断配置、runtime、API key、角色绑定和本地工具。
 - `/provider [setup|edit <provider>]|list|delete <provider>|env|key|endpoint`：打开或修改 provider 设置表单，查看/删除/配置 provider。
-- `/role [<role>|register <role> --model <id> --runtime <runtime>]`：打开角色注册表单，或直接注册一个角色。
+- `/role [<role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]`：打开角色注册表单，或直接注册一个角色；已有内部 model id 仍可用 `--model <id>`。
 - `/roles show|route|use|save`：查看、选择、保存角色路由。
 - tiffany-loop UI 原生模式支持 `/provider`：`/provider` 打开借鉴 OpenClaw 的 provider 设置面板，provider、type、env、key、endpoint 分开填写；面板会显示 preset 摘要、auth 状态（环境变量 set/unset、字面量 key 警告、Ollama 无需 key）以及即将执行的 `config provider setup ...` 写入预览；带 `▾` 的字段按 `Space` 或 `F4` 打开可滚动下拉，可用上下键或数字选择，`Enter` 应用；选择 provider 会自动填默认 type/env/endpoint；`/provider edit minimax` 会从现有配置预填；`/provider list` 查看配置，`/provider delete minimax` 删除 provider，`/provider env openai OPENAI_API_KEY` 写入环境变量引用，`/provider endpoint openai https://api.openai.com/v1` 写入 endpoint。
 - provider/type、role/provider/model/runtime 这类选择字段已经锁定为下拉选项，不能直接乱输入；key/env/endpoint 保留自由输入。`/role` 里用户只选 `API Model`，orchestrator 内部 model id 自动生成；内置模型会跟随当前 provider 过滤，`custom`/`none` 下允许手动输入模型。
-- tiffany-loop UI 原生模式支持 `/role`：`/role` 打开独立角色注册表单，role、provider、model、name、runtime、teams 分开填写；`/role worker-codex` 会预填该角色；`/role register worker-cc --model sonnet --runtime claude-code --agent-teams` 可直接写入 orchestrator 配置。
+- tiffany-loop UI 原生模式支持 `/role`：`/role` 打开独立角色注册表单，role、provider、model、name、runtime、teams 分开填写；`/role worker-codex` 会预填该角色；`/role register worker-cc --provider minimax --model-name MiniMax-M3 --runtime claude-code --agent-teams` 可直接写入 orchestrator 配置。
 - Claude Code worker 可以注册多个。`worker-cc` 只是默认示例；`worker-cc-minimax`、`worker-cc-sonnet`、`executor-ui` 这类角色只要 `runtime` 是 `claude-code`，都可以通过 `/roles use <role>` 精确选择。
-- tiffany-loop UI 原生模式支持 `/roles`：`/roles` 列出角色，`/roles show critic` 查看单个角色。
+- tiffany-loop UI 原生模式支持 `/roles`：`/roles` 列出角色，`/roles show critic` 查看单个角色；`/roles save <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 会同时写入 model 和 role，旧的 `/roles save <role> <model> <runtime>` 仍可绑定已有 model id。
 - `/workflow`：查看 planner -> critic -> worker -> reviewer 流程。
 - `/agent claude|codex|auto`：选择后续 worker 路由。
 - `/context compact|full|off|clear`：控制上下文记忆。
@@ -431,7 +431,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - 不确定当前用的是哪个 `tiffany-loop` / `orchestrator` binary 或配置根目录时，先运行 `orchestrator status`。
 - worker 提前退出、provider 报 `model not found` / `模型不存在` / `401/403`、或者 API key 看起来没生效时，先运行 `/doctor` 或 `orchestrator doctor`。
 - doctor 会在不打印密钥的前提下检查环境变量 key 引用，验证 `role -> model -> provider -> runtime` 是否连通，提示重复/缺失 model，并显示本机安装/构建环境：Homebrew tap/package、Rust/cargo、Xcode/CLT 和 worker CLI 二进制。
-- 模型报错时，重点确认角色里的内部 model id 是否指向正确的 provider API model name：用 `/role <role>`，或 `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>` 修正。
+- 模型报错时，重点确认角色是否指向正确的 provider API model name：用 `/role <role>`，或 `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 修正；只有绑定已有内部 model id 时才需要 `--model <id>`。
 
 `tiffany-loop "..."` 进入后，直接在 tiffany-loop 输入框继续问即可触发下一轮 orchestrator 编排。运行中输入的普通消息会停留在底部队列，当前任务结束后合并为下一批一起执行。底部最多预览 4 条，完整队列可用 `/queue show` 查看。
 
@@ -467,7 +467,7 @@ TUI 内等价命令：
 ```text
 /role
 /role worker-codex
-/role register critic --model gpt4o --runtime codex
+/role register critic --provider openai --model-name gpt-4o --runtime codex
 ```
 
 也可以进 TUI 前直接用脚本写 provider：
@@ -482,8 +482,8 @@ TUI 内等价命令：
 
 ```bash
 orchestrator roles register planner --model gpt4o --runtime codex
-orchestrator roles register critic --model glm51 --provider openai --model-name glm-5.1 --runtime codex
-orchestrator roles register worker-cc --model minimax-m3 --provider openai --model-name minimax-m3 --runtime claude-code --agent-teams
+orchestrator roles register critic --provider openai --model-name glm-5.1 --runtime codex
+orchestrator roles register worker-cc --provider minimax --model-name MiniMax-M3 --runtime claude-code --agent-teams
 ```
 
 Claude Code 子 agent 可以直接指定：

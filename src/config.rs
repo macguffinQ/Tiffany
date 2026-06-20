@@ -228,6 +228,41 @@ impl Config {
         })
     }
 
+    /// Derive a stable internal model id from a provider API model name.
+    ///
+    /// The generated id is meant for user-facing setup flows where asking for
+    /// a separate "model id" adds friction. If the preferred id is already
+    /// bound to the same provider/model pair, it is reused. If it conflicts,
+    /// the provider id and then a numeric suffix are added.
+    pub fn derive_model_id(&self, provider: &str, model_name: &str) -> String {
+        let provider_slug = slugify_config_id(provider).unwrap_or_else(|| "provider".into());
+        let model_slug = slugify_config_id(model_name).unwrap_or_else(|| "model".into());
+        let preferred = model_slug.clone();
+        if self.model_id_available_or_matching(&preferred, provider, model_name) {
+            return preferred;
+        }
+
+        let prefixed = format!("{provider_slug}-{model_slug}");
+        if self.model_id_available_or_matching(&prefixed, provider, model_name) {
+            return prefixed;
+        }
+
+        for idx in 2.. {
+            let candidate = format!("{prefixed}-{idx}");
+            if self.model_id_available_or_matching(&candidate, provider, model_name) {
+                return candidate;
+            }
+        }
+        unreachable!("unbounded numeric suffix search should always return")
+    }
+
+    fn model_id_available_or_matching(&self, id: &str, provider: &str, model_name: &str) -> bool {
+        match self.models.iter().find(|model| model.id == id) {
+            None => true,
+            Some(existing) => existing.provider == provider && existing.name == model_name,
+        }
+    }
+
     /// Write a default config to `~/.orchestrator/config.yaml` if none exists.
     pub fn init_default() -> Result<PathBuf> {
         let home = home::home_dir().context("could not determine home directory")?;
@@ -528,6 +563,28 @@ fn validate_config_id(kind: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn slugify_config_id(value: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut last_was_dash = false;
+    for ch in value.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash && !out.is_empty() {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -610,6 +667,33 @@ mod tests {
         let body = std::fs::read_to_string(path).unwrap();
         assert!(body.contains("name: glm-5.1"));
         assert_eq!(body.matches("id: glm").count(), 1);
+    }
+
+    #[test]
+    fn derive_model_id_reuses_matching_and_suffixes_conflicts() {
+        let cfg = Config {
+            models: vec![
+                ModelConfig {
+                    id: "minimax-m3".into(),
+                    provider: "minimax".into(),
+                    name: "MiniMax-M3".into(),
+                },
+                ModelConfig {
+                    id: "glm-5-1".into(),
+                    provider: "openai".into(),
+                    name: "different".into(),
+                },
+                ModelConfig {
+                    id: "z-ai-glm-5-1".into(),
+                    provider: "z-ai".into(),
+                    name: "different".into(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(cfg.derive_model_id("minimax", "MiniMax-M3"), "minimax-m3");
+        assert_eq!(cfg.derive_model_id("z-ai", "glm-5.1"), "z-ai-glm-5-1-2");
     }
 
     #[test]

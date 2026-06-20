@@ -443,7 +443,7 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `orchestrator config provider delete <provider>` | Delete one configured provider |
 | `orchestrator config provider list|presets` | Inspect configured providers or built-in presets |
 | `orchestrator roles list` | List registered planner/critic/worker/reviewer roles |
-| `orchestrator roles register <role> --model <id> --runtime <runtime>` | Register or update a role binding |
+| `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` | Register or update a role; Tiffany derives the internal model id |
 | `orchestrator tui` | Open the primary tiffany-loop UI when `tiffany-loop` is installed; otherwise fall back to legacy terminal chat |
 | `orchestrator tui --ratatui` | Legacy compatibility flag; kept only for old scripts |
 | `orchestrator tui --new-tab` | Open terminal chat in a new zellij tab |
@@ -495,8 +495,8 @@ Useful commands:
 - `/help` - show commands
 - `/doctor` - diagnose config, runtimes, API keys, role wiring, and local tools
 - `/provider [setup|edit <provider>]|list|delete <provider>|env <provider> <ENV>|key <provider> <value>|endpoint <provider> <url>` - open or edit a provider setup form, inspect config, delete a provider, or configure orchestrator providers
-- `/role [<role>|register <role> --model <id> --runtime <runtime>]` - open the role-registration form or register one role
-- `/roles show|route|use <role>|snippet <role> <model> <runtime>|save <role> <model> <runtime>` - inspect configured commander/critic/executor/reviewer roles, select a worker route, print a snippet, or write a role to config
+- `/role [<role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]` - open the role-registration form or register one role; `--model <id>` remains supported for existing model ids
+- `/roles show|route|use <role>|snippet <role> <model> <runtime>|save <role> --provider <provider> --model-name <api-model> --runtime <runtime>` - inspect configured commander/critic/executor/reviewer roles, select a worker route, print a snippet, or write a role to config
 - `/workflow` - show the active planner -> critic -> worker -> reviewer pipeline
 - `/agent claude|codex|auto` - route future worker tasks
 - `/context compact|full|off|clear` - control multi-turn memory
@@ -523,7 +523,7 @@ Troubleshooting first:
 - Run `orchestrator status` when you are unsure which `tiffany-loop` / `orchestrator` binaries or config roots are being used.
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
 - Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, and worker CLI binaries.
-- For model errors, confirm the role's internal model id points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>`.
+- For model errors, confirm the role points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`. Use `--model <id>` only when binding to an existing internal model id.
 
 `orchestrator run "..." --ab` runs the task through two configured worker roles, for example `worker-cc` and `worker-codex`. If `--worker <role>` is supplied, that route becomes side A and Tiffany picks another configured worker for side B. The built-in judge prefers a successful side; when both succeed or both fail, it prefers the smaller diff, falling back to session-log size when a diff is unavailable.
 
@@ -576,15 +576,15 @@ Role routing notes:
 - `/roles use <role>` applies to future worker tasks in the current terminal chat.
 - Planner, critic, reviewer, and worker roles all use their configured `runtime` and resolved model name.
 - You can register multiple Claude Code workers. `worker-cc` is only the default example; roles such as `worker-cc-minimax`, `worker-cc-sonnet`, or `executor-ui` work as long as their `runtime` is `claude-code`.
-- `/roles save <role> <model> <runtime>` writes a role into `~/.orchestrator/config.yaml`; restart terminal chat after changing planner/critic/reviewer so the execution pipeline is rebuilt.
-- In the tiffany-loop UI, use `/role`, `/roles`, `/roles show <role>`, or `/roles register <role> --model <id> --runtime <runtime>` directly from the input box.
+- `/roles save <role> --provider <provider> --model-name <api-model> --runtime <runtime>` writes both the model and role into `~/.orchestrator/config.yaml`; `/roles save <role> <model> <runtime>` remains supported for existing model ids. Restart terminal chat after changing planner/critic/reviewer so the execution pipeline is rebuilt.
+- In the tiffany-loop UI, use `/role`, `/roles`, `/roles show <role>`, or `/roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` directly from the input box.
 
 Role registration examples:
 
 ```bash
 orchestrator roles register planner --model gpt4o --runtime codex
-orchestrator roles register critic --model glm51 --provider openai --model-name glm-5.1 --runtime codex
-orchestrator roles register worker-cc --model minimax-m3 --provider openai --model-name minimax-m3 --runtime claude-code --agent-teams
+orchestrator roles register critic --provider openai --model-name glm-5.1 --runtime codex
+orchestrator roles register worker-cc --provider minimax --model-name MiniMax-M3 --runtime claude-code --agent-teams
 orchestrator roles register worker-cc-sonnet --model sonnet --runtime claude-code --agent-teams
 ```
 
