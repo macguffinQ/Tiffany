@@ -1184,28 +1184,32 @@ fn parse_homebrew_tiffany_version(output: &str) -> Option<&str> {
 }
 
 fn check_xcode(builder: &mut DoctorReportBuilder) {
-    match command_summary("xcode-select", &["-p"]) {
+    let selected_developer_dir = match command_summary("xcode-select", &["-p"]) {
         Ok(summary) if summary.success => {
             let developer_dir = summary.stdout.trim();
             builder.ok(format!("xcode developer dir: {developer_dir}"));
-            if developer_dir.contains("/Applications/Xcode-beta.app/") {
-                builder.hint("using Xcode beta developer dir; if source builds fail, switch back with `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`");
-            } else if Path::new("/Applications/Xcode-beta.app/Contents/Developer").exists() {
-                builder.hint("Xcode beta is installed; select it with `sudo xcode-select -s /Applications/Xcode-beta.app/Contents/Developer` when you intentionally want the beta toolchain");
-            }
+            Some(developer_dir.to_string())
         }
         Ok(summary) => {
             builder.warn(format!("xcode-select: {}", summary.short_failure()));
-            builder.hint("run `xcode-select --install`, or select Xcode with `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`");
+            hint_xcode_selection(builder, None);
+            None
         }
-        Err(err) => builder.warn(format!("xcode-select: {err}")),
-    }
+        Err(err) => {
+            builder.warn(format!("xcode-select: {err}"));
+            hint_xcode_selection(builder, None);
+            None
+        }
+    };
+
+    hint_xcode_selection(builder, selected_developer_dir.as_deref());
 
     match command_summary("xcrun", &["--find", "clang"]) {
         Ok(summary) if summary.success => builder.ok(format!("clang: {}", summary.stdout.trim())),
         Ok(summary) => {
             builder.warn(format!("clang lookup failed: {}", summary.short_failure()));
             builder.hint("install/select Xcode Command Line Tools before building from source");
+            hint_xcode_selection(builder, selected_developer_dir.as_deref());
         }
         Err(err) => builder.warn(format!("clang lookup failed: {err}")),
     }
@@ -1225,8 +1229,84 @@ fn check_xcode(builder: &mut DoctorReportBuilder) {
             builder.hint(
                 "if Xcode was just updated, open it once or run `sudo xcodebuild -license accept`",
             );
+            hint_xcode_selection(builder, selected_developer_dir.as_deref());
         }
         Err(err) => builder.warn(format!("xcodebuild: {err}")),
+    }
+}
+
+fn hint_xcode_selection(builder: &mut DoctorReportBuilder, selected_developer_dir: Option<&str>) {
+    const STABLE_XCODE_DEVELOPER_DIR: &str = "/Applications/Xcode.app/Contents/Developer";
+    const BETA_XCODE_DEVELOPER_DIR: &str = "/Applications/Xcode-beta.app/Contents/Developer";
+    const CLT_DEVELOPER_DIR: &str = "/Library/Developer/CommandLineTools";
+
+    hint_xcode_selection_with_paths(
+        builder,
+        selected_developer_dir,
+        XcodeDeveloperDirs {
+            stable: STABLE_XCODE_DEVELOPER_DIR,
+            beta: BETA_XCODE_DEVELOPER_DIR,
+            clt: CLT_DEVELOPER_DIR,
+        },
+        |path| Path::new(path).exists(),
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+struct XcodeDeveloperDirs {
+    stable: &'static str,
+    beta: &'static str,
+    clt: &'static str,
+}
+
+fn hint_xcode_selection_with_paths(
+    builder: &mut DoctorReportBuilder,
+    selected_developer_dir: Option<&str>,
+    dirs: XcodeDeveloperDirs,
+    exists: impl Fn(&str) -> bool,
+) {
+    let stable_exists = exists(dirs.stable);
+    let beta_exists = exists(dirs.beta);
+    let clt_exists = exists(dirs.clt);
+
+    if selected_developer_dir == Some(dirs.beta) {
+        if stable_exists {
+            builder.hint(format!(
+                "using Xcode beta; if source builds fail, switch to stable with `sudo xcode-select -s {}`",
+                dirs.stable
+            ));
+        } else if clt_exists {
+            builder.hint(format!(
+                "using Xcode beta; if source builds fail, switch to Command Line Tools with `sudo xcode-select -s {}`",
+                dirs.clt
+            ));
+        } else {
+            builder.hint("using Xcode beta; install stable Xcode or Command Line Tools if source builds fail");
+        }
+        return;
+    }
+
+    if beta_exists && selected_developer_dir != Some(dirs.beta) {
+        builder.hint(format!(
+            "Xcode beta is installed; select it with `sudo xcode-select -s {}` only when you intentionally want the beta toolchain",
+            dirs.beta
+        ));
+    }
+
+    if selected_developer_dir.is_none() {
+        if stable_exists {
+            builder.hint(format!(
+                "select stable Xcode with `sudo xcode-select -s {}`",
+                dirs.stable
+            ));
+        } else if clt_exists {
+            builder.hint(format!(
+                "select Command Line Tools with `sudo xcode-select -s {}`",
+                dirs.clt
+            ));
+        } else {
+            builder.hint("run `xcode-select --install`, or install Xcode from the App Store");
+        }
     }
 }
 
@@ -1515,6 +1595,40 @@ mod tests {
         assert!(rendered.contains("✓ shared target:"));
         assert!(!rendered.contains("legacy fork target"));
         assert!(!rendered.contains("tiffany-clean-targets --trim"));
+    }
+
+    #[test]
+    fn xcode_hint_guides_beta_users_to_stable_when_available() {
+        let mut builder = DoctorReportBuilder::default();
+        let dirs = XcodeDeveloperDirs {
+            stable: "/stable",
+            beta: "/beta",
+            clt: "/clt",
+        };
+
+        hint_xcode_selection_with_paths(&mut builder, Some("/beta"), dirs, |path| {
+            path == "/stable"
+        });
+        let rendered = builder.finish().render_text();
+
+        assert!(rendered.contains("using Xcode beta"));
+        assert!(rendered.contains("sudo xcode-select -s /stable"));
+    }
+
+    #[test]
+    fn xcode_hint_guides_unselected_toolchain_to_installed_stable_xcode() {
+        let mut builder = DoctorReportBuilder::default();
+        let dirs = XcodeDeveloperDirs {
+            stable: "/stable",
+            beta: "/beta",
+            clt: "/clt",
+        };
+
+        hint_xcode_selection_with_paths(&mut builder, None, dirs, |path| path == "/stable");
+        let rendered = builder.finish().render_text();
+
+        assert!(rendered.contains("select stable Xcode"));
+        assert!(rendered.contains("sudo xcode-select -s /stable"));
     }
 
     #[test]
