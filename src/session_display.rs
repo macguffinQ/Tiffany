@@ -210,13 +210,13 @@ pub fn format_session_tree(root: &Session, all_sessions: &[Session], log_dir: &P
         .iter()
         .filter(|session| session.parent_session_ids.contains(&root.id))
         .collect::<Vec<_>>();
-    children.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+    children.sort_by_key(|session| session.started_at);
 
     let mut parents = all_sessions
         .iter()
         .filter(|session| root.parent_session_ids.contains(&session.id))
         .collect::<Vec<_>>();
-    parents.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+    parents.sort_by_key(|session| session.started_at);
 
     let mut out = format!(
         "Session tree\n{}\n  task: {}\n  state: {}\n  log: {}",
@@ -440,7 +440,7 @@ fn collect_session_subtree<'a>(root: &'a Session, all_sessions: &'a [Session]) -
         }
     }
     for children in children_by_parent.values_mut() {
-        children.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+        children.sort_by_key(|session| session.started_at);
     }
 
     let mut out = Vec::new();

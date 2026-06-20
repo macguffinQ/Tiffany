@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -81,7 +82,7 @@ pub fn load_cc_sessions(cwd: &Path) -> Vec<CCSession> {
     }
 
     // Sort newest first, dedupe by id (in case slug variants matched the same project).
-    all.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    all.sort_by_key(|session| Reverse(session.started_at));
     let mut seen_ids = HashSet::new();
     all.retain(|s| seen_ids.insert(s.id.clone()));
     all
