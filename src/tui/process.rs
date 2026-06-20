@@ -729,6 +729,7 @@ pub(super) fn format_process_summary(input: &InputState) -> String {
     }
 
     let hints = failure_hints_from_events(&events);
+    let repair_command = failure_repair_command(&hints, &events);
     let important = important_process_events(&events);
     let source = if important.is_empty() {
         events
@@ -788,6 +789,10 @@ pub(super) fn format_process_summary(input: &InputState) -> String {
             ));
             out.push_str("\n    next: ");
             out.push_str(hint.action());
+            if let Some(command) = repair_command.as_ref() {
+                out.push_str("\n    fix: ");
+                out.push_str(command);
+            }
         }
     }
     out.push_str("\n\nRecent activity:");
@@ -958,6 +963,7 @@ pub(super) fn format_failure_context(input: &InputState) -> Option<String> {
     }
     let events: Vec<&String> = input.run_events.iter().collect();
     let hints = failure_hints_from_events(&events);
+    let repair_command = failure_repair_command(&hints, &events);
     let important = important_process_events(&events);
     let source = if important.is_empty() {
         events
@@ -987,6 +993,11 @@ pub(super) fn format_failure_context(input: &InputState) -> Option<String> {
             out.push('\n');
             out.push_str("  - ");
             out.push_str(hint.action());
+            if let Some(command) = repair_command.as_ref() {
+                out.push('\n');
+                out.push_str("    fix: ");
+                out.push_str(command);
+            }
         }
         out.push_str("\n\n");
     }
@@ -1029,6 +1040,53 @@ fn failure_hints_from_events(events: &[&String]) -> Vec<agent_events::AgentFailu
     }
     hints.reverse();
     hints
+}
+
+fn failure_repair_command(
+    hints: &[agent_events::AgentFailureHint],
+    events: &[&String],
+) -> Option<String> {
+    if !hints.iter().any(|hint| {
+        hint.title()
+            .to_ascii_lowercase()
+            .contains("model not found")
+    }) {
+        return None;
+    }
+    let worker = events
+        .iter()
+        .rev()
+        .filter_map(|line| parse_worker_started_context(line))
+        .next()?;
+    Some(format!(
+        "/roles save {} --provider {} --model-name <api-model> --runtime {}",
+        worker.role, worker.provider, worker.runtime
+    ))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkerStartedContext {
+    role: String,
+    runtime: String,
+    provider: String,
+}
+
+fn parse_worker_started_context(line: &str) -> Option<WorkerStartedContext> {
+    let body = line
+        .split_once("  ")
+        .map(|(_, body)| body)
+        .unwrap_or(line)
+        .trim();
+    let worker = body.strip_prefix("worker  ")?;
+    let (role, rest) = worker.split_once(" started · ")?;
+    let (runtime, rest) = rest.split_once(" · ")?;
+    let (provider_model, _) = rest.split_once(" · ")?;
+    let (provider, _) = provider_model.split_once('/')?;
+    Some(WorkerStartedContext {
+        role: role.trim().to_string(),
+        runtime: runtime.trim().to_string(),
+        provider: provider.trim().to_string(),
+    })
 }
 
 fn important_process_events<'a>(events: &[&'a String]) -> Vec<&'a String> {
@@ -1486,6 +1544,9 @@ mod tests {
         assert!(formatted.contains("diagnostics: model not found"));
         assert!(formatted.contains("Diagnostics:"));
         assert!(formatted.contains("next: Check the role's provider/model in /role"));
+        assert!(formatted.contains(
+            "fix: /roles save worker-codex --provider openai --model-name <api-model> --runtime codex"
+        ));
         assert!(!formatted.contains("output ·"));
     }
 
@@ -1526,7 +1587,27 @@ mod tests {
         assert!(formatted.contains("模型不存在"));
         assert!(formatted.contains("Next step:"));
         assert!(formatted.contains("Check the role's provider/model in /role"));
+        assert!(formatted.contains(
+            "fix: /roles save worker-codex --provider openai --model-name <api-model> --runtime codex"
+        ));
         assert!(formatted.contains("Recent process:"));
+    }
+
+    #[test]
+    fn parses_worker_started_context_for_repair_commands() {
+        let parsed = parse_worker_started_context(
+            "10:00:00  worker  worker-codex started · codex · openai/glm-5.1 · abcdef12",
+        )
+        .expect("worker context");
+
+        assert_eq!(
+            parsed,
+            WorkerStartedContext {
+                role: "worker-codex".into(),
+                runtime: "codex".into(),
+                provider: "openai".into(),
+            }
+        );
     }
 
     #[test]

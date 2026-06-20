@@ -1471,7 +1471,7 @@ fn status_actions(
         if config_issues.iter().any(|issue| is_role_setup_issue(issue)) {
             actions.push(StatusAction {
                 label: "fix role",
-                command: "tiffany-loop then /role, or `orchestrator roles register <role> --model <model-id> --runtime <runtime-id>`".into(),
+                command: "tiffany-loop then /role, or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime-id>`".into(),
             });
         }
         if actions.is_empty() {
@@ -5197,6 +5197,9 @@ mod tests {
         assert_eq!(actions[0].label, "fix role");
         assert!(actions[0].command.contains("/role"));
         assert!(actions[0].command.contains("orchestrator roles register"));
+        assert!(actions[0]
+            .command
+            .contains("--provider <provider> --model-name <api-model>"));
         assert_eq!(actions[1].command, "orchestrator doctor".to_string());
     }
 
@@ -5244,6 +5247,9 @@ mod tests {
         assert!(actions[0].command.contains("/provider"));
         assert_eq!(actions[1].label, "fix role");
         assert!(actions[1].command.contains("/role"));
+        assert!(actions[1]
+            .command
+            .contains("--provider <provider> --model-name <api-model>"));
         assert_eq!(actions[2].command, "orchestrator doctor".to_string());
     }
 

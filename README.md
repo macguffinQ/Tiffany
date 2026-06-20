@@ -524,6 +524,7 @@ Troubleshooting first:
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
 - Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, and worker CLI binaries.
 - For model errors, confirm the role points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`. Use `--model <id>` only when binding to an existing internal model id.
+- When a run fails with `model not found`, `模型不存在`, or `[1211]`, `/process` and the failure summary include a copyable repair template such as `/roles save worker-codex --provider openai --model-name <api-model> --runtime codex`.
 
 `orchestrator run "..." --ab` runs the task through two configured worker roles, for example `worker-cc` and `worker-codex`. If `--worker <role>` is supplied, that route becomes side A and Tiffany picks another configured worker for side B. The built-in judge prefers a successful side; when both succeed or both fail, it prefers the smaller diff, falling back to session-log size when a diff is unavailable.
 

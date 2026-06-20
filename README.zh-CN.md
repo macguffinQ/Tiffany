@@ -432,6 +432,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - worker 提前退出、provider 报 `model not found` / `模型不存在` / `401/403`、或者 API key 看起来没生效时，先运行 `/doctor` 或 `orchestrator doctor`。
 - doctor 会在不打印密钥的前提下检查环境变量 key 引用，验证 `role -> model -> provider -> runtime` 是否连通，提示重复/缺失 model，并显示本机安装/构建环境：Homebrew tap/package、Rust/cargo、Xcode/CLT 和 worker CLI 二进制。
 - 模型报错时，重点确认角色是否指向正确的 provider API model name：用 `/role <role>`，或 `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 修正；只有绑定已有内部 model id 时才需要 `--model <id>`。
+- 运行失败包含 `model not found`、`模型不存在` 或 `[1211]` 时，`/process` 和失败摘要会给出可复制修复模板，例如 `/roles save worker-codex --provider openai --model-name <api-model> --runtime codex`。
 
 `tiffany-loop "..."` 进入后，直接在 tiffany-loop 输入框继续问即可触发下一轮 orchestrator 编排。运行中输入的普通消息会停留在底部队列，当前任务结束后合并为下一批一起执行。底部最多预览 4 条，完整队列可用 `/queue show` 查看。
 

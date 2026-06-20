@@ -218,7 +218,7 @@ impl DoctorReport {
         }) {
             push_unique(
                 &mut steps,
-                "Register roles with `/role` in the TUI or `orchestrator roles register <role> --model <model-id> --runtime <runtime-id>`.",
+                "Register roles with `/role` in the TUI or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime-id>`.",
             );
         }
         if messages.iter().any(|message| {
@@ -734,7 +734,7 @@ fn check_models(builder: &mut DoctorReportBuilder, cfg: &Config) {
 
     if cfg.models.iter().any(|model| model.id != model.name) {
         builder.hint("model id is Tiffany's internal alias; api_model is the exact name sent to the provider");
-        builder.hint("for `model not found`, `模型不存在`, or `[1211]`, fix api_model with `/role <role>` or `orchestrator roles register <role> --model <id> --provider <provider> --model-name <api-model> --runtime <runtime>`");
+        builder.hint("for `model not found`, `模型不存在`, or `[1211]`, fix api_model with `/role <role>` or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`");
     }
 }
 
@@ -750,10 +750,10 @@ fn check_roles(builder: &mut DoctorReportBuilder, cfg: &Config) {
             builder.fail("no worker role configured (add a role containing worker or executor)");
             builder.hint(format!("configured roles: {}", available_role_names(cfg)));
             builder.hint(
-                "add one with `orchestrator roles register worker-cc --model <model-id> --runtime claude-code --agent-teams`",
+                "add one with `orchestrator roles register worker-cc --provider <provider> --model-name <api-model> --runtime claude-code --agent-teams`",
             );
             builder.hint(
-                "or add a Codex worker with `orchestrator roles register worker-codex --model <model-id> --runtime codex`",
+                "or add a Codex worker with `orchestrator roles register worker-codex --provider <provider> --model-name <api-model> --runtime codex`",
             );
         }
     }
@@ -815,8 +815,8 @@ fn check_role_binding(
             role.model
         ));
         builder.hint(format!(
-            "register it with `orchestrator roles register {role_name} --model {} --provider <provider> --model-name <api-model> --runtime {}`",
-            role.model, role.runtime
+            "register it with `orchestrator roles register {role_name} --provider <provider> --model-name <api-model> --runtime {}`; use `--model {}` only when reusing that internal id",
+            role.runtime, role.model
         ));
     }
     if !runtime_ok {
@@ -1395,6 +1395,7 @@ mod tests {
 
         assert!(rendered.contains("Run `orchestrator setup`"));
         assert!(rendered.contains("Register roles with `/role`"));
+        assert!(rendered.contains("--provider <provider> --model-name <api-model>"));
         assert!(rendered.contains("Rerun `orchestrator doctor`"));
     }
 
@@ -1537,6 +1538,10 @@ mod tests {
         let rendered = report.render_text();
 
         assert!(rendered.contains("planner: model `missing-model` is not defined"));
+        assert!(rendered.contains(
+            "orchestrator roles register planner --provider <provider> --model-name <api-model> --runtime missing-runtime"
+        ));
+        assert!(rendered.contains("--model missing-model"));
         assert!(rendered.contains("planner: runtime `missing-runtime` is not defined"));
         assert!(report.issue_count >= 2);
     }
@@ -1579,8 +1584,12 @@ mod tests {
 
         assert!(rendered.contains("no worker role configured"));
         assert!(rendered.contains("configured roles: critic, planner, reviewer"));
-        assert!(rendered.contains("orchestrator roles register worker-cc"));
-        assert!(rendered.contains("orchestrator roles register worker-codex"));
+        assert!(rendered.contains(
+            "orchestrator roles register worker-cc --provider <provider> --model-name <api-model> --runtime claude-code"
+        ));
+        assert!(rendered.contains(
+            "orchestrator roles register worker-codex --provider <provider> --model-name <api-model> --runtime codex"
+        ));
     }
 
     #[test]
@@ -1776,6 +1785,9 @@ mod tests {
         ));
         assert!(rendered.contains("model id is Tiffany's internal alias"));
         assert!(rendered.contains("模型不存在"));
+        assert!(rendered.contains(
+            "orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>"
+        ));
     }
 
     #[test]
