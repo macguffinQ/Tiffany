@@ -150,7 +150,7 @@ pub(super) fn handle_slash_command_with_runtime(
         }
         "usage" | "u" => {
             let window = args.first().copied().unwrap_or("today");
-            push_system(input, format_usage(store, window));
+            push_system(input, format_usage(store, config, window));
         }
         "sessions" | "history" => {
             let limit = parse_count(args.first().copied(), 10, 1, 50);
@@ -1909,7 +1909,7 @@ fn selected_route_label(input: &InputState) -> String {
         .unwrap_or_else(|| "auto".into())
 }
 
-fn format_usage(store: &SessionStore, raw_window: &str) -> String {
+fn format_usage(store: &SessionStore, config: &Config, raw_window: &str) -> String {
     let Some((label, window)) = parse_usage_window(raw_window) else {
         return "Usage: /usage today|week|month|all".into();
     };
@@ -1948,6 +1948,16 @@ fn format_usage(store: &SessionStore, raw_window: &str) -> String {
                 "\n  {}  {} in / {} out / ${:.4}",
                 day.date, day.tokens_in, day.tokens_out, day.cost_usd
             ));
+        }
+    }
+    match crate::usage::compute_budget_status(store, &config.behavior.token_plan) {
+        Ok(Some(status)) => {
+            out.push_str("\n\n");
+            out.push_str(&crate::usage::format_budget_status(&status));
+        }
+        Ok(None) => {}
+        Err(err) => {
+            out.push_str(&format!("\n\nBudget alerts unavailable: {err:#}"));
         }
     }
     out
@@ -4390,6 +4400,42 @@ behavior:
         assert!(graph.content.contains("flowchart TD"));
         assert!(graph.content.contains("queue: 1 pending"));
         assert!(!graph.content.contains('{'));
+    }
+
+    #[test]
+    fn usage_command_includes_budget_alerts_when_configured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap(),
+        );
+        let mut session = Session::new(uuid::Uuid::new_v4(), "worker-cc", Role::Worker);
+        session.model = "claude-sonnet-4-6".into();
+        session.token_in = 700;
+        session.token_out = 200;
+        session.cost_usd = 9.0;
+        session.ended_at = Some(chrono::Utc::now());
+        store.finalize(&session).unwrap();
+
+        let mut cfg = test_config();
+        cfg.behavior.token_plan = crate::config::TokenPlan {
+            enabled: true,
+            daily_limit: Some(1_000),
+            monthly_limit_usd: Some(10.0),
+            warn_at_percent: 80,
+            per_provider: HashMap::from([("claude".to_string(), 800)]),
+        };
+        let cfg = Arc::new(cfg);
+        let mut input = InputState::default();
+
+        handle_slash_command("/usage today", &store, &cfg, &mut input);
+
+        let usage = input.transcript.last().expect("usage response");
+        assert!(usage.content.contains("Token usage (today)"));
+        assert!(usage.content.contains("Budget alerts"));
+        assert!(usage.content.contains("Daily token budget warning"));
+        assert!(usage
+            .content
+            .contains("Provider `claude` daily token budget exceeded"));
     }
 
     #[test]

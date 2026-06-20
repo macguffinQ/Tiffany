@@ -292,9 +292,18 @@ behavior:
   enable_reviewer: true
   max_replan:      2
   cc_bypass_permissions: true          # Claude Code 角色/worker 非交互执行
+  token_plan:
+    enabled: false
+    warn_at_percent: 80
+    daily_limit: 200000
+    monthly_limit_usd: 50.0
+    per_provider:
+      claude: 120000
+      gpt: 80000
 ```
 
 `cc_bypass_permissions` 会给 tiffany-loop 启动的 Claude Code 子进程传 `--permission-mode bypassPermissions`。只有想让 Claude Code 手动停下来选择权限时才设为 `false`；tiffany-loop TUI 里的 `/permissions` 只管 tiffany-loop UI 自己，不管这些 Claude 子进程。
+设置 `behavior.token_plan.enabled: true` 后，`orchestrator usage` 和 `/usage` 会显示每日 token、每月成本、provider 级 token 的预算告警。
 
 角色解析优先级：
 
@@ -410,6 +419,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `/continue claude|codex`：保存交接包并切到对应 CLI。
 - `/graph compact|full|mermaid|save`：把对话压缩为流程图/摘要。
 - `/acp status|claude|codex`：查看 ACP server 和客户端配置提示。
+- `/usage today|week|month|all`：查看 token/成本用量，以及已配置的预算告警。
 - `/o`：折叠或展开后续过程详情。
 
 底部状态行会常驻显示当前阶段、耗时、worker 路由、上下文模式、队列数量、`/o` 折叠状态、process filter、review/worker 问题计数，尽量保持一行内可扫读。
@@ -573,13 +583,13 @@ cargo run -- config
 - `orchestrator tui` 在安装了 `tiffany-loop` 时默认进入 tiffany-loop UI
 - Release/Homebrew 同时安装 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`
 - Session 导出为 Markdown/HTML
+- 成本预算告警
 
 计划中：
 
 - fork adapter 稳定后删除旧的局部复制 TUI 模块
 - 更完整的 token 级最终答案流式输出
 - 后台任务和 attach
-- 成本预算告警
 - VS Code 扩展
 
 ## License

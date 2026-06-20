@@ -384,26 +384,10 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                     );
                 }
             }
-            if cfg.behavior.token_plan.enabled {
-                println!("\nToken plan:");
-                if let Some(daily) = cfg.behavior.token_plan.daily_limit {
-                    let used = u.total_tokens_in + u.total_tokens_out;
-                    let pct = (used as f64 / daily as f64) * 100.0;
-                    println!("  daily: {}/{} ({:.1}%)", used, daily, pct);
-                    if pct >= cfg.behavior.token_plan.warn_at_percent as f64 {
-                        println!("  ⚠ approaching daily limit");
-                    }
-                }
-                if let Some(monthly) = cfg.behavior.token_plan.monthly_limit_usd {
-                    let pct = (u.total_cost_usd / monthly) * 100.0;
-                    println!(
-                        "  monthly: ${:.4}/${} ({:.1}%)",
-                        u.total_cost_usd, monthly, pct
-                    );
-                    if pct >= cfg.behavior.token_plan.warn_at_percent as f64 {
-                        println!("  ⚠ approaching monthly cost limit");
-                    }
-                }
+            if let Some(status) =
+                orchestrator::usage::compute_budget_status(&store, &cfg.behavior.token_plan)?
+            {
+                println!("\n{}", orchestrator::usage::format_budget_status(&status));
             }
             Ok(())
         }

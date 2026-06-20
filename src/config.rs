@@ -57,7 +57,7 @@ pub struct OverrideConfig {
     pub role: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokenPlan {
     /// Master switch
     #[serde(default)]
@@ -72,6 +72,18 @@ pub struct TokenPlan {
     /// Per-provider overrides (in case some are cheaper than others)
     #[serde(default)]
     pub per_provider: HashMap<String, u64>,
+}
+
+impl Default for TokenPlan {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            daily_limit: None,
+            monthly_limit_usd: None,
+            warn_at_percent: default_warn_percent(),
+            per_provider: HashMap::new(),
+        }
+    }
 }
 
 fn default_warn_percent() -> u8 {
@@ -538,6 +550,14 @@ mod tests {
         .unwrap()
         .into_owned();
         let _cfg: Config = serde_yaml::from_str(&expanded).unwrap();
+    }
+
+    #[test]
+    fn token_plan_default_warns_at_eighty_percent() {
+        let plan = TokenPlan::default();
+
+        assert!(!plan.enabled);
+        assert_eq!(plan.warn_at_percent, 80);
     }
 
     #[test]

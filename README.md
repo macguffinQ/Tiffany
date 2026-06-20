@@ -396,10 +396,19 @@ behavior:
   enable_reviewer: true
   max_replan:      2
   cc_bypass_permissions: true          # Claude Code roles/workers run non-interactively
+  token_plan:
+    enabled: false
+    warn_at_percent: 80
+    daily_limit: 200000
+    monthly_limit_usd: 50.0
+    per_provider:
+      claude: 120000
+      gpt: 80000
 ```
 
 Missing env vars → empty string (no error). You can run `orchestrator status` before setting any keys.
 `cc_bypass_permissions` passes `--permission-mode bypassPermissions` to spawned Claude Code processes. Set it to `false` only when you want Claude Code to stop for manual permission prompts; tiffany-loop TUI `/permissions` controls the tiffany-loop UI itself, not these Claude subprocesses.
+Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and per-provider budget alerts in `orchestrator usage` and `/usage`.
 
 ---
 
@@ -496,7 +505,7 @@ Useful commands:
 - `/acp status|claude|codex` - show Agent Client Protocol server command and client setup hints
 - `/checkpoint` and `/rollback last` - save and reverse-apply a tracked git patch checkpoint
 - `/result` and `/copy result` - replay or copy the last final result as plain text
-- `/usage today|week|month|all` - show token/cost usage
+- `/usage today|week|month|all` - show token/cost usage and configured budget alerts
 - `/o` - fold or expand history summaries
 - `/resume last` - restore the last terminal chat snapshot
 
@@ -768,11 +777,11 @@ orchestrator/
 - [x] Make the tiffany-loop UI the default `orchestrator tui` command path when `tiffany-loop` is installed
 - [x] Release/Homebrew packaging installs `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias
 - [x] Session export (markdown / HTML)
+- [x] Cost budget alerts
 - [ ] Remove copied partial TUI modules after the fork adapter is stable
 - [ ] Full-token streaming final responses in terminal chat
 - [ ] Background task mode (`orchestrator run --detach` + `orchestrator attach`)
 - [ ] CC agent invocation from orchestrator (`--agent reviewer`)
-- [ ] Cost budget alerts
 - [ ] VS Code extension
 
 ---

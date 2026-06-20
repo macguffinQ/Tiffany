@@ -116,3 +116,11 @@ behavior:
   enable_ab_judge: false
   mux: zellij                  # zellij | tmux | none
   log_level: info              # trace | debug | info | warn | error
+  token_plan:
+    enabled: false
+    warn_at_percent: 80
+    daily_limit: 200000        # input + output tokens for today
+    monthly_limit_usd: 50.0
+    per_provider:
+      claude: 120000           # provider keys are shown by `orchestrator usage`
+      gpt: 80000
