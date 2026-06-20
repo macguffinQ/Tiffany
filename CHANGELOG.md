@@ -31,6 +31,16 @@ All notable changes to this project will be documented in this file.
 - Added `tiffany-loop` as the primary installed UI command while keeping
   `tiffany` as a compatibility alias.
 
+## [0.1.12] - 2026-06-20
+
+### Fixed
+
+- Fixed the macOS Apple Silicon release archive and Homebrew install surface so
+  the primary `tiffany-loop` command is included alongside `orchestrator` and
+  the `tiffany` compatibility alias.
+- Added release packaging checks and archive smoke coverage so future release
+  assets fail before publishing if any installed command is missing.
+
 ## [0.1.11] - 2026-06-19
 
 ### Fixed

@@ -122,10 +122,24 @@ jobs:
           mkdir -p "${staging}"
 
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            for binary in orchestrator.exe tiffany-loop.exe tiffany.exe; do
+              if [[ ! -x "${binary_dir}/${binary}" ]]; then
+                echo "::error::missing release binary ${binary_dir}/${binary}"
+                ls -la "${binary_dir}" || true
+                exit 1
+              fi
+            done
             cp "${binary_dir}/orchestrator.exe" "${staging}/"
             cp "${binary_dir}/tiffany-loop.exe" "${staging}/"
             cp "${binary_dir}/tiffany.exe" "${staging}/"
           else
+            for binary in orchestrator tiffany-loop tiffany; do
+              if [[ ! -x "${binary_dir}/${binary}" ]]; then
+                echo "::error::missing release binary ${binary_dir}/${binary}"
+                ls -la "${binary_dir}" || true
+                exit 1
+              fi
+            done
             cp "${binary_dir}/orchestrator" "${staging}/"
             cp "${binary_dir}/tiffany-loop" "${staging}/"
             cp "${binary_dir}/tiffany" "${staging}/"

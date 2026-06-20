@@ -5,7 +5,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/tiffany-install-smoke [--smoke|--dist|--bin-dir DIR]
+Usage: ./scripts/tiffany-install-smoke [--smoke|--dist|--bin-dir DIR|--archive FILE]
 
 Checks the installed/source-built command surface in an isolated HOME:
   - orchestrator
@@ -20,6 +20,7 @@ Modes:
 
 Options:
   --bin-dir DIR  Use an explicit directory containing the three binaries.
+  --archive FILE Extract a release .tar.gz/.zip and smoke-check its bin surface.
 
 Default: --smoke
 EOF
@@ -33,6 +34,7 @@ esac
 
 mode="smoke"
 bin_dir=""
+archive=""
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --smoke|--debug)
@@ -52,6 +54,17 @@ while [[ "$#" -gt 0 ]]; do
     --bin-dir=*)
       bin_dir="${1#--bin-dir=}"
       ;;
+    --archive)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      archive="$2"
+      shift
+      ;;
+    --archive=*)
+      archive="${1#--archive=}"
+      ;;
     -h|--help)
       usage
       exit 0
@@ -64,7 +77,36 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 
-if [[ -z "$bin_dir" ]]; then
+tmp_root="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_root"
+}
+trap cleanup EXIT
+
+if [[ -n "$archive" ]]; then
+  case "$archive" in
+    /*) ;;
+    *) archive="$repo_dir/$archive" ;;
+  esac
+  archive_dir="$tmp_root/archive"
+  mkdir -p "$archive_dir"
+  case "$archive" in
+    *.tar.gz|*.tgz)
+      tar -xzf "$archive" -C "$archive_dir"
+      ;;
+    *.zip)
+      unzip -q "$archive" -d "$archive_dir"
+      ;;
+    *)
+      echo "unsupported archive type: $archive" >&2
+      exit 2
+      ;;
+  esac
+  bin_dir="$(find "$archive_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  if [[ -z "$bin_dir" ]]; then
+    bin_dir="$archive_dir"
+  fi
+elif [[ -z "$bin_dir" ]]; then
   case "$mode" in
     smoke) bin_dir="$target_dir/dev-small" ;;
     dist) bin_dir="$target_dir/tiffany-dist" ;;
@@ -91,12 +133,6 @@ for binary in "$orchestrator_bin" "$tiffany_bin" "$tiffany_alias_bin"; do
     exit 1
   fi
 done
-
-tmp_root="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmp_root"
-}
-trap cleanup EXIT
 
 export HOME="$tmp_root/home"
 export TIFFANY_HOME="$tmp_root/tiffany"
