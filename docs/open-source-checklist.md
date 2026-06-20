@@ -17,7 +17,7 @@ Use this before making the repository public.
 
 ```bash
 ./scripts/tiffany-install-smoke --smoke
-./scripts/tiffany-release-preflight --full --tag v0.1.14
+./scripts/tiffany-release-preflight --full --tag v0.1.15
 ./scripts/tiffany-clean-targets --sizes
 ```
 
@@ -45,7 +45,7 @@ find . -path './target' -prune -o -path './tiffany-ui/codex-rs/target' -prune -o
 ## Release Commands
 
 ```bash
-./scripts/tiffany-release-preflight --full --tag v0.1.14
+./scripts/tiffany-release-preflight --full --tag v0.1.15
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-install-smoke --dist
 ```
