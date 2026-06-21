@@ -37,6 +37,8 @@ pub struct TiffanyProgressEvent {
     pub count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl From<RunProgress> for TiffanyProgressEvent {
@@ -59,6 +61,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: None,
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::Planned { sub_task_count } => Self {
                 role: "planner",
@@ -77,6 +80,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: Some(sub_task_count),
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::Critiquing { round } => Self {
                 role: "critic",
@@ -95,6 +99,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: None,
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::CritiqueResult { approved, issues } => Self {
                 role: "critic",
@@ -117,6 +122,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: Some(issues),
                 count: None,
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::Replanning { attempt } => Self {
                 role: "planner",
@@ -135,6 +141,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: None,
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::Executing { sub_task_count } => Self {
                 role: "worker",
@@ -153,6 +160,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: Some(sub_task_count),
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::WorkerStarted {
                 task_id,
@@ -180,6 +188,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: None,
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::WorkerOutput {
                 task_id,
@@ -203,6 +212,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: None,
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::RoleOutput { role, content } => {
                 let role = match role.as_str() {
@@ -229,6 +239,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                     issues: None,
                     count: None,
                     duration_ms: None,
+                    reason: None,
                 }
             }
             RunProgress::WorkerDone {
@@ -258,6 +269,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: None,
                 duration_ms: Some(duration_ms),
+                reason: None,
             },
             RunProgress::Reviewing { task_id } => Self {
                 role: "reviewer",
@@ -276,6 +288,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: None,
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::ReviewSkipped { task_id, reason } => Self {
                 role: "reviewer",
@@ -294,6 +307,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: None,
                 duration_ms: None,
+                reason: Some(reason),
             },
             RunProgress::ReviewResult {
                 task_id,
@@ -320,6 +334,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: Some(issues),
                 count: None,
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::Done { task_count } => Self {
                 role: "orchestrator",
@@ -338,6 +353,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: Some(task_count),
                 duration_ms: None,
+                reason: None,
             },
             RunProgress::Failed(message) => Self {
                 role: "orchestrator",
@@ -356,6 +372,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 issues: None,
                 count: None,
                 duration_ms: None,
+                reason: None,
             },
         }
     }
@@ -842,5 +859,22 @@ mod tests {
             skipped,
             "review  skipped · 12345678 · conversational answer"
         );
+    }
+
+    #[test]
+    fn json_event_keeps_review_skip_reason_structured() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let event = TiffanyProgressEvent::from(RunProgress::ReviewSkipped {
+            task_id,
+            reason: "conversational answer".into(),
+        });
+
+        let json = serde_json::to_value(event).expect("serializes progress event");
+
+        assert_eq!(json["role"], "reviewer");
+        assert_eq!(json["status"], "skipped");
+        assert_eq!(json["task_id"], "12345678-0000-0000-0000-000000000000");
+        assert_eq!(json["reason"], "conversational answer");
+        assert_eq!(json["message"], "review skipped - conversational answer");
     }
 }
