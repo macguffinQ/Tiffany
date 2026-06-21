@@ -4,10 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.19] - 2026-06-21
+
 ### Added
 
 - Documented the conversational direct-answer path, including the structured
   `review skipped` JSON event `reason` used by UI adapters and scripts.
+- Added release cadence guardrails so small fixes batch under `Unreleased`,
+  with an explicit override only for urgent installer, startup, or security
+  fixes.
 
 ### Fixed
 
@@ -17,6 +22,16 @@ All notable changes to this project will be documented in this file.
   default setup.
 - Fixed role diagnostics so a role bound to a model whose provider is missing
   is reported as a required wiring failure instead of an OK role row.
+- Injected worker output into reviewer prompts so review decisions can inspect
+  the actual response instead of reporting missing worker content.
+- Validated the orchestrator runtime before launching the Tiffany TUI, making
+  missing local binaries fail with actionable diagnostics.
+- Rendered `review skipped` structured events in the Tiffany TUI for
+  conversational turns instead of noisy review failure messages.
+- Preserved full worker message streams in the Tiffany TUI while keeping
+  planner, critic, and reviewer control output summarized.
+- Showed fuller worker task prompts and longer failure diagnostics in the
+  Tiffany TUI so process details are not hidden behind one-line truncation.
 
 ## [0.1.18] - 2026-06-21
 
