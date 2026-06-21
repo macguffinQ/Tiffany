@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.17] - 2026-06-21
+
+### Fixed
+
+- Repointed Tiffany Loop TUI update checks, release notes, and update commands
+  to Tiffany releases and `macguffinQ/tap/tiffany-loop`, removing the remaining
+  upstream Codex update/install prompts from the packaged UI.
+
 ## [0.1.14] - 2026-06-20
 
 ### Fixed

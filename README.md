@@ -290,8 +290,8 @@ strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v ti
 
 ```bash
 # Example: install a downloaded archive
-tar -xzf tiffany-loop-v0.1.16-aarch64-apple-darwin.tar.gz
-cd tiffany-loop-v0.1.16-aarch64-apple-darwin
+tar -xzf tiffany-loop-v0.1.17-aarch64-apple-darwin.tar.gz
+cd tiffany-loop-v0.1.17-aarch64-apple-darwin
 chmod +x orchestrator tiffany-loop tiffany
 ./tiffany-loop setup
 ./tiffany-loop doctor
@@ -699,7 +699,7 @@ cargo build --release    # release, ~5-8min first time
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --quick
-./scripts/tiffany-release-preflight --full --tag v0.1.16   # before tagging
+./scripts/tiffany-release-preflight --full --tag v0.1.17   # before tagging
 
 # Direct cargo commands inside tiffany-ui/codex-rs also use ./target.
 # Use ./scripts/tiffany-clean-targets --top to find target bloat,
