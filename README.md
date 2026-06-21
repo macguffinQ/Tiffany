@@ -231,6 +231,9 @@ All injected as system-prompt sections, in priority order: **AGENTS.md > CLAUDE.
 - The legacy runner still has upstream-derived terminal primitives, but new UI behavior belongs in the fork.
 - Follow-up messages entered during a run stay in tiffany-loop bottom pending queue; plain prompts merge into the next orchestrator run when the current run finishes.
 - Final worker output is shown as a plain selectable result block.
+- Worker stream rows are labeled as `final`, `tool call`, `tool result`,
+  `stderr`, or `alert`, and common failures include a one-line fix hint instead
+  of raw adapter JSON.
 - Slash commands cover routing, context memory, process capture, sessions, logs, queue control, and usage.
 - In tiffany-loop orchestrator mode, `/provider` is native to the tiffany-loop TUI: `/provider` opens a setup form with separate provider/type/env/key/endpoint fields, `/provider edit openai` edits an existing provider with prefilled values, `/provider list` shows config, `/provider env openai OPENAI_API_KEY` stores an env-var reference, and `/provider endpoint openai https://api.openai.com/v1` stores the endpoint.
 - In tiffany-loop orchestrator mode, `/role` opens a dedicated role-registration form with role/provider/model/runtime/team fields; `/roles` remains the list/CLI-style command surface.
@@ -273,6 +276,21 @@ tiffany-loop
 Inside the TUI, use `/provider` to configure providers and `/role` to register
 planner, critic, worker, and reviewer roles.
 
+If Homebrew says `tiffany-loop` is installed but your shell prints
+`command not found`, refresh the tap/package and verify your PATH:
+
+```bash
+brew update
+brew reinstall tiffany-loop
+brew --prefix tiffany-loop
+eval "$(brew shellenv)"
+tiffany-loop doctor
+```
+
+`tiffany-loop doctor` and `orchestrator doctor` check the Homebrew package
+prefix, the installed `tiffany-loop` / `orchestrator` binaries, and whether
+both commands are actually visible on `PATH`.
+
 Prebuilt macOS Apple Silicon binaries are published on the GitHub Releases page after each `v*` tag. Archives include `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias. Linux, Windows, and Intel Mac users can install from source while additional prebuilt targets are being staged.
 
 Source checkout for contributors:
@@ -297,8 +315,8 @@ strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v ti
 
 ```bash
 # Example: install a downloaded archive
-tar -xzf tiffany-loop-v0.1.19-aarch64-apple-darwin.tar.gz
-cd tiffany-loop-v0.1.19-aarch64-apple-darwin
+tar -xzf tiffany-loop-v0.1.20-aarch64-apple-darwin.tar.gz
+cd tiffany-loop-v0.1.20-aarch64-apple-darwin
 chmod +x orchestrator tiffany-loop tiffany
 ./tiffany-loop setup
 ./tiffany-loop doctor
@@ -541,6 +559,10 @@ Troubleshooting first:
 - `orchestrator status` prints targeted next actions, for example `/provider env minimax <ENV_NAME>`, `/provider endpoint minimax <url>`, or `orchestrator roles register worker-cc ...` when provider/model/runtime wiring is incomplete.
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
 - Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, and worker CLI binaries.
+- Doctor also checks whether a Homebrew-installed package actually exposes
+  `tiffany-loop` and `orchestrator` on `PATH`. If `brew install` says the
+  package exists but the shell cannot find it, run `eval "$(brew shellenv)"` or
+  add Homebrew's `bin` directory to your shell startup file.
 - Use `orchestrator doctor --format json` from scripts, CI, or UI bridges that need stable `status`, `issue_count`, `issue_summary`, `next_steps`, and diagnostic lines without parsing human text.
 - On macOS, doctor also calls out Xcode beta selections and gives the `xcode-select` command to switch to stable Xcode or Command Line Tools when source builds fail.
 - For model errors, confirm the role points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`. Use `--model <id>` only when binding to an existing internal model id.
@@ -706,7 +728,7 @@ cargo build --release    # release, ~5-8min first time
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --quick
-./scripts/tiffany-release-preflight --full --tag v0.1.19   # before tagging
+./scripts/tiffany-release-preflight --full --tag v0.1.20   # before tagging
 # Same-day follow-up tags are blocked by default; reserve this for urgent fixes:
 # TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full --tag vX.Y.Z
 

@@ -146,6 +146,7 @@ tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.
 - **原生多轮编排**：在 orchestrator mode 下，tiffany-loop 输入框提交会被路由到 orchestrator adapter，不再走普通 tiffany-loop 模型回合。
 - **过程透明**：灰色滚动展示运行过程，`/o` 可折叠或展开后续过程详情。
 - **最终结果清晰**：最终输出为纯文本结果块，方便选中复制；`/result` 可重新输出完整结果。
+- **worker 输出更可读**：worker 流式输出会标记为 `final`、`tool call`、`tool result`、`stderr` 或 `alert`，常见模型、权限、认证、runtime 错误会直接显示一行修复提示。
 - **队列与多轮**：运行中继续输入会进入 tiffany-loop 底部 pending queue，普通消息在当前轮结束后合并为下一批一起执行。
 - **上下文记忆**：支持紧凑/完整/关闭/清空上下文。
 - **交接能力**：可生成 Claude/Codex CLI handoff 包，切到对应 CLI 继续工作。
@@ -180,6 +181,20 @@ tiffany-loop
 
 进入 TUI 后，用 `/provider` 配置 provider，用 `/role` 注册 planner、critic、worker、reviewer 等角色。
 
+如果 Homebrew 提示已经安装，但 shell 里执行 `tiffany-loop` 显示
+`command not found`，先刷新包和 PATH：
+
+```bash
+brew update
+brew reinstall tiffany-loop
+brew --prefix tiffany-loop
+eval "$(brew shellenv)"
+tiffany-loop doctor
+```
+
+`tiffany-loop doctor` 和 `orchestrator doctor` 会检查 Homebrew package
+prefix、实际安装的 `tiffany-loop` / `orchestrator` 二进制，以及这两个命令是否真的在 `PATH` 上可见。
+
 每个 `v*` tag 发布后，GitHub Releases 会优先提供 macOS Apple Silicon 预编译二进制，压缩包内包含 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。Linux、Windows 和 Intel Mac 目前可先从源码安装，后续再补更多预编译目标。
 
 贡献者源码运行：
@@ -204,8 +219,8 @@ strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v ti
 
 ```bash
 # 示例：安装下载好的 macOS Apple Silicon 压缩包
-tar -xzf tiffany-loop-v0.1.19-aarch64-apple-darwin.tar.gz
-cd tiffany-loop-v0.1.19-aarch64-apple-darwin
+tar -xzf tiffany-loop-v0.1.20-aarch64-apple-darwin.tar.gz
+cd tiffany-loop-v0.1.20-aarch64-apple-darwin
 chmod +x orchestrator tiffany-loop tiffany
 ./tiffany-loop setup
 ./tiffany-loop doctor
@@ -445,6 +460,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `orchestrator status` 会给出更具体的下一步，例如 `/provider env minimax <ENV_NAME>`、`/provider endpoint minimax <url>`，或 provider/model/runtime 未连通时的 `orchestrator roles register worker-cc ...`。
 - worker 提前退出、provider 报 `model not found` / `模型不存在` / `401/403`、或者 API key 看起来没生效时，先运行 `/doctor` 或 `orchestrator doctor`。
 - doctor 会在不打印密钥的前提下检查环境变量 key 引用，验证 `role -> model -> provider -> runtime` 是否连通，提示重复/缺失 model，并显示本机安装/构建环境：Homebrew tap/package、Rust/cargo、Xcode/CLT 和 worker CLI 二进制。
+- doctor 也会检查 Homebrew 安装包里的 `tiffany-loop` 和 `orchestrator` 是否真的在 `PATH` 上可见。如果 `brew install` 显示已安装但命令找不到，运行 `eval "$(brew shellenv)"`，或把 Homebrew 的 `bin` 目录写进 shell 启动文件。
 - 脚本、CI 或 UI bridge 需要稳定读取诊断结果时，用 `orchestrator doctor --format json`，里面有 `status`、`issue_count`、`issue_summary`、`next_steps` 和诊断行。
 - macOS 下 doctor 也会提示是否选中了 Xcode beta，并在源码构建失败时给出切换到稳定 Xcode 或 Command Line Tools 的 `xcode-select` 命令。
 - 模型报错时，重点确认角色是否指向正确的 provider API model name：用 `/role <role>`，或 `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 修正；只有绑定已有内部 model id 时才需要 `--model <id>`。
@@ -559,7 +575,7 @@ cargo build --release
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --quick
-./scripts/tiffany-release-preflight --full --tag v0.1.19   # 打 tag 前
+./scripts/tiffany-release-preflight --full --tag v0.1.20   # 打 tag 前
 # 同日连续 tag 默认会被阻止；只在紧急修复时覆盖：
 # TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full --tag vX.Y.Z
 

@@ -1999,6 +1999,11 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
         ),
     ])];
     lines.extend(content.lines().map(output_body_line));
+    if let Some(raw) = event.content.as_deref()
+        && let Some(hint) = event_format::agent_failure_hint(raw, CONTROL_SUMMARY_MAX_CHARS)
+    {
+        lines.push(failure_hint_line(hint.title(), hint.action()));
+    }
     lines
 }
 
@@ -2161,7 +2166,7 @@ fn output_title(event: &TiffanyProgressEvent) -> String {
         "planner" => "plan",
         "critic" => "critique",
         "reviewer" => "review",
-        "worker" => "output",
+        "worker" => worker_output_suffix(event),
         _ => "details",
     };
     if event.role == "worker" {
@@ -2169,6 +2174,20 @@ fn output_title(event: &TiffanyProgressEvent) -> String {
         format!("worker {suffix} · {label}")
     } else {
         format!("{} · {suffix}", stage_label(event))
+    }
+}
+
+fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
+    let Some(raw) = event.content.as_deref() else {
+        return "output";
+    };
+    match event_format::visible_agent_output(raw, CONTROL_SUMMARY_MAX_CHARS).map(|view| view.kind) {
+        Some(event_format::VisibleAgentOutputKind::Final) => "final",
+        Some(event_format::VisibleAgentOutputKind::ToolCall) => "tool call",
+        Some(event_format::VisibleAgentOutputKind::ToolResult) => "tool result",
+        Some(event_format::VisibleAgentOutputKind::Stderr) => "stderr",
+        Some(event_format::VisibleAgentOutputKind::Actionable) => "alert",
+        Some(event_format::VisibleAgentOutputKind::Normal) | None => "output",
     }
 }
 
@@ -2332,7 +2351,12 @@ fn visible_content(event: &TiffanyProgressEvent) -> Option<String> {
         return None;
     }
 
-    let display = event_format::clean_visible_agent_output(content, visible_content_max(event))?;
+    let display = if event.role == "worker" {
+        event_format::visible_agent_output(content, visible_content_max(event))
+            .map(|view| view.display)?
+    } else {
+        event_format::clean_visible_agent_output(content, visible_content_max(event))?
+    };
     let display = strip_redundant_role_prefix(&event.role, &display);
     let display = format_tiffany_summary_style(&event.role, &display);
     if is_low_value_output(&display) {
@@ -2680,6 +2704,20 @@ fn output_body_line(line: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled("  │ ", Style::default().fg(TIFFANY_DARK)),
         Span::raw(line.to_string()),
+    ])
+}
+
+fn failure_hint_line(title: &str, action: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            "  fix ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(title.to_string(), Style::default().fg(Color::Yellow)),
+        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(action.to_string(), Style::default().fg(Color::DarkGray)),
     ])
 }
 
@@ -3101,6 +3139,86 @@ mod tests {
     }
 
     #[test]
+    fn worker_output_titles_show_runtime_event_kind() {
+        let base = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            message: "worker output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: None,
+            cc_agent: None,
+            model: Some("MiniMax-M3".to_string()),
+            provider: Some("minimax".to_string()),
+            task_prompt: None,
+            content: Some("claude-code assistant: 你好".to_string()),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+            reason: None,
+        };
+
+        assert_eq!(
+            output_title(&base),
+            "worker output · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"
+        );
+        assert_eq!(
+            output_title(&TiffanyProgressEvent {
+                content: Some("claude-code result: 完成".to_string()),
+                ..base.clone()
+            }),
+            "worker final · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"
+        );
+        assert_eq!(
+            output_title(&TiffanyProgressEvent {
+                content: Some("claude-code tool_use: tool Bash: cargo test".to_string()),
+                ..base.clone()
+            }),
+            "worker tool call · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"
+        );
+        assert_eq!(
+            output_title(&TiffanyProgressEvent {
+                content: Some("claude-code stderr: [1211] 模型不存在".to_string()),
+                ..base
+            }),
+            "worker stderr · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"
+        );
+    }
+
+    #[test]
+    fn worker_error_output_adds_actionable_fix_line() {
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            message: "worker output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("worker-codex".to_string()),
+            worker_role: Some("worker-codex".to_string()),
+            runtime: None,
+            cc_agent: None,
+            model: Some("MiniMax-M3".to_string()),
+            provider: Some("minimax".to_string()),
+            task_prompt: None,
+            content: Some("worker-codex stderr: API Error: 400 [1211][模型不存在]".to_string()),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+            reason: None,
+        };
+
+        let visible = visible_content(&event).expect("visible worker error");
+        let lines = output_event_lines(&event, &visible);
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("worker stderr · worker-codex · minimax/MiniMax-M3 · 12345678"));
+        assert!(text.contains("fix model not found"));
+        assert!(text.contains("Check the role's provider/model in /role"));
+    }
+
+    #[test]
     fn worker_metadata_carries_model_into_output_and_done_titles() {
         let mut state = BridgeState::default();
         let started = TiffanyProgressEvent {
@@ -3334,7 +3452,7 @@ mod tests {
 
         assert_eq!(
             visible_content(&event).as_deref(),
-            Some("worker-codex stderr: [1211] 模型不存在")
+            Some("[1211] 模型不存在")
         );
     }
 

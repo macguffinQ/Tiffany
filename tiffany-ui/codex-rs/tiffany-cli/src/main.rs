@@ -292,6 +292,7 @@ fn run_orchestrator_passthrough(subcommand: Subcommand) -> anyhow::Result<()> {
         anyhow::bail!("internal error: unsupported Tiffany passthrough command");
     };
     let bin = resolve_bin(&command.bin);
+    ensure_orchestrator_launch_ready(&bin)?;
     let status = Command::new(&bin)
         .args(config_args(command.config.as_deref()))
         .arg(name)
@@ -339,6 +340,7 @@ fn run_orchestrator_bridge(cmd: TiffanyOrchestratorCommand) -> anyhow::Result<()
         cmd.args
     };
     let bin = resolve_bin(&cmd.bin);
+    ensure_orchestrator_launch_ready(&bin)?;
     let status = Command::new(&bin)
         .args(config_args(cmd.config.as_deref()))
         .args(&args)

@@ -365,11 +365,7 @@ fn prefix_is_stderr(prefix: &str) -> bool {
     let mut parts = prefix.split_whitespace();
     match (parts.next(), parts.next(), parts.next()) {
         (Some("stderr"), None, None) => true,
-        (Some(runtime), Some("stderr"), None)
-            if matches!(runtime, "agent" | "claude" | "claude-code" | "codex") =>
-        {
-            true
-        }
+        (Some(runtime), Some("stderr"), None) if is_known_runtime_prefix(runtime) => true,
         _ => false,
     }
 }
@@ -448,16 +444,24 @@ fn runtime_output_kind_from_prefix(prefix: &str) -> Option<&'static str> {
     let mut parts = prefix.split_whitespace();
     let runtime = parts.next()?;
     let kind = parts.next()?;
-    if !matches!(runtime, "agent" | "claude" | "claude-code" | "codex") {
+    if !is_known_runtime_prefix(runtime) {
         return None;
     }
     known_runtime_output_kind(kind)
+}
+
+fn is_known_runtime_prefix(runtime: &str) -> bool {
+    matches!(
+        runtime,
+        "agent" | "claude" | "claude-code" | "cc" | "codex" | "worker-cc" | "worker-codex"
+    )
 }
 
 fn known_runtime_output_kind(kind: &str) -> Option<&'static str> {
     match kind {
         "assistant" => Some("assistant"),
         "event" => Some("event"),
+        "stderr" => Some("stderr"),
         "result" => Some("result"),
         "final" => Some("final"),
         "final_answer" => Some("final_answer"),
@@ -1773,6 +1777,10 @@ mod tests {
             runtime_output_kind("codex turn_complete: done"),
             Some("turn_complete")
         );
+        assert_eq!(
+            runtime_output_kind("worker-codex stderr: [1211] 模型不存在"),
+            Some("stderr")
+        );
     }
 
     #[test]
@@ -1792,6 +1800,14 @@ mod tests {
         assert_eq!(error.kind, VisibleAgentOutputKind::Stderr);
         assert!(error.display.contains("模型不存在"));
         assert!(!error.display.contains('{'));
+
+        let worker_error = visible_agent_output(
+            "worker-codex stderr: API Error: 400 [1211][模型不存在]",
+            500,
+        )
+        .expect("worker role stderr");
+        assert_eq!(worker_error.kind, VisibleAgentOutputKind::Stderr);
+        assert!(worker_error.display.contains("模型不存在"));
 
         let tool_call =
             visible_agent_output("codex local_shell_call: tool shell: cargo test --all", 500)

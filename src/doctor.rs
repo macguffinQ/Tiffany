@@ -1270,6 +1270,8 @@ fn check_homebrew(builder: &mut DoctorReportBuilder) {
         )),
         Err(err) => builder.hint(format!("homebrew package status unavailable: {err}")),
     }
+
+    check_homebrew_binary_visibility(builder);
 }
 
 fn parse_homebrew_tiffany_version(output: &str) -> Option<&str> {
@@ -1277,6 +1279,77 @@ fn parse_homebrew_tiffany_version(output: &str) -> Option<&str> {
         .lines()
         .find_map(|line| line.trim().strip_prefix("tiffany-loop "))
         .and_then(|rest| rest.split_whitespace().next())
+}
+
+fn check_homebrew_binary_visibility(builder: &mut DoctorReportBuilder) {
+    let bin_prefix = match command_summary("brew", &["--prefix", "tiffany-loop"]) {
+        Ok(summary) if summary.success && !summary.stdout.trim().is_empty() => {
+            Some(PathBuf::from(summary.stdout.trim()))
+        }
+        _ => None,
+    };
+    let Some(prefix) = bin_prefix else {
+        return;
+    };
+    let installed_bin = prefix.join("bin").join("tiffany-loop");
+    let installed_orchestrator = prefix.join("bin").join("orchestrator");
+    if installed_bin.exists() {
+        builder.ok(format!(
+            "homebrew binary installed: {}",
+            installed_bin.display()
+        ));
+    } else {
+        builder.warn(format!(
+            "homebrew binary missing from package prefix: {}",
+            installed_bin.display()
+        ));
+        builder.hint("reinstall with `brew reinstall tiffany-loop`");
+    }
+    if installed_orchestrator.exists() {
+        builder.ok(format!(
+            "homebrew runtime installed: {}",
+            installed_orchestrator.display()
+        ));
+    } else {
+        builder.warn(format!(
+            "homebrew runtime missing from package prefix: {}",
+            installed_orchestrator.display()
+        ));
+        builder.hint("reinstall with `brew reinstall tiffany-loop`");
+    }
+
+    match which::which("tiffany-loop") {
+        Ok(path) => builder.ok(format!("PATH command tiffany-loop: {}", path.display())),
+        Err(_) => {
+            builder.warn("PATH command tiffany-loop not found");
+            if let Some(brew_prefix) = homebrew_global_prefix() {
+                builder.hint(format!(
+                    "add Homebrew to PATH, for example `eval \"$({}/bin/brew shellenv)\"`",
+                    brew_prefix.display()
+                ));
+            } else {
+                builder.hint("add Homebrew's bin directory to PATH, then reopen the terminal");
+            }
+        }
+    }
+    match which::which("orchestrator") {
+        Ok(path) => builder.ok(format!("PATH command orchestrator: {}", path.display())),
+        Err(_) => builder.warn("PATH command orchestrator not found"),
+    }
+}
+
+fn homebrew_global_prefix() -> Option<PathBuf> {
+    command_summary("brew", &["--prefix"])
+        .ok()
+        .and_then(|summary| homebrew_prefix_from_summary(&summary))
+}
+
+fn homebrew_prefix_from_summary(summary: &CommandSummary) -> Option<PathBuf> {
+    if !summary.success {
+        return None;
+    }
+    let prefix = summary.stdout.trim();
+    (!prefix.is_empty()).then(|| PathBuf::from(prefix))
 }
 
 fn check_xcode(builder: &mut DoctorReportBuilder) {
@@ -1651,6 +1724,32 @@ mod tests {
             Some("0.1.7")
         );
         assert_eq!(parse_homebrew_tiffany_version("other 1.0\n"), None);
+    }
+
+    #[test]
+    fn homebrew_prefix_parses_brew_output_shape() {
+        let summary = CommandSummary {
+            success: true,
+            code: Some(0),
+            stdout: "/opt/homebrew\n".into(),
+            stderr: String::new(),
+            first_line: "/opt/homebrew".into(),
+        };
+
+        assert_eq!(
+            homebrew_prefix_from_summary(&summary),
+            Some(PathBuf::from("/opt/homebrew"))
+        );
+        assert_eq!(
+            homebrew_prefix_from_summary(&CommandSummary {
+                success: false,
+                code: Some(1),
+                stdout: "/opt/homebrew\n".into(),
+                stderr: "error".into(),
+                first_line: "error".into(),
+            }),
+            None
+        );
     }
 
     #[test]

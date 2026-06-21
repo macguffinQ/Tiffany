@@ -37,6 +37,22 @@ Inside the TUI, use `/provider` and `/role`.
 
 Note: if `macguffinQ/Tiffany` is private, public Homebrew installs cannot download the release archive or source archive. Maintainers with repository access can still use the formula for validation.
 
+If Homebrew reports that `tiffany-loop` is installed but the shell cannot find
+the command, first check the package prefix and PATH:
+
+```bash
+brew --prefix tiffany-loop
+brew list --versions tiffany-loop
+eval "$(brew shellenv)"
+tiffany-loop doctor
+```
+
+`orchestrator doctor` checks the Homebrew tap, package version, installed binary
+paths, and whether both `tiffany-loop` and `orchestrator` resolve through
+`PATH`. If the prefix is present but commands are missing, use
+`brew reinstall tiffany-loop`; if the binaries exist but are not found, add
+Homebrew's `bin` directory to the shell startup file.
+
 ## Automatic tap updates
 
 The release workflow includes a `homebrew` job. When `HOMEBREW_TAP_TOKEN` is

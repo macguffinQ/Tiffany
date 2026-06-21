@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.20] - 2026-06-22
+
+### Added
+
+- Added Tiffany TUI worker-output type labels (`final`, `tool call`,
+  `tool result`, `stderr`, `alert`) so live runs show what the worker is doing
+  without exposing raw adapter JSON.
+- Added inline TUI repair hints for worker model/auth/permission/runtime/network
+  failures, including `[1211]` / `模型不存在` model mapping errors.
+- Added Homebrew install visibility diagnostics to `orchestrator doctor`,
+  checking the installed package prefix and whether `tiffany-loop` /
+  `orchestrator` are visible on `PATH`.
+
+### Fixed
+
+- Made top-level `tiffany-loop setup`, `tiffany-loop doctor`,
+  `tiffany-loop config ...`, and other passthrough commands validate the
+  `orchestrator` runtime before spawning, producing the same actionable
+  missing-runtime message as TUI launches.
+
 ## [0.1.19] - 2026-06-21
 
 ### Added
