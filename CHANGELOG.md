@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.18] - 2026-06-21
+
+### Fixed
+
+- Aligned the vendored Tiffany TUI crate version with the Tiffany release
+  version and accepted Tiffany-style `vX.Y.Z` GitHub release tags in the update
+  checker.
+
 ## [0.1.17] - 2026-06-21
 
 ### Fixed
