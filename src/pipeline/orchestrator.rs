@@ -11,6 +11,7 @@ use crate::roles::critic::Critic;
 use crate::roles::planner::Planner;
 use crate::roles::reviewer::Reviewer;
 use crate::roles::router::CapabilityRouter;
+use crate::task_policy::{apply_conversation_policy, should_skip_review_for_task};
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -68,6 +69,10 @@ pub enum RunProgress {
     },
     Reviewing {
         task_id: Uuid,
+    },
+    ReviewSkipped {
+        task_id: Uuid,
+        reason: String,
     },
     ReviewResult {
         task_id: Uuid,
@@ -210,6 +215,7 @@ impl Orchestrator {
             .plan_with_progress(top_task, Some(tx.clone()))
             .await
             .context("planning task")?;
+        apply_conversation_policy(top_task, &mut plan);
         apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
         attach_parent_session(orchestration_session_id, &mut plan.sub_tasks);
         tracing::info!(
@@ -279,6 +285,7 @@ impl Orchestrator {
                         break;
                     }
                 };
+                apply_conversation_policy(top_task, &mut plan);
                 apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
                 attach_parent_session(orchestration_session_id, &mut plan.sub_tasks);
                 tracing::info!(
@@ -311,6 +318,17 @@ impl Orchestrator {
         if self.enable_reviewer {
             for t in &completed {
                 if t.status != TaskStatus::Completed {
+                    continue;
+                }
+                if should_skip_review_for_task(top_task, t) {
+                    let _ = tx.send(RunProgress::ReviewSkipped {
+                        task_id: t.id,
+                        reason: "conversational answer".to_string(),
+                    });
+                    tracing::info!(
+                        "→ Review skipped for task {}: conversational answer",
+                        &t.id.to_string()[..8]
+                    );
                     continue;
                 }
                 let _ = tx.send(RunProgress::Reviewing { task_id: t.id });
@@ -728,6 +746,16 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "task_id": task_id,
             }),
         ),
+        RunProgress::ReviewSkipped { task_id, reason } => (
+            "reviewer",
+            *task_id,
+            serde_json::json!({
+                "status": "skipped",
+                "message": format!("review skipped - {reason}"),
+                "task_id": task_id,
+                "reason": reason,
+            }),
+        ),
         RunProgress::ReviewResult {
             task_id,
             approved,
@@ -957,6 +985,15 @@ mod tests {
         }
     }
 
+    struct FailingReviewer;
+
+    #[async_trait::async_trait]
+    impl Reviewer for FailingReviewer {
+        async fn review(&self, _task: &Task, _ctx: &ReviewContext) -> Result<ReviewOutput> {
+            anyhow::bail!("reviewer should be skipped for conversational tasks")
+        }
+    }
+
     struct CompletingAdapter;
 
     #[async_trait::async_trait]
@@ -1179,6 +1216,62 @@ mod tests {
         assert!(log.contains("\"type\":\"critic\""));
         assert!(log.contains("\"type\":\"worker\""));
         assert!(log.contains("\"type\":\"orchestrator\""));
+    }
+
+    #[tokio::test]
+    async fn run_with_progress_skips_reviewer_for_conversation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(StaticPlanner),
+            Arc::new(ApprovingCritic),
+            Arc::new(FailingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            true,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let completed = orch
+            .run_with_progress(Task::new("你好"), tx)
+            .await
+            .expect("conversation should complete without reviewer");
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].tags, vec!["chat".to_string()]);
+        assert!(completed[0].prompt.contains("User message:\n你好"));
+
+        let mut saw_review_skipped = false;
+        let mut saw_review_result = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::ReviewSkipped { reason, .. } => {
+                    saw_review_skipped = reason == "conversational answer";
+                }
+                RunProgress::ReviewResult { .. } => saw_review_result = true,
+                _ => {}
+            }
+        }
+        assert!(saw_review_skipped, "expected visible review skipped event");
+        assert!(!saw_review_result, "reviewer should not produce a result");
     }
 
     #[tokio::test]

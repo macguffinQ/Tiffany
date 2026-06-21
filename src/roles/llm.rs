@@ -25,7 +25,7 @@ const PLANNER_SYSTEM: &str = r#"Decompose the task into 1-5 sub-tasks. Output JS
 
 const CRITIC_SYSTEM: &str = r#"Critique the plan. Output JSON only, no markdown, no prose. Fields: approved (bool), issues (array of strings, empty if approved), suggestions (array of strings). Be strict. Approve only if clear, complete, decomposable, likely to succeed."#;
 
-const REVIEWER_SYSTEM: &str = r#"Review the worker's output against the user's intent. Output JSON only, no markdown, no prose. Fields: approved (bool), issues (array of strings). Approve useful conversational answers, greetings, explanations, or diagnostics even when there is no git diff. Reject only if the output is wrong, incomplete, unsafe, or clearly ignores the task."#;
+const REVIEWER_SYSTEM: &str = r#"Review the worker's output against the user's intent. Output JSON only, no markdown, no prose. Fields: approved (bool), issues (array of strings). First classify the task. If it is conversational, explanatory, diagnostic, or a greeting, approve a useful textual answer even when there is no git diff and no code was changed. For implementation tasks, reject if the output is wrong, incomplete, unsafe, untested when tests are expected, or clearly ignores the task."#;
 
 // ── JSON extraction (tolerant of prose wrapping) ───────────
 

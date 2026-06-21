@@ -91,6 +91,9 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
             task_id,
             None,
         ))),
+        RunProgress::ReviewSkipped { task_id, reason } => Some(success(
+            format_review_lifecycle_line("skipped", task_id, Some(reason.clone())),
+        )),
         RunProgress::ReviewResult {
             task_id,
             approved,
@@ -210,6 +213,14 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
                 format!("review: checking worker output · {id}"),
                 "checking output",
                 Some(format!("● review  checking worker output · {id}")),
+            ))
+        }
+        RunProgress::ReviewSkipped { task_id, reason } => {
+            let id = short_task_id(task_id);
+            Some(status(
+                format!("review: skipped · {id}"),
+                reason.clone(),
+                Some(format!("✓ review  skipped · {id} · {reason}")),
             ))
         }
         RunProgress::ReviewResult {
@@ -391,5 +402,16 @@ mod tests {
         assert_eq!(review.stage, "review: needs fixes · 00000000 · 2 issue(s)");
         assert_eq!(review.detail, "");
         assert_eq!(review.assistant_update, None);
+
+        let skipped = progress_history_view(&RunProgress::ReviewSkipped {
+            task_id,
+            reason: "conversational answer".into(),
+        })
+        .expect("review skipped view");
+        assert_eq!(skipped.icon, "✓");
+        assert_eq!(
+            skipped.line,
+            "review  skipped · 00000000 · conversational answer"
+        );
     }
 }

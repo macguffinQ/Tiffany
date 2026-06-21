@@ -7,6 +7,7 @@ use crate::core::session_store::{SessionReader, SessionStore};
 use crate::core::types::{Event, Session, Task};
 use crate::core::worker::{format_context, WorkerAdapter};
 use crate::storage::worktree::WorktreePool;
+use crate::task_policy::is_conversational_task;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -84,14 +85,22 @@ impl WorkerAdapter for ClaudeCodeAdapter {
         let worktree = self.worktree_pool.acquire(task.id, repo_root.as_deref())?;
 
         // Build context from parent sessions
-        let history = format_context(self.session_store.as_ref(), &task.parent_session_ids)
-            .await
-            .unwrap_or_default();
+        let conversational = is_conversational_task(task);
+        let history = if conversational {
+            String::new()
+        } else {
+            format_context(self.session_store.as_ref(), &task.parent_session_ids)
+                .await
+                .unwrap_or_default()
+        };
 
         // Load prior CC sessions from ~/.claude/projects/<slug>/sessions/*.jsonl
-        let cc_sessions = crate::cc_session_import::load_cc_sessions(&worktree);
-        let cc_context =
-            crate::cc_session_import::format_cc_sessions_for_context(&cc_sessions, 8000, 5, 20);
+        let cc_context = if conversational {
+            String::new()
+        } else {
+            let cc_sessions = crate::cc_session_import::load_cc_sessions(&worktree);
+            crate::cc_session_import::format_cc_sessions_for_context(&cc_sessions, 8000, 5, 20)
+        };
 
         // Load orchestrator's own AGENTS.md (the platform's personality file)
         let agent_md = crate::agent_md::AgentMd::load();
@@ -114,6 +123,13 @@ impl WorkerAdapter for ClaudeCodeAdapter {
                 agent_md.content
             );
             parts.push(Box::leak(s.into_boxed_str()));
+        }
+        if conversational {
+            parts.push(
+                "For this turn, answer only the user's conversational question. Do not inspect \
+                 or mention repository state, git status, files, branches, tools, or local \
+                 changes unless the user explicitly asks for that.",
+            );
         }
         let cc_md_prompt = self.cc_config.build_system_prompt(&history);
         if !cc_md_prompt.is_empty() {

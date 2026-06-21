@@ -2010,6 +2010,10 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
         RunProgress::Reviewing { task_id } => {
             Some(format!("Reviewing task {}.", short_uuid(task_id)))
         }
+        RunProgress::ReviewSkipped { task_id, reason } => Some(format!(
+            "Review skipped for task {}: {reason}.",
+            short_uuid(task_id)
+        )),
         RunProgress::ReviewResult {
             task_id,
             approved,

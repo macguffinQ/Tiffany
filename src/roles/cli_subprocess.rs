@@ -541,8 +541,10 @@ const CRITIC_SYSTEM: &str =
 
 const REVIEWER_SYSTEM: &str =
     "You are a reviewer evaluating a worker's output. \
-     Approve only if the work is correct, complete, and meets the original prompt's intent. \
-     Look for: compilation/syntax errors, missing test coverage, incomplete implementations, logic errors. \
+     First classify the task. If it is conversational, explanatory, diagnostic, or a greeting, \
+     approve a useful textual answer even when there is no git diff and no code was changed. \
+     For implementation tasks, approve only if the work is correct, complete, and meets the original prompt's intent. \
+     For implementation tasks, look for: compilation/syntax errors, missing test coverage, incomplete implementations, logic errors. \
      Output a JSON object only — no prose, no markdown.";
 
 const TIMEOUT_SECS: u64 = 180; // CLI startup + LLM call. 3 min is enough for

@@ -277,6 +277,24 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 count: None,
                 duration_ms: None,
             },
+            RunProgress::ReviewSkipped { task_id, reason } => Self {
+                role: "reviewer",
+                status: "skipped",
+                message: format!("review skipped - {reason}"),
+                task_id: Some(task_id.to_string()),
+                agent: None,
+                worker_role: None,
+                runtime: None,
+                cc_agent: None,
+                model: None,
+                provider: None,
+                task_prompt: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+                duration_ms: None,
+            },
             RunProgress::ReviewResult {
                 task_id,
                 approved,
@@ -481,6 +499,11 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
             "● reviewer checking worker output · {}",
             short_id(task_id)
         )),
+        RunProgress::ReviewSkipped { task_id, reason } => Some(format!(
+            "✓ reviewer skipped · {} · {}",
+            short_id(task_id),
+            reason
+        )),
         RunProgress::ReviewResult {
             task_id,
             approved,
@@ -586,6 +609,11 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::Reviewing { task_id } => Some(format!(
             "review  checking worker output · {}",
             short_id(task_id)
+        )),
+        RunProgress::ReviewSkipped { task_id, reason } => Some(format!(
+            "review  skipped · {} · {}",
+            short_id(task_id),
+            reason
         )),
         RunProgress::ReviewResult {
             task_id,
@@ -804,5 +832,15 @@ mod tests {
         assert!(output.contains("critic  needs changes: 1 issue(s)"));
         assert!(output.contains("missing test"));
         assert!(!output.contains('{'));
+
+        let skipped = format_compact_progress_event(&RunProgress::ReviewSkipped {
+            task_id,
+            reason: "conversational answer".into(),
+        })
+        .expect("review skipped line");
+        assert_eq!(
+            skipped,
+            "review  skipped · 12345678 · conversational answer"
+        );
     }
 }

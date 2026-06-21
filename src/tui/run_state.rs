@@ -187,7 +187,8 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
         | RunProgress::Replanning { .. }
         | RunProgress::Executing { .. }
         | RunProgress::WorkerStarted { .. }
-        | RunProgress::Reviewing { .. } => {}
+        | RunProgress::Reviewing { .. }
+        | RunProgress::ReviewSkipped { .. } => {}
         RunProgress::WorkerOutput { content, .. } => {
             remember_worker_output(input, &content);
             capture_worker_output_as_chat(input, &content);
