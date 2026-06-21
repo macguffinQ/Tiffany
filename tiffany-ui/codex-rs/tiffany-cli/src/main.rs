@@ -273,7 +273,9 @@ async fn run_tiffany_orchestrator(
 
     let mut interactive = base_tui_cli();
     interactive.no_alt_screen = true;
-    interactive.tiffany_orchestrator = Some(command.native_launch());
+    let launch = command.native_launch();
+    ensure_orchestrator_launch_ready(&launch.bin)?;
+    interactive.tiffany_orchestrator = Some(launch);
 
     let exit_info = run_main(
         interactive,
@@ -362,6 +364,92 @@ fn resolve_bin(bin: &str) -> String {
         env::var_os("TIFFANY_ORCHESTRATOR_BIN"),
         env::current_exe().ok(),
     )
+}
+
+fn ensure_orchestrator_launch_ready(bin: &str) -> anyhow::Result<()> {
+    let resolved = resolve_executable_path(bin);
+    if resolved.is_some() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "orchestrator binary not found: `{}`\n\n\
+         Tiffany Loop needs the `orchestrator` runtime to execute planner/critic/worker/reviewer flows.\n\
+         Fix one of these:\n\
+           - install `orchestrator` next to `tiffany-loop`\n\
+           - run `tiffany-loop orchestrator --bin /path/to/orchestrator`\n\
+           - set `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator`\n\
+           - from source, run `./scripts/tiffany-dev`",
+        display_bin(bin)
+    )
+}
+
+fn resolve_executable_path(bin: &str) -> Option<PathBuf> {
+    let bin = bin.trim();
+    if bin.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(bin);
+    if path.components().count() > 1 || path.is_absolute() {
+        return is_launchable_file(&path).then_some(path);
+    }
+    find_in_path(bin)
+}
+
+fn display_bin(bin: &str) -> &str {
+    let bin = bin.trim();
+    if bin.is_empty() { "orchestrator" } else { bin }
+}
+
+fn find_in_path(bin: &str) -> Option<PathBuf> {
+    find_in_path_with(bin, None)
+}
+
+fn find_in_path_with(bin: &str, extra_first_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(dir) = extra_first_dir {
+        if let Some(found) = executable_candidates(dir, bin)
+            .into_iter()
+            .find(|path| is_launchable_file(path))
+        {
+            return Some(found);
+        }
+    }
+
+    let paths = env::var_os("PATH")?;
+    env::split_paths(&paths)
+        .flat_map(|dir| executable_candidates(&dir, bin))
+        .find(|path| is_launchable_file(path))
+}
+
+fn executable_candidates(dir: &Path, bin: &str) -> Vec<PathBuf> {
+    if cfg!(windows) && Path::new(bin).extension().is_none() {
+        let pathext = env::var_os("PATHEXT")
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+        pathext
+            .split(';')
+            .filter(|ext| !ext.trim().is_empty())
+            .map(|ext| dir.join(format!("{bin}{ext}")))
+            .collect()
+    } else {
+        vec![dir.join(bin)]
+    }
+}
+
+#[cfg(unix)]
+fn is_launchable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.is_file()
+        && path
+            .metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_launchable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 fn resolve_bin_from(
@@ -662,5 +750,70 @@ mod tests {
     #[test]
     fn resolve_non_default_bin_keeps_user_value() {
         assert_eq!(resolve_bin_from("/tmp/orch", None, None), "/tmp/orch");
+    }
+
+    #[test]
+    fn launch_readiness_rejects_missing_path() {
+        let missing = std::env::temp_dir().join(format!(
+            "definitely-missing-orchestrator-{}",
+            std::process::id()
+        ));
+
+        let err = ensure_orchestrator_launch_ready(&missing.to_string_lossy()).unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("orchestrator binary not found"));
+        assert!(message.contains("TIFFANY_ORCHESTRATOR_BIN"));
+        assert!(message.contains("./scripts/tiffany-dev"));
+    }
+
+    #[test]
+    fn launch_readiness_accepts_existing_path() -> std::io::Result<()> {
+        let temp = std::env::temp_dir().join(format!(
+            "tiffany-loop-ready-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp)?;
+        let orchestrator = temp.join(exe_name("orchestrator"));
+        std::fs::write(&orchestrator, "")?;
+        make_executable(&orchestrator)?;
+
+        assert!(ensure_orchestrator_launch_ready(&orchestrator.to_string_lossy()).is_ok());
+
+        let _ = std::fs::remove_dir_all(temp);
+        Ok(())
+    }
+
+    #[test]
+    fn path_lookup_accepts_launchable_binary() -> std::io::Result<()> {
+        let temp = std::env::temp_dir().join(format!(
+            "tiffany-loop-path-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp)?;
+        let orchestrator = temp.join(exe_name("orchestrator"));
+        std::fs::write(&orchestrator, "")?;
+        make_executable(&orchestrator)?;
+
+        assert_eq!(find_in_path_with("orchestrator", Some(temp.as_path())), Some(orchestrator));
+
+        let _ = std::fs::remove_dir_all(temp);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = std::fs::metadata(path)?.permissions();
+        perms.set_mode(perms.mode() | 0o700);
+        std::fs::set_permissions(path, perms)
+    }
+
+    #[cfg(not(unix))]
+    fn make_executable(_path: &Path) -> std::io::Result<()> {
+        Ok(())
     }
 }
