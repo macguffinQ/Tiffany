@@ -349,8 +349,13 @@ pub fn run(config_path: &Path) -> DoctorReport {
     if let Some(cfg) = cfg.as_ref() {
         check_paths(&mut builder, cfg);
         check_runtimes(&mut builder, cfg);
-        check_providers(&mut builder, cfg, raw_hints.as_ref().ok());
-        check_models(&mut builder, cfg);
+        check_providers(
+            &mut builder,
+            cfg,
+            raw_hints.as_ref().ok(),
+            ProviderIssuePolicy::RoleLinkedOnly,
+        );
+        check_models(&mut builder, cfg, ModelIssuePolicy::RoleLinkedOnly);
         check_roles(&mut builder, cfg);
     } else if let Err(err) = raw_hints {
         builder.warn(format!("raw config hints unavailable: {err:#}"));
@@ -627,10 +632,17 @@ fn check_runtimes(builder: &mut DoctorReportBuilder, cfg: &Config) {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderIssuePolicy {
+    All,
+    RoleLinkedOnly,
+}
+
 fn check_providers(
     builder: &mut DoctorReportBuilder,
     cfg: &Config,
     raw_hints: Option<&RawConfigHints>,
+    issue_policy: ProviderIssuePolicy,
 ) {
     if cfg.providers.is_empty() {
         builder.warn("no providers configured");
@@ -638,6 +650,7 @@ fn check_providers(
     }
 
     builder.header("Providers");
+    let role_linked_providers = role_linked_providers(cfg);
     let mut providers = cfg.providers.iter().collect::<Vec<_>>();
     providers.sort_by(|a, b| a.0.cmp(b.0));
     for (name, provider) in providers {
@@ -667,7 +680,12 @@ fn check_providers(
         if let Some(raw_secret) = raw_hints.and_then(|hints| hints.provider_api_keys.get(name)) {
             match raw_secret {
                 RawSecret::EnvRefs(refs) => {
-                    check_provider_env_refs(builder, name, refs);
+                    check_provider_env_refs(
+                        builder,
+                        name,
+                        refs,
+                        provider_required(name, &role_linked_providers, issue_policy),
+                    );
                     continue;
                 }
                 RawSecret::Literal => {
@@ -691,13 +709,33 @@ fn check_providers(
         match provider.api_key.as_deref().map(str::trim) {
             Some(key) if !key.is_empty() => builder.ok(format!("{name}: api key present")),
             _ => {
-                builder.fail(format!("{name}: api key missing"));
+                if provider_required(name, &role_linked_providers, issue_policy) {
+                    builder.fail(format!("{name}: api key missing"));
+                } else {
+                    builder.warn(format!("{name}: api key missing (unused by current roles)"));
+                }
                 builder.hint(format!(
                     "set it with `/provider`, `orchestrator config provider setup {name}`, or an env var reference"
                 ));
             }
         }
     }
+}
+
+fn role_linked_providers(cfg: &Config) -> HashSet<&str> {
+    cfg.roles
+        .values()
+        .filter_map(|role| cfg.models.iter().find(|model| model.id == role.model))
+        .map(|model| model.provider.as_str())
+        .collect()
+}
+
+fn provider_required(
+    provider: &str,
+    role_linked_providers: &HashSet<&str>,
+    issue_policy: ProviderIssuePolicy,
+) -> bool {
+    issue_policy == ProviderIssuePolicy::All || role_linked_providers.contains(provider)
 }
 
 fn provider_endpoint(provider: &config::ProviderConfig) -> Option<&str> {
@@ -727,7 +765,12 @@ fn openai_compatible_provider_needs_endpoint(
         && provider_endpoint(provider).is_none()
 }
 
-fn check_provider_env_refs(builder: &mut DoctorReportBuilder, provider: &str, refs: &[String]) {
+fn check_provider_env_refs(
+    builder: &mut DoctorReportBuilder,
+    provider: &str,
+    refs: &[String],
+    required: bool,
+) {
     let missing = refs
         .iter()
         .filter(|name| std::env::var(name.as_str()).map_or(true, |value| value.trim().is_empty()))
@@ -736,10 +779,12 @@ fn check_provider_env_refs(builder: &mut DoctorReportBuilder, provider: &str, re
     if missing.is_empty() {
         builder.ok(format!("{provider}: api key env {} set", refs.join(", ")));
     } else {
-        builder.fail(format!(
-            "{provider}: api key env {} unset",
-            missing.join(", ")
-        ));
+        let message = format!("{provider}: api key env {} unset", missing.join(", "));
+        if required {
+            builder.fail(message);
+        } else {
+            builder.warn(format!("{message} (unused by current roles)"));
+        }
         let exports = missing
             .iter()
             .map(|name| format!("export {name}=..."))
@@ -749,7 +794,13 @@ fn check_provider_env_refs(builder: &mut DoctorReportBuilder, provider: &str, re
     }
 }
 
-fn check_models(builder: &mut DoctorReportBuilder, cfg: &Config) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelIssuePolicy {
+    All,
+    RoleLinkedOnly,
+}
+
+fn check_models(builder: &mut DoctorReportBuilder, cfg: &Config, issue_policy: ModelIssuePolicy) {
     builder.header("Models");
     if cfg.models.is_empty() {
         builder.fail("no models configured");
@@ -757,6 +808,11 @@ fn check_models(builder: &mut DoctorReportBuilder, cfg: &Config) {
         return;
     }
 
+    let role_linked_models = cfg
+        .roles
+        .values()
+        .map(|role| role.model.as_str())
+        .collect::<HashSet<_>>();
     let mut seen = HashSet::new();
     let mut models = cfg.models.iter().collect::<Vec<_>>();
     models.sort_by(|a, b| a.id.cmp(&b.id));
@@ -771,12 +827,19 @@ fn check_models(builder: &mut DoctorReportBuilder, cfg: &Config) {
                 model.id, model.name, model.provider
             ));
         } else {
-            builder.fail(format!(
+            let message = format!(
                 "{}: provider `{}` is not configured",
                 model.id, model.provider
-            ));
+            );
+            if issue_policy == ModelIssuePolicy::All
+                || role_linked_models.contains(model.id.as_str())
+            {
+                builder.fail(message);
+            } else {
+                builder.warn(message);
+            }
             builder.hint(format!(
-                "configure provider `{}` with `/provider` or `orchestrator config provider setup {}`",
+                "configure provider `{}` with `/provider` or `orchestrator config provider setup {}` before assigning this model to a role",
                 model.provider, model.provider
             ));
         }
@@ -842,21 +905,25 @@ fn check_role_binding(
     let runtime_ok = cfg.runtime_config(&role.runtime).is_some();
     if model_ok && runtime_ok {
         let model = model_cfg.expect("checked above");
-        let provider_status = if cfg.providers.contains_key(&model.provider) {
-            model.provider.clone()
-        } else {
-            format!("{} (missing)", model.provider)
-        };
         let resolved_runtime = resolved_runtime_label(cfg, &role.runtime);
-        builder.ok(format!(
+        let message = format!(
             "{role_name}: model={} -> {}/{} -> runtime={}{} teams={}",
             role.model,
-            provider_status,
+            model.provider,
             model.name,
             role.runtime,
             resolved_runtime,
             on_off(role.agent_teams)
-        ));
+        );
+        if !cfg.providers.contains_key(&model.provider) {
+            builder.fail(format!("{message} (provider missing)"));
+            builder.hint(format!(
+                "configure provider `{}` with `/provider` or `orchestrator config provider setup {}`",
+                model.provider, model.provider
+            ));
+            return;
+        }
+        builder.ok(message);
         return;
     }
     if !model_ok {
@@ -1842,7 +1909,7 @@ mod tests {
 
         let mut builder = DoctorReportBuilder::default();
         check_runtimes(&mut builder, &cfg);
-        check_providers(&mut builder, &cfg, None);
+        check_providers(&mut builder, &cfg, None, ProviderIssuePolicy::All);
         let report = builder.finish();
         let rendered = report.render_text();
 
@@ -1874,7 +1941,7 @@ mod tests {
         );
 
         let mut builder = DoctorReportBuilder::default();
-        check_providers(&mut builder, &cfg, Some(&hints));
+        check_providers(&mut builder, &cfg, Some(&hints), ProviderIssuePolicy::All);
         let report = builder.finish();
         let rendered = report.render_text();
 
@@ -1884,6 +1951,61 @@ mod tests {
             .contains("Provider auth missing for 1 provider(s): minimax=TIFFANY_TEST_MISSING_KEY"));
         assert!(rendered.contains("orchestrator config provider setup <provider> --env <ENV_NAME>"));
         assert_eq!(report.issue_count, 1);
+    }
+
+    #[test]
+    fn provider_check_warns_for_unused_missing_auth_in_default_doctor_policy() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "google".into(),
+            ProviderConfig {
+                kind: "google".into(),
+                api_key: None,
+                base_url: None,
+            },
+        );
+        providers.insert(
+            "minimax".into(),
+            ProviderConfig {
+                kind: "openai".into(),
+                api_key: Some("set".into()),
+                base_url: Some("https://api.minimaxi.com/v1".into()),
+            },
+        );
+        let mut roles = HashMap::new();
+        roles.insert(
+            "worker-cc".into(),
+            RoleConfig {
+                model: "minimax-m3".into(),
+                runtime: "claude-code".into(),
+                agent_teams: true,
+            },
+        );
+        let cfg = Config {
+            providers,
+            models: vec![ModelConfig {
+                id: "minimax-m3".into(),
+                provider: "minimax".into(),
+                name: "MiniMax-M3".into(),
+            }],
+            roles,
+            behavior: BehaviorConfig::default(),
+            ..Config::default()
+        };
+
+        let mut builder = DoctorReportBuilder::default();
+        check_providers(
+            &mut builder,
+            &cfg,
+            None,
+            ProviderIssuePolicy::RoleLinkedOnly,
+        );
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 0);
+        assert!(rendered.contains("⚠ google: api key missing (unused by current roles)"));
+        assert!(rendered.contains("✓ minimax: api key present"));
     }
 
     #[test]
@@ -1904,7 +2026,7 @@ mod tests {
         };
 
         let mut builder = DoctorReportBuilder::default();
-        check_providers(&mut builder, &cfg, None);
+        check_providers(&mut builder, &cfg, None, ProviderIssuePolicy::All);
         let report = builder.finish();
         let rendered = report.render_text();
 
@@ -1936,13 +2058,109 @@ mod tests {
         };
 
         let mut builder = DoctorReportBuilder::default();
-        check_models(&mut builder, &cfg);
+        check_models(&mut builder, &cfg, ModelIssuePolicy::All);
         let report = builder.finish();
         let rendered = report.render_text();
 
         assert!(rendered.contains("glm51: provider `openai-compatible` is not configured"));
         assert!(rendered.contains("model `glm51` is defined more than once"));
         assert_eq!(report.issue_count, 2);
+    }
+
+    #[test]
+    fn model_check_warns_for_unused_missing_provider_in_default_doctor_policy() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "minimax".into(),
+            ProviderConfig {
+                kind: "openai".into(),
+                api_key: Some("set".into()),
+                base_url: Some("https://api.minimaxi.com/v1".into()),
+            },
+        );
+        let mut roles = HashMap::new();
+        roles.insert(
+            "worker-cc".into(),
+            RoleConfig {
+                model: "minimax-m3".into(),
+                runtime: "claude-code".into(),
+                agent_teams: true,
+            },
+        );
+        let cfg = Config {
+            providers,
+            models: vec![
+                ModelConfig {
+                    id: "minimax-m3".into(),
+                    provider: "minimax".into(),
+                    name: "MiniMax-M3".into(),
+                },
+                ModelConfig {
+                    id: "gpt4o".into(),
+                    provider: "openai".into(),
+                    name: "gpt-4o".into(),
+                },
+            ],
+            roles,
+            behavior: BehaviorConfig::default(),
+            ..Config::default()
+        };
+
+        let mut builder = DoctorReportBuilder::default();
+        check_models(&mut builder, &cfg, ModelIssuePolicy::RoleLinkedOnly);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 0);
+        assert!(rendered.contains("✓ minimax-m3: api_model=MiniMax-M3 provider=minimax"));
+        assert!(rendered.contains("⚠ gpt4o: provider `openai` is not configured"));
+    }
+
+    #[test]
+    fn role_check_fails_when_bound_model_provider_is_missing() {
+        let mut runtimes = HashMap::new();
+        runtimes.insert(
+            "codex".into(),
+            RuntimeConfig {
+                kind: "subprocess".into(),
+                binary: Some("codex".into()),
+                supports_mcp: false,
+                supports_agent_teams: false,
+            },
+        );
+        let mut roles = HashMap::new();
+        roles.insert(
+            "worker-codex".into(),
+            RoleConfig {
+                model: "gpt4o".into(),
+                runtime: "codex".into(),
+                agent_teams: false,
+            },
+        );
+        let cfg = Config {
+            runtimes,
+            models: vec![ModelConfig {
+                id: "gpt4o".into(),
+                provider: "openai".into(),
+                name: "gpt-4o".into(),
+            }],
+            roles,
+            behavior: BehaviorConfig::default(),
+            ..Config::default()
+        };
+
+        let mut builder = DoctorReportBuilder::default();
+        check_roles(&mut builder, &cfg);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 4);
+        assert!(rendered.contains(
+            "worker-codex: model=gpt4o -> openai/gpt-4o -> runtime=codex teams=off (provider missing)"
+        ));
+        assert!(rendered.contains(
+            "configure provider `openai` with `/provider` or `orchestrator config provider setup openai`"
+        ));
     }
 
     #[test]
@@ -1989,7 +2207,7 @@ mod tests {
         };
 
         let mut builder = DoctorReportBuilder::default();
-        check_models(&mut builder, &cfg);
+        check_models(&mut builder, &cfg, ModelIssuePolicy::All);
         check_roles(&mut builder, &cfg);
         let report = builder.finish();
         let rendered = report.render_text();
