@@ -743,6 +743,7 @@ fn reviewer_event_summary(payload: &Value) -> String {
     let id = payload_short_id(payload, "task_id");
     let action = match payload_str(payload, "status") {
         Some("running") => "checking worker output".to_string(),
+        Some("skipped") => "skipped".to_string(),
         Some("done") if payload_bool(payload, "approved") == Some(true) => "passed".to_string(),
         Some("warning") if payload_bool(payload, "approved") == Some(false) => {
             "needs fixes".to_string()
@@ -756,6 +757,10 @@ fn reviewer_event_summary(payload: &Value) -> String {
     if payload_str(payload, "status") == Some("warning") {
         if let Some(issues) = payload_issue_count(payload, "issues") {
             parts.push(format!("{issues} issue(s)"));
+        }
+    } else if payload_str(payload, "status") == Some("skipped") {
+        if let Some(reason) = payload_str(payload, "reason") {
+            parts.push(reason.to_string());
         }
     }
     parts.join(" · ")
@@ -1147,6 +1152,20 @@ mod tests {
         let line = format_session_event(&reviewer);
         assert!(line.contains("review needs fixes · 12345678 · 2 issue(s)"));
         assert!(!line.contains("review needs fixes -"));
+
+        let skipped = Event {
+            kind: "reviewer".into(),
+            payload: serde_json::json!({
+                "status": "skipped",
+                "message": "review skipped - conversational answer",
+                "task_id": task_id,
+                "reason": "conversational answer"
+            }),
+            ..reviewer
+        };
+        let line = format_session_event(&skipped);
+        assert!(line.contains("review skipped · 12345678 · conversational answer"));
+        assert!(!line.contains("review skipped -"));
     }
 
     #[test]
