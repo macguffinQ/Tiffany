@@ -28,6 +28,8 @@ const TIFFANY_DARK: Color = Color::Rgb(7, 94, 91);
 const TIFFANY_SOFT: Color = Color::Rgb(76, 210, 204);
 const CONTROL_SUMMARY_MAX_CHARS: usize = 240_000;
 const FULL_MESSAGE_STREAM_MAX_CHARS: usize = usize::MAX;
+const FAILURE_DETAIL_MAX_LINES: usize = 96;
+const FAILURE_DETAIL_HEAD_LINES: usize = 24;
 
 #[derive(Clone, Debug)]
 pub struct TiffanyOrchestratorLaunch {
@@ -1454,7 +1456,7 @@ fn orchestrator_failure_lines(
     }
 
     let mut emitted = false;
-    for line in nonempty_tail_lines(&detail_text, 12) {
+    for line in diagnostic_detail_lines(&detail_text, FAILURE_DETAIL_MAX_LINES) {
         emitted = true;
         lines.push(body_line(&line, true));
     }
@@ -1538,6 +1540,37 @@ fn nonempty_tail_lines(text: &str, max_lines: usize) -> Vec<String> {
         .collect::<Vec<_>>();
     let start = lines.len().saturating_sub(max_lines);
     lines.into_iter().skip(start).collect()
+}
+
+fn diagnostic_detail_lines(text: &str, max_lines: usize) -> Vec<String> {
+    let lines = text
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if lines.len() <= max_lines {
+        return lines;
+    }
+
+    let head = FAILURE_DETAIL_HEAD_LINES.min(max_lines);
+    let tail = max_lines.saturating_sub(head + 1);
+    let hidden = lines.len().saturating_sub(head + tail);
+    let mut out = Vec::with_capacity(max_lines);
+    out.extend(lines.iter().take(head).cloned());
+    out.push(format!(
+        "... {hidden} earlier/middle line(s) hidden; use /doctor for full diagnostics"
+    ));
+    out.extend(
+        lines
+            .into_iter()
+            .rev()
+            .take(tail)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev(),
+    );
+    out
 }
 
 fn read_orchestrator_tui_log_tail(max_lines: usize) -> Option<String> {
@@ -2180,7 +2213,7 @@ fn event_detail_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        lines.push(meta_line("task", &truncate_text(prompt, 180)));
+        lines.extend(labeled_detail_block("task", prompt));
     }
     lines
 }
@@ -2600,6 +2633,26 @@ fn meta_line(label: &str, value: &str) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(value.to_string(), Style::default().fg(Color::DarkGray)),
+    ])
+}
+
+fn labeled_detail_block(label: &str, value: &str) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for (idx, line) in value.trim().lines().enumerate() {
+        let line = line.trim_end();
+        if idx == 0 {
+            lines.push(meta_line(label, line));
+        } else {
+            lines.push(detail_continuation_line(line));
+        }
+    }
+    lines
+}
+
+fn detail_continuation_line(line: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("  │ ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
     ])
 }
 
@@ -3130,6 +3183,9 @@ mod tests {
 
     #[test]
     fn worker_started_lines_show_route_model_and_task() {
+        let task_prompt = "回答用户的问题，并给出清晰结论。\n\
+            保留上下文里的关键约束：不要输出原始 JSON，展示 worker 过程。\n\
+            最后用中文总结。";
         let event = TiffanyProgressEvent {
             role: "worker".to_string(),
             status: "running".to_string(),
@@ -3141,7 +3197,7 @@ mod tests {
             cc_agent: Some("reviewer".to_string()),
             model: Some("MiniMax-M3".to_string()),
             provider: Some("minimax".to_string()),
-            task_prompt: Some("回答用户的问题，并给出清晰结论".to_string()),
+            task_prompt: Some(task_prompt.to_string()),
             content: None,
             approved: None,
             issues: None,
@@ -3159,6 +3215,9 @@ mod tests {
         assert!(text.contains("claude-code · agent reviewer · minimax/MiniMax-M3 · 12345678"));
         assert!(!text.contains("route "));
         assert!(text.contains("task  回答用户的问题"));
+        assert!(text.contains("  │ 保留上下文里的关键约束"));
+        assert!(text.contains("  │ 最后用中文总结。"));
+        assert!(!text.contains('…'));
     }
 
     #[test]
@@ -3825,6 +3884,33 @@ mod tests {
         assert!(text.contains("模型不存在"));
         assert!(text.contains("model id must point to the provider API model name"));
         assert!(text.contains("/doctor"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failure_lines_keep_start_and_end_of_long_diagnostics() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let detail = (0..140)
+            .map(|idx| {
+                if idx == 0 {
+                    "first line with root cause".to_string()
+                } else if idx == 139 {
+                    "last line with final error".to_string()
+                } else {
+                    format!("detail line {idx}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let lines = orchestrator_failure_lines(ExitStatus::from_raw(1 << 8), &detail, "", &[]);
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("first line with root cause"));
+        assert!(text.contains("last line with final error"));
+        assert!(text.contains("hidden"));
+        assert!(!text.contains("detail line 40"));
     }
 
     #[test]
