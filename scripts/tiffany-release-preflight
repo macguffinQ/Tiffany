@@ -81,6 +81,24 @@ root_package_version() {
   ' "$repo_dir/Cargo.toml"
 }
 
+previous_release_tag() {
+  local current_tag="$1"
+  git -C "$repo_dir" tag --list 'v[0-9]*' --sort=-v:refname | while read -r tag; do
+    if [[ "$tag" != "$current_tag" ]]; then
+      printf '%s\n' "$tag"
+      break
+    fi
+  done
+}
+
+git_tag_timestamp() {
+  local tag="$1"
+  local timestamp
+  timestamp="$(git -C "$repo_dir" log -1 --format=%ct "$tag" 2>/dev/null || true)"
+  [[ "$timestamp" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$timestamp"
+}
+
 if [[ -n "$release_tag" ]]; then
   step "release tag version"
   package_version="$(root_package_version)"
@@ -94,6 +112,23 @@ if [[ -n "$release_tag" ]]; then
     exit 1
   fi
   echo "tag $release_tag matches package version $package_version"
+
+  if [[ "${TIFFANY_RELEASE_ALLOW_FREQUENT:-}" != "1" ]]; then
+    previous_tag="$(previous_release_tag "$release_tag")"
+    if [[ -n "$previous_tag" ]]; then
+      previous_timestamp="$(git_tag_timestamp "$previous_tag" || true)"
+      if [[ -n "$previous_timestamp" ]]; then
+        now_timestamp="$(date +%s)"
+        release_age_seconds=$((now_timestamp - previous_timestamp))
+        if (( release_age_seconds < 86400 )); then
+          echo "Previous release tag $previous_tag is less than 24 hours old." >&2
+          echo "Batch small fixes under CHANGELOG.md Unreleased; only override for urgent release blockers." >&2
+          echo "Set TIFFANY_RELEASE_ALLOW_FREQUENT=1 to bypass this guard." >&2
+          exit 1
+        fi
+      fi
+    fi
+  fi
 fi
 
 step "root format"

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Made `orchestrator doctor` focus required failures on the active
+  role/model/provider chain. Optional providers or example models that are not
+  used by current roles now stay as warnings instead of blocking a healthy
+  default setup.
+- Fixed role diagnostics so a role bound to a model whose provider is missing
+  is reported as a required wiring failure instead of an OK role row.
+
 ## [0.1.18] - 2026-06-21
 
 ### Fixed
