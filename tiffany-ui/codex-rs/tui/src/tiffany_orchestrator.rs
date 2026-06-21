@@ -26,7 +26,8 @@ const TIFFANY_BLUE: Color = Color::Rgb(10, 186, 181);
 const TIFFANY_DARK: Color = Color::Rgb(7, 94, 91);
 #[allow(clippy::disallowed_methods)]
 const TIFFANY_SOFT: Color = Color::Rgb(76, 210, 204);
-const HUMANIZE_MAX_CHARS: usize = 240_000;
+const CONTROL_SUMMARY_MAX_CHARS: usize = 240_000;
+const FULL_MESSAGE_STREAM_MAX_CHARS: usize = usize::MAX;
 
 #[derive(Clone, Debug)]
 pub struct TiffanyOrchestratorLaunch {
@@ -97,6 +98,7 @@ struct TiffanyProgressEvent {
     issues: Option<usize>,
     count: Option<usize>,
     duration_ms: Option<u64>,
+    reason: Option<String>,
 }
 
 #[derive(Default)]
@@ -1979,6 +1981,7 @@ fn emit_lines(app_event_tx: &AppEventSender, lines: Vec<Line<'static>>) {
 fn status_symbol(event: &TiffanyProgressEvent) -> &'static str {
     match event.status.as_str() {
         "done" => "✓",
+        "skipped" => "✓",
         "failed" => "✗",
         "warning" => "⚠",
         "output" => "↳",
@@ -1989,6 +1992,7 @@ fn status_symbol(event: &TiffanyProgressEvent) -> &'static str {
 fn status_color(event: &TiffanyProgressEvent) -> Color {
     match event.status.as_str() {
         "done" => TIFFANY_BLUE,
+        "skipped" => TIFFANY_BLUE,
         "failed" => Color::Red,
         "warning" => Color::Yellow,
         "output" => Color::Gray,
@@ -2185,12 +2189,18 @@ fn reviewer_lifecycle_title(event: &TiffanyProgressEvent) -> String {
     let action = match event.status.as_str() {
         "running" => "checking worker output".to_string(),
         "done" if event.approved == Some(true) => "passed".to_string(),
+        "skipped" => "skipped".to_string(),
         "warning" if event.approved == Some(false) => "needs fixes".to_string(),
         _ => normalize_event_message(&event.message),
     };
     let mut parts = vec![action];
     if let Some(id) = short_task_id(event.task_id.as_deref()) {
         parts.push(id.to_string());
+    }
+    if event.status == "skipped"
+        && let Some(reason) = event.reason.as_deref().and_then(nonempty_trimmed)
+    {
+        parts.push(reason.to_string());
     }
     if matches!(event.status.as_str(), "warning" | "failed")
         && let Some(issues) = event.issues
@@ -2289,7 +2299,7 @@ fn visible_content(event: &TiffanyProgressEvent) -> Option<String> {
         return None;
     }
 
-    let display = event_format::clean_visible_agent_output(content, HUMANIZE_MAX_CHARS)?;
+    let display = event_format::clean_visible_agent_output(content, visible_content_max(event))?;
     let display = strip_redundant_role_prefix(&event.role, &display);
     let display = format_tiffany_summary_style(&event.role, &display);
     if is_low_value_output(&display) {
@@ -2319,7 +2329,7 @@ fn is_low_value_output(text: &str) -> bool {
 }
 
 fn final_output_candidate(content: &str) -> Option<String> {
-    event_format::final_output_candidate(content, HUMANIZE_MAX_CHARS)
+    event_format::final_output_candidate(content, FULL_MESSAGE_STREAM_MAX_CHARS)
         .filter(|result| !result.trim().is_empty())
 }
 
@@ -2354,8 +2364,16 @@ fn remember_better_text(slot: &mut Option<String>, candidate: String) {
 }
 
 fn normalized_output_key(content: &str) -> String {
-    event_format::normalized_output_key(content, HUMANIZE_MAX_CHARS)
+    event_format::normalized_output_key(content, CONTROL_SUMMARY_MAX_CHARS)
         .unwrap_or_else(|| content.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+fn visible_content_max(event: &TiffanyProgressEvent) -> usize {
+    if event.role == "worker" {
+        FULL_MESSAGE_STREAM_MAX_CHARS
+    } else {
+        CONTROL_SUMMARY_MAX_CHARS
+    }
 }
 
 fn output_scope(event: &TiffanyProgressEvent) -> String {
@@ -2813,6 +2831,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         let lines = output_event_lines(&event, "done");
@@ -2846,6 +2865,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         let worker = TiffanyProgressEvent {
             role: "worker".to_string(),
@@ -2864,6 +2884,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         let reviewer = TiffanyProgressEvent {
             role: "reviewer".to_string(),
@@ -2882,6 +2903,7 @@ mod tests {
             issues: Some(2),
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         assert_eq!(
@@ -2917,6 +2939,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         assert_eq!(
             line_text(&waterfall_status_line(&checking)),
@@ -2933,6 +2956,17 @@ mod tests {
         assert_eq!(
             line_text(&waterfall_status_line(&passed)),
             "✓ review  passed · 12345678"
+        );
+
+        let skipped = TiffanyProgressEvent {
+            status: "skipped".to_string(),
+            message: "review skipped - conversational answer".to_string(),
+            reason: Some("conversational answer".to_string()),
+            ..checking.clone()
+        };
+        assert_eq!(
+            line_text(&waterfall_status_line(&skipped)),
+            "✓ review  skipped · 12345678 · conversational answer"
         );
 
         let needs_fixes = TiffanyProgressEvent {
@@ -2969,6 +3003,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         let visible = visible_content(&event).expect("critic output visible");
         let lines = output_event_lines(&event, &visible);
@@ -3001,6 +3036,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         let lines = output_event_lines(&event, "running tests");
@@ -3031,6 +3067,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         state.remember_worker_metadata(&started);
 
@@ -3051,6 +3088,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         state.apply_worker_metadata(&mut output);
         assert_eq!(
@@ -3075,6 +3113,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: Some(1_250),
+            reason: None,
         };
         state.apply_worker_metadata(&mut done);
         assert_eq!(
@@ -3108,6 +3147,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         let mut lines = vec![waterfall_status_line(&event)];
@@ -3140,6 +3180,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: Some(1_250),
+            reason: None,
         };
 
         assert_eq!(
@@ -3167,6 +3208,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         assert_eq!(
             visible_content(&event).as_deref(),
@@ -3198,6 +3240,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         let visible = visible_content(&event).expect("visible critic output");
@@ -3227,6 +3270,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         assert_eq!(
@@ -3254,12 +3298,42 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         assert_eq!(visible_content(&event).as_deref(), Some("结果\n- done"));
         assert_eq!(
             event_title(&event),
             "claude-code - claude output · 12345678"
         );
+    }
+
+    #[test]
+    fn keeps_full_worker_message_stream_without_truncation() {
+        let long_message = format!("{}END", "x".repeat(CONTROL_SUMMARY_MAX_CHARS + 128));
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            message: "claude output".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: None,
+            runtime: None,
+            cc_agent: None,
+            model: None,
+            provider: None,
+            task_prompt: None,
+            content: Some(format!("claude-code assistant: {long_message}")),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+            reason: None,
+        };
+
+        let visible = visible_content(&event).expect("worker output visible");
+
+        assert_eq!(visible, long_message);
+        assert!(!visible.contains('…'));
     }
 
     #[test]
@@ -3281,6 +3355,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         assert_eq!(visible_content(&event).as_deref(), Some("done"));
@@ -3310,6 +3385,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         assert_eq!(
@@ -3334,6 +3410,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         assert_eq!(
@@ -3361,6 +3438,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         assert_eq!(
@@ -3404,6 +3482,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         let visible = visible_content(&event).expect("visible final result");
 
@@ -3432,6 +3511,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         let assistant_visible = visible_content(&assistant).expect("assistant visible");
         assert_eq!(
@@ -3473,6 +3553,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         let result = TiffanyProgressEvent {
             content: Some("claude-code result: useful summary".to_string()),
@@ -3547,6 +3628,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         let planner_visible = visible_content(&planner).expect("planner details visible");
         assert!(planner_visible.contains("plan ready"));
@@ -3573,6 +3655,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
         let reviewer_visible = visible_content(&reviewer).expect("review issue visible");
         assert!(reviewer_visible.contains("needs changes"));
@@ -3604,6 +3687,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         let visible = visible_content(&planner).expect("visible compact plan");
@@ -3640,6 +3724,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         let visible = visible_content(&critic).expect("visible critic output");
@@ -3674,6 +3759,7 @@ mod tests {
             issues: None,
             count: None,
             duration_ms: None,
+            reason: None,
         };
 
         let visible = visible_content(&planner).expect("visible planner output");

@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 const TEXT_OUTPUT_SUMMARY_MAX_CHARS: usize = 360;
 const COMPACT_OUTPUT_SUMMARY_MAX_CHARS: usize = 180;
+const FULL_MESSAGE_STREAM_MAX_CHARS: usize = usize::MAX;
 
 #[derive(Debug, Serialize)]
 pub struct TiffanyProgressEvent {
@@ -478,7 +479,7 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
             content,
             ..
         } => {
-            let output = visible_non_final_agent_output(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
+            let output = visible_non_final_agent_output(content, FULL_MESSAGE_STREAM_MAX_CHARS)?;
             Some(format!(
                 "↳ worker   {} · {agent} · {}\n{}",
                 short_id(task_id),
@@ -798,6 +799,23 @@ mod tests {
 
         assert!(compact.contains("worker  tool call · 12345678 worker-codex"));
         assert!(compact.contains("tool shell: cargo test --all"));
+    }
+
+    #[test]
+    fn text_formatter_does_not_truncate_worker_message_stream() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let long_message = format!("{}END", "x".repeat(TEXT_OUTPUT_SUMMARY_MAX_CHARS + 128));
+
+        let line = format_text_progress_event(&RunProgress::WorkerOutput {
+            task_id,
+            agent: "claude-code".into(),
+            role: "worker-cc".into(),
+            content: format!("claude-code assistant: {long_message}"),
+        })
+        .expect("worker output line");
+
+        assert!(line.contains(&long_message));
+        assert!(!line.contains("…"));
     }
 
     #[test]
