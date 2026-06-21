@@ -120,7 +120,7 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
 - `./scripts/tiffany-install-smoke --smoke|--dist`：在临时 HOME 中验证 `orchestrator`、`tiffany-loop` 和 `tiffany` 兼容别名，不触碰真实用户配置。
 - `./scripts/tiffany-check-examples`：只运行仓库内示例项目测试。
-- `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]`：运行汇总后的发布前检查；打 tag 前使用 `--full --tag vX.Y.Z`。
+- `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]`：运行汇总后的发布前检查；打 tag 前使用 `--full --tag vX.Y.Z`。带 tag 的检查默认有 24 小时发版冷却；只有安装损坏、启动失败、安全修复等紧急情况才设置 `TIFFANY_RELEASE_ALLOW_FREQUENT=1` 覆盖。
 - `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]`：根据已发布 release asset 和源码包 checksum 生成 Homebrew tap 公式。
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small`：查看构建缓存大小、定位大文件，在保留已编译依赖和最终二进制的同时清理可重建缓存，或清理更大的 build 输出，避免 `target/` 膨胀。
 
@@ -557,6 +557,8 @@ cargo build --release
 ./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --quick
 ./scripts/tiffany-release-preflight --full --tag v0.1.18   # 打 tag 前
+# 同日连续 tag 默认会被阻止；只在紧急修复时覆盖：
+# TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full --tag vX.Y.Z
 
 # 直接在 tiffany-ui/codex-rs 中执行 cargo，也会使用根目录 ./target。
 # 用 ./scripts/tiffany-clean-targets --top 定位体积来源；

@@ -15,6 +15,9 @@ Modes:
 
 Options:
   --tag    Verify the tag version matches the root Cargo.toml package version.
+           Tagged release checks also enforce a 24-hour cooldown after the
+           previous release tag. Use TIFFANY_RELEASE_ALLOW_FREQUENT=1 only for
+           urgent installer, startup, or security fixes.
 
 Default: --quick
 EOF

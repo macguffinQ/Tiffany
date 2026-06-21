@@ -115,7 +115,7 @@ Development entrypoints:
 - `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
 - `./scripts/tiffany-install-smoke --smoke|--dist` - verify `orchestrator`, `tiffany-loop`, and the `tiffany` alias in a temporary HOME without touching real user config.
 - `./scripts/tiffany-check-examples` - run only the checked-in example project tests.
-- `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` - run the consolidated release-readiness checks; use `--full --tag vX.Y.Z` before tagging.
+- `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` - run the consolidated release-readiness checks; use `--full --tag vX.Y.Z` before tagging. Tagged checks enforce a 24-hour release cooldown unless `TIFFANY_RELEASE_ALLOW_FREQUENT=1` is set for an urgent fix.
 - `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]` - generate the Homebrew formula from a published release asset and source archive checksums.
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` - inspect build-cache size, find large artifacts, trim rebuildable caches while keeping compiled deps/final binaries, or remove larger build outputs when `target/` grows too large.
 
@@ -700,6 +700,8 @@ cargo build --release    # release, ~5-8min first time
 ./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --quick
 ./scripts/tiffany-release-preflight --full --tag v0.1.18   # before tagging
+# Same-day follow-up tags are blocked by default; reserve this for urgent fixes:
+# TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full --tag vX.Y.Z
 
 # Direct cargo commands inside tiffany-ui/codex-rs also use ./target.
 # Use ./scripts/tiffany-clean-targets --top to find target bloat,

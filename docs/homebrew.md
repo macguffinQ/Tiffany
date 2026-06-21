@@ -67,6 +67,12 @@ additional release archives are wired into the workflow and formula.
 
 The workflow computes checksums from authenticated GitHub APIs, so it works while the main repository is private and continues to work after the repository is public.
 
+Tagged preflight checks enforce a 24-hour cooldown after the previous release
+tag. This keeps small fixes batched under `CHANGELOG.md` `Unreleased` instead
+of producing noisy patch releases. For an urgent installer, startup, or security
+fix, set the repository variable `TIFFANY_RELEASE_ALLOW_FREQUENT=1` for that
+tag push, then remove it after the release.
+
 If the automatic tap update is skipped or fails, confirm the GitHub Release, tap
 commit, and formula with:
 

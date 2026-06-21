@@ -16,6 +16,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      TIFFANY_RELEASE_ALLOW_FREQUENT: ${{ vars.TIFFANY_RELEASE_ALLOW_FREQUENT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
