@@ -11,7 +11,7 @@ and `tiffany` for compatibility.
 3. **Adapter layer** — `WorkerAdapter` trait + 3 implementations (CC, Codex, direct)
 4. **Shared state** — SQLite task queue + git worktree pool
 4.5. **Session log** — JSONL per session + SQLite index; new agents can read prior sessions
-5. **Orchestrator core** — Plan → Critique → Route → Execute → Review pipeline
+5. **Orchestrator core** — Plan → Critique → Route → Execute → Review pipeline; conversational turns collapse to direct worker answers and emit a structured review-skipped event
 6. **Observability** — terminal chat + structured JSON logs (tracing)
 7. **Entry layer** — CLI (clap) / terminal chat / ACP / webhook (axum)
 
@@ -21,7 +21,7 @@ and `tiffany` for compatibility.
 - **Critic** (default: CC) — red-teams the plan, forces re-plan on rejection
 - **Router** (built-in) — 3-tier resolution: CLI flag > task tag > config default
 - **Worker** (CC / Codex / direct) — executes a sub-task
-- **Reviewer** (default: Codex cheap model) — gates worker output before merge
+- **Reviewer** (default: Codex cheap model) — gates implementation worker output before merge; conversational/explanatory turns skip review with a recorded reason
 - **A/B Judge** (built-in) — picks a winner from two configured worker-route runs using success status, diff size, and session-log size fallback
 
 ## Pipeline
@@ -43,6 +43,12 @@ User task
    ↓
 4.5. Session log (consumed by next agent)
 ```
+
+Conversational prompts such as greetings, simple Q&A, or explanations still
+produce run events, but the planner output is collapsed to one direct worker
+task and the reviewer phase emits `ReviewSkipped { reason: "conversational answer" }`.
+The JSONL event bridge serializes that as `status: "skipped"` plus a structured
+`reason` field so UI adapters do not need to parse the message string.
 
 ## Configuration
 

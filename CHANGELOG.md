@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Documented the conversational direct-answer path, including the structured
+  `review skipped` JSON event `reason` used by UI adapters and scripts.
+
 ### Fixed
 
 - Made `orchestrator doctor` focus required failures on the active

@@ -28,7 +28,7 @@ tiffany-loop orchestration mode
 
 `tiffany-loop` lets you run multiple AI coding agents (Claude Code, Codex CLI runtimes, or any LLM) **in parallel, with shared context, and with adversarial review** - all from a single CLI, terminal chat, or ACP client.
 
-The core idea: each "agent" is just a CLI subprocess (or a direct API call) wrapped in a common adapter. A planner decomposes your high-level task into sub-tasks, a critic red-teams the plan, workers execute in parallel, a reviewer gates the result, and every agent's session is logged and shared with future agents.
+The core idea: each "agent" is just a CLI subprocess (or a direct API call) wrapped in a common adapter. A planner decomposes your high-level task into sub-tasks, a critic red-teams the plan, workers execute in parallel, a reviewer gates implementation results, and every agent's session is logged and shared with future agents. Conversational turns such as greetings, explanations, and simple Q&A still go through the observable run path, but collapse to a direct worker answer and emit `review skipped` with a structured `reason`.
 
 It's designed for software engineering tasks where:
 - You want **multiple AI agents** to collaborate, not just one
@@ -154,6 +154,7 @@ Providers: **Anthropic**, **OpenAI**, **Google Gemini**, **Ollama** (local), or 
 4. Shared state         SQLite task queue + git worktree pool
 4.5 Session log         JSONL + SQLite index — injected into new agents
 5. Orchestrator core    Plan → Critique → Route → Execute → Review
+                       (conversational turns direct-answer and skip review)
 6. Observability        terminal chat + structured JSON logs
 7. Entry layer          CLI / terminal chat / ACP / webhook (axum)
 ```
@@ -186,7 +187,7 @@ Providers: **Anthropic**, **OpenAI**, **Google Gemini**, **Ollama** (local), or 
         └─────────────────┬───────────────┘
                           ▼
               ┌─────────────────────┐
-              │ 0c. Review (LLM)    │  gates the merge
+              │ 0c. Review (LLM)    │  gates implementation results
               └──────────┬──────────┘
                          ▼
                     merged
@@ -194,6 +195,11 @@ Providers: **Anthropic**, **OpenAI**, **Google Gemini**, **Ollama** (local), or 
                          ▼
        Layer 4.5: Session log (consumed by next agent)
 ```
+
+Conversational or explanatory prompts are intentionally treated as direct-answer
+turns. They still produce planner/worker/run events for transparency, but the
+review step is recorded as `review skipped · <task> · conversational answer`
+instead of forcing a code-review style rejection.
 
 ### 3-tier role resolution
 
@@ -218,6 +224,7 @@ All injected as system-prompt sections, in priority order: **AGENTS.md > CLAUDE.
 
 - The active UI direction is the full tiffany-loop UI under `tiffany-ui/`.
 - `tiffany-loop "..."` streams planner, critic, worker, reviewer, and final-result events into tiffany-loop history cells.
+- Conversational turns are shown as direct worker answers with a visible `review skipped` event; JSONL event streams include `status: "skipped"` and `reason: "conversational answer"` for UI adapters and scripts.
 - In orchestrator mode, the tiffany-loop input box submits follow-up prompts to the orchestrator adapter instead of the normal tiffany-loop model turn.
 - The legacy runner keeps a single conversation view with normal terminal scrollback.
 - Native text selection, copy, paste, and mouse scrolling are handled by your terminal.
@@ -447,7 +454,7 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--agent`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
 | `orchestrator run "..." --detach` | Run a task in the background and write a readable event log under `~/.orchestrator/runs/` |
 | `orchestrator attach [id|prefix|last]` | Print the latest detached run status and log tail |
-| `orchestrator events "..."` | Stream progress events; default JSONL is stable for UI adapters/scripts, `--format text` prints a readable planner/critic/worker/reviewer waterfall |
+| `orchestrator events "..."` | Stream progress events; default JSONL is stable for UI adapters/scripts (`review skipped` events include a structured `reason`), `--format text` prints a readable planner/critic/worker/reviewer waterfall |
 | `orchestrator config provider` | Open the guided provider selector |
 | `orchestrator config provider setup <provider>` | Configure a provider from built-in presets |
 | `orchestrator config provider delete <provider>` | Delete one configured provider |
