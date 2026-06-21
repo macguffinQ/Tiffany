@@ -995,6 +995,10 @@ fn check_host_environment(builder: &mut DoctorReportBuilder) {
         std::env::consts::OS,
         std::env::consts::ARCH
     ));
+    match tiffany_install::source_checkout() {
+        Some(source) => builder.ok(format!("source checkout: {}", source.summary())),
+        None => builder.ok("source checkout: release install"),
+    }
 
     check_rust_tool(builder, "rustc", "RUSTC", &["--version"], "source builds");
     check_rust_tool(builder, "cargo", "CARGO", &["--version"], "source builds");
@@ -1008,35 +1012,10 @@ fn check_host_environment(builder: &mut DoctorReportBuilder) {
 const LARGE_TARGET_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 fn check_build_cache(builder: &mut DoctorReportBuilder) {
-    let Some(repo_dir) = find_source_checkout_dir() else {
+    let Some(repo_dir) = tiffany_install::source_checkout().map(|source| source.root) else {
         return;
     };
     check_build_cache_at(builder, &repo_dir, LARGE_TARGET_CACHE_BYTES);
-}
-
-fn find_source_checkout_dir() -> Option<PathBuf> {
-    let current = std::env::current_dir().ok();
-    if let Some(dir) = current.as_deref().and_then(find_source_checkout_ancestor) {
-        return Some(dir);
-    }
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if is_source_checkout_dir(&manifest_dir) {
-        Some(manifest_dir)
-    } else {
-        None
-    }
-}
-
-fn find_source_checkout_ancestor(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .find(|path| is_source_checkout_dir(path))
-        .map(Path::to_path_buf)
-}
-
-fn is_source_checkout_dir(path: &Path) -> bool {
-    path.join("Cargo.toml").is_file() && path.join("scripts/tiffany-clean-targets").is_file()
 }
 
 fn check_build_cache_at(

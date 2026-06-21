@@ -1,6 +1,7 @@
 //! Helpers for the installed tiffany-loop command pair.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TiffanyBinarySource {
@@ -136,6 +137,68 @@ pub fn launch_command_preview(config_path: &Path) -> String {
     ])
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceCheckout {
+    pub root: PathBuf,
+    pub commit: Option<String>,
+    pub dirty: bool,
+}
+
+impl SourceCheckout {
+    pub fn summary(&self) -> String {
+        let commit = self.commit.as_deref().unwrap_or("unknown");
+        let dirty = if self.dirty { " +dirty" } else { "" };
+        format!("{} ({commit}{dirty})", self.root.display())
+    }
+}
+
+pub fn source_checkout() -> Option<SourceCheckout> {
+    let root = source_checkout_root_for_exe(std::env::current_exe().ok()?.as_path())?;
+    Some(SourceCheckout {
+        commit: git_output(&root, &["rev-parse", "--short", "HEAD"]),
+        dirty: git_dirty(&root).unwrap_or(false),
+        root,
+    })
+}
+
+fn source_checkout_root_for_exe(exe_path: &Path) -> Option<PathBuf> {
+    exe_path
+        .ancestors()
+        .find(|path| is_source_checkout_dir(path))
+        .map(Path::to_path_buf)
+}
+
+fn is_source_checkout_dir(path: &Path) -> bool {
+    path.join("Cargo.toml").is_file() && path.join("scripts/tiffany-clean-targets").is_file()
+}
+
+fn git_output(repo: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn git_dirty(repo: &Path) -> Option<bool> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(!output.stdout.is_empty())
+}
+
 fn shell_join(args: impl IntoIterator<Item = PathBuf>) -> String {
     args.into_iter()
         .map(|arg| shell_arg(&arg.to_string_lossy()))
@@ -180,5 +243,46 @@ mod tests {
         };
 
         assert_eq!(binary.source_label(), "PATH");
+    }
+
+    #[test]
+    fn source_checkout_summary_marks_dirty_state() {
+        let checkout = SourceCheckout {
+            root: PathBuf::from("/repo"),
+            commit: Some("abc1234".into()),
+            dirty: true,
+        };
+
+        assert_eq!(checkout.summary(), "/repo (abc1234 +dirty)");
+    }
+
+    #[test]
+    fn source_checkout_summary_handles_unknown_commit() {
+        let checkout = SourceCheckout {
+            root: PathBuf::from("/repo"),
+            commit: None,
+            dirty: false,
+        };
+
+        assert_eq!(checkout.summary(), "/repo (unknown)");
+    }
+
+    #[test]
+    fn source_checkout_root_is_based_on_executable_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let bin_dir = repo.join("target/debug");
+        std::fs::create_dir_all(repo.join("scripts")).unwrap();
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(repo.join("Cargo.toml"), "[package]\nname='fixture'\n").unwrap();
+        std::fs::write(repo.join("scripts/tiffany-clean-targets"), "").unwrap();
+        let exe = bin_dir.join("orchestrator");
+        std::fs::write(&exe, "").unwrap();
+
+        assert_eq!(source_checkout_root_for_exe(&exe), Some(repo));
+        assert_eq!(
+            source_checkout_root_for_exe(Path::new("/usr/local/bin/orchestrator")),
+            None
+        );
     }
 }

@@ -1113,6 +1113,10 @@ fn print_status(config_path: &Path) -> Result<()> {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "(current executable unknown)".to_string())
     );
+    match tiffany_install::source_checkout() {
+        Some(source) => println!("source:       {}", source.summary()),
+        None => println!("source:       release install"),
+    }
     let tiffany_binary = tiffany_install::resolve_tiffany_binary();
     let tiffany_ready = matches!(tiffany_binary.as_ref(), Some(binary) if binary.verified);
     match tiffany_binary.as_ref() {
