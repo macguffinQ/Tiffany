@@ -769,10 +769,8 @@ mod tests {
 
     #[test]
     fn launch_readiness_accepts_existing_path() -> std::io::Result<()> {
-        let temp = std::env::temp_dir().join(format!(
-            "tiffany-loop-ready-test-{}",
-            std::process::id()
-        ));
+        let temp =
+            std::env::temp_dir().join(format!("tiffany-loop-ready-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp);
         std::fs::create_dir_all(&temp)?;
         let orchestrator = temp.join(exe_name("orchestrator"));
@@ -787,17 +785,18 @@ mod tests {
 
     #[test]
     fn path_lookup_accepts_launchable_binary() -> std::io::Result<()> {
-        let temp = std::env::temp_dir().join(format!(
-            "tiffany-loop-path-test-{}",
-            std::process::id()
-        ));
+        let temp =
+            std::env::temp_dir().join(format!("tiffany-loop-path-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp);
         std::fs::create_dir_all(&temp)?;
         let orchestrator = temp.join(exe_name("orchestrator"));
         std::fs::write(&orchestrator, "")?;
         make_executable(&orchestrator)?;
 
-        assert_eq!(find_in_path_with("orchestrator", Some(temp.as_path())), Some(orchestrator));
+        assert_eq!(
+            find_in_path_with("orchestrator", Some(temp.as_path())),
+            Some(orchestrator)
+        );
 
         let _ = std::fs::remove_dir_all(temp);
         Ok(())
