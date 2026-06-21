@@ -15,7 +15,7 @@ use crate::core::types::{
 use crate::roles::critic::Critic;
 use crate::roles::planner::Planner;
 use crate::roles::reviewer::Reviewer;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ const PLANNER_SYSTEM: &str = r#"Decompose the task into 1-5 sub-tasks. Output JS
 
 const CRITIC_SYSTEM: &str = r#"Critique the plan. Output JSON only, no markdown, no prose. Fields: approved (bool), issues (array of strings, empty if approved), suggestions (array of strings). Be strict. Approve only if clear, complete, decomposable, likely to succeed."#;
 
-const REVIEWER_SYSTEM: &str = r#"Review the worker's output. Output JSON only, no markdown, no prose. Fields: approved (bool), issues (array of strings). Approve only if correct, complete, meets intent."#;
+const REVIEWER_SYSTEM: &str = r#"Review the worker's output against the user's intent. Output JSON only, no markdown, no prose. Fields: approved (bool), issues (array of strings). Approve useful conversational answers, greetings, explanations, or diagnostics even when there is no git diff. Reject only if the output is wrong, incomplete, unsafe, or clearly ignores the task."#;
 
 // ── JSON extraction (tolerant of prose wrapping) ───────────
 
@@ -351,20 +351,12 @@ impl LLMReviewer {
 #[async_trait]
 impl Reviewer for LLMReviewer {
     async fn review(&self, task: &Task, ctx: &ReviewContext) -> Result<ReviewOutput> {
-        // Extract the worker's text output from the session JSONL
         let worker_text = extract_worker_text(&ctx.session_log_path)
-            .unwrap_or_else(|_| "(no session log)".to_string());
-        // Truncate to keep prompt small
-        let worker_text_trunc = if worker_text.len() > 6000 {
-            format!("{}…(truncated)", &worker_text[..6000])
-        } else {
-            worker_text
-        };
-
-        // Read the diff (capped to 8KB)
+            .unwrap_or_else(|err| format!("(worker output unavailable: {err})"));
+        let worker_text = truncate_review_text(&worker_text, 8_000);
         let diff = read_diff_capped(&ctx.worktree_path, 8000);
-        let diff = if diff.is_empty() {
-            "(no changes)".to_string()
+        let diff = if diff.trim().is_empty() {
+            "(no file changes; this is acceptable for conversational, diagnostic, or explanation tasks)".to_string()
         } else {
             diff
         };
@@ -377,8 +369,10 @@ impl Reviewer for LLMReviewer {
                     "Task that was attempted:\n{}\n\n\
                      ## What the worker said (assistant text from session log):\n```\n{}\n```\n\n\
                      ## What the worker actually changed (git diff, capped to 8KB):\n```diff\n{}\n```\n\n\
-                     Review the work. Compare claims vs diff. Output JSON only.",
-                    task.prompt, worker_text_trunc, diff
+                     Review against the user's intent. For conversational questions, greetings, explanations, or diagnostics, \
+                     approve a useful textual answer even when there is no diff. Only reject if the output is wrong, incomplete, \
+                     unsafe, or clearly ignores the task. Output JSON only.",
+                    task.prompt, worker_text, diff
                 )},
             ],
             max_tokens: Some(32768),
@@ -403,40 +397,68 @@ impl Reviewer for LLMReviewer {
     }
 }
 
-/// Extract all assistant text from a CC session JSONL file.
+/// Extract human-readable worker text from a session JSONL file.
 fn extract_worker_text(path: &std::path::Path) -> Result<String> {
-    let raw = std::fs::read_to_string(path)?;
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("reading worker session log {}", path.display()))?;
     let mut out = String::new();
     for line in raw.lines() {
         if line.trim().is_empty() {
             continue;
         }
-        let v: serde_json::Value = match serde_json::from_str(line) {
-            Ok(v) => v,
+        let value: serde_json::Value = match serde_json::from_str(line) {
+            Ok(value) => value,
             Err(_) => continue,
         };
-        // CC assistant events have type:"assistant" and message.content as array
-        if v.get("type").and_then(|t| t.as_str()) == Some("assistant") {
-            if let Some(arr) = v
-                .get("message")
-                .and_then(|m| m.get("content"))
-                .and_then(|c| c.as_array())
-            {
-                for c in arr {
-                    if c.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        if let Some(t) = c.get("text").and_then(|t| t.as_str()) {
-                            out.push_str(t);
-                            out.push('\n');
-                        }
-                    }
+        append_event_text(&mut out, &value);
+    }
+    if out.trim().is_empty() {
+        return Err(anyhow!("no worker text found"));
+    }
+    Ok(out)
+}
+
+fn append_event_text(out: &mut String, value: &serde_json::Value) {
+    if let Some(text) = value.as_str() {
+        out.push_str(text);
+        out.push('\n');
+        return;
+    }
+
+    if let Some(text) = value
+        .get("result")
+        .or_else(|| value.get("text"))
+        .or_else(|| value.get("line"))
+        .and_then(|v| v.as_str())
+    {
+        out.push_str(text);
+        out.push('\n');
+    }
+
+    if let Some(arr) = value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    {
+        for item in arr {
+            if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                    out.push_str(text);
+                    out.push('\n');
                 }
             }
         }
     }
-    if out.is_empty() {
-        return Err(anyhow!("no assistant text found"));
+
+    if let Some(obj) = value.as_object() {
+        for key in ["payload", "event", "message"] {
+            if let Some(nested) = obj.get(key) {
+                if !nested.is_string() {
+                    append_event_text(out, nested);
+                }
+            }
+        }
     }
-    Ok(out)
 }
 
 /// Read `git diff` from a worktree, capped to N bytes.
@@ -449,20 +471,23 @@ fn read_diff_capped(worktree: &std::path::Path, cap: usize) -> String {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
         _ => return String::new(),
     };
-    if raw.len() > cap {
-        let mut end = cap;
-        while end > 0 && !raw.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}…(truncated)", &raw[..end])
-    } else {
-        raw
+    truncate_review_text(&raw, cap)
+}
+
+fn truncate_review_text(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
     }
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…(truncated)", &text[..end])
 }
 
 #[cfg(test)]
 mod tests {
-    use super::extract_json;
+    use super::*;
 
     #[test]
     fn parses_direct_json() {
@@ -495,5 +520,42 @@ That's my verdict."#;
         let v = extract_json(input).unwrap();
         assert_eq!(v["approved"], false);
         assert_eq!(v["issues"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn reviewer_context_extracts_worker_text_from_session_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worker.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            { "type": "text", "text": "你好，我可以帮你写代码。" }
+                        ]
+                    }
+                }),
+                serde_json::json!({
+                    "type": "result",
+                    "result": "最终回答"
+                })
+            ),
+        )
+        .unwrap();
+
+        let text = extract_worker_text(&path).unwrap();
+
+        assert!(text.contains("你好，我可以帮你写代码。"));
+        assert!(text.contains("最终回答"));
+    }
+
+    #[test]
+    fn reviewer_context_truncates_on_char_boundary() {
+        let text = truncate_review_text("你好abcdef", 7);
+
+        assert_eq!(text, "你好a…(truncated)");
     }
 }

@@ -873,17 +873,17 @@ impl ClaudeCodeReviewer {
 
 #[async_trait]
 impl Reviewer for ClaudeCodeReviewer {
-    async fn review(&self, task: &Task, _ctx: &ReviewContext) -> Result<ReviewOutput> {
-        self.review_impl(task, None).await
+    async fn review(&self, task: &Task, ctx: &ReviewContext) -> Result<ReviewOutput> {
+        self.review_impl(task, ctx, None).await
     }
 
     async fn review_with_progress(
         &self,
         task: &Task,
-        _ctx: &ReviewContext,
+        ctx: &ReviewContext,
         progress: Option<UnboundedSender<RunProgress>>,
     ) -> Result<ReviewOutput> {
-        self.review_impl(task, progress).await
+        self.review_impl(task, ctx, progress).await
     }
 }
 
@@ -891,18 +891,30 @@ impl ClaudeCodeReviewer {
     async fn review_impl(
         &self,
         task: &Task,
+        ctx: &ReviewContext,
         progress: Option<UnboundedSender<RunProgress>>,
     ) -> Result<ReviewOutput> {
-        // Simplified: just send the task prompt. Could be enriched with diff
-        // and worker output (see ReviewContext fields).
+        let worker_text = extract_worker_text(&ctx.session_log_path)
+            .unwrap_or_else(|err| format!("(worker output unavailable: {err})"));
+        let worker_text = truncate_review_text(&worker_text, 8_000);
+        let diff = read_diff_capped(&ctx.worktree_path, 8_000);
+        let diff = if diff.trim().is_empty() {
+            "(no file changes; this is acceptable for conversational, diagnostic, or explanation tasks)".to_string()
+        } else {
+            diff
+        };
         let user_prompt = format!(
             "Task that was attempted:\n{}\n\n\
-             (Worker output and diff are not yet injected here — review based on the task description.)\n\n\
+             Worker output:\n```\n{}\n```\n\n\
+             Git diff:\n```diff\n{}\n```\n\n\
+             Review against the user's intent. For conversational questions, greetings, explanations, or diagnostics, \
+             approve a useful textual answer even when there is no diff. Only reject if the output is wrong, incomplete, \
+             unsafe, or clearly ignores the task.\n\n\
              Output JSON with fields:\n\
              - approved: bool\n\
              - issues: array of strings\n\n\
              Output JSON only.",
-            task.prompt
+            task.prompt, worker_text, diff
         );
         let raw = run_cli(
             &self.spec,
@@ -929,6 +941,98 @@ impl ClaudeCodeReviewer {
             .unwrap_or_default();
         Ok(ReviewOutput { approved, issues })
     }
+}
+
+fn extract_worker_text(path: &std::path::Path) -> Result<String> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("reading worker session log {}", path.display()))?;
+    let mut out = String::new();
+    for line in raw.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(_) => {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+        };
+        append_event_text(&mut out, &value);
+    }
+    if out.trim().is_empty() {
+        return Err(anyhow!("no worker text found"));
+    }
+    Ok(out)
+}
+
+fn append_event_text(out: &mut String, value: &serde_json::Value) {
+    if let Some(text) = value.as_str() {
+        out.push_str(text);
+        out.push('\n');
+        return;
+    }
+
+    if let Some(text) = value
+        .get("result")
+        .or_else(|| value.get("text"))
+        .or_else(|| value.get("line"))
+        .and_then(|v| v.as_str())
+    {
+        out.push_str(text);
+        out.push('\n');
+    }
+
+    if let Some(arr) = value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    {
+        for item in arr {
+            if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                    out.push_str(text);
+                    out.push('\n');
+                }
+            }
+        }
+    }
+
+    if let Some(obj) = value.as_object() {
+        for key in ["payload", "event", "message"] {
+            if let Some(nested) = obj.get(key) {
+                if !nested.is_string() {
+                    append_event_text(out, nested);
+                }
+            }
+        }
+    }
+}
+
+fn read_diff_capped(worktree: &std::path::Path, cap: usize) -> String {
+    let output = std::process::Command::new("git")
+        .args(["diff", "HEAD"])
+        .current_dir(worktree)
+        .output();
+    let raw = match output {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        _ => return String::new(),
+    };
+    truncate_review_text(&raw, cap)
+}
+
+fn truncate_review_text(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…(truncated)", &text[..end])
 }
 
 #[cfg(test)]
@@ -965,6 +1069,45 @@ mod tests {
 
         assert_eq!(summary.kind, "result");
         assert_eq!(summary.text, "{\"approved\":true,\"issues\":[]}");
+    }
+
+    #[test]
+    fn reviewer_context_extracts_worker_text_from_session_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worker.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n",
+                serde_json::json!({
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            { "type": "text", "text": "你好，我可以帮你写代码。" }
+                        ]
+                    }
+                }),
+                serde_json::json!({
+                    "type": "result",
+                    "result": "最终回答"
+                }),
+                "plain fallback line"
+            ),
+        )
+        .unwrap();
+
+        let text = extract_worker_text(&path).unwrap();
+
+        assert!(text.contains("你好，我可以帮你写代码。"));
+        assert!(text.contains("最终回答"));
+        assert!(text.contains("plain fallback line"));
+    }
+
+    #[test]
+    fn reviewer_context_truncates_on_char_boundary() {
+        let text = truncate_review_text("你好abcdef", 7);
+
+        assert_eq!(text, "你好a…(truncated)");
     }
 
     #[test]

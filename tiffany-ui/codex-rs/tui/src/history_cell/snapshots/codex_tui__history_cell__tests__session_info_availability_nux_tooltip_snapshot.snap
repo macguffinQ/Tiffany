@@ -1,9 +1,10 @@
 ---
-source: tui/src/history_cell.rs
+source: tui/src/history_cell/tests.rs
+assertion_line: 638
 expression: rendered
 ---
 ╭─────────────────────────────────────╮
-│ >_ OpenAI Codex (v0.0.0)            │
+│ >_ tiffany-loop (v0.1.18)           │
 │                                     │
 │ model:     gpt-5   /model to change │
 │ directory: /tmp/project             │
