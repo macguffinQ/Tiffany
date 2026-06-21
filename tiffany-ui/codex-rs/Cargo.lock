@@ -3963,7 +3963,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.1.9"
+version = "0.1.17"
 dependencies = [
  "anyhow",
  "arboard",
