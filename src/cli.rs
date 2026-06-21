@@ -1257,8 +1257,22 @@ fn status_config_issues(cfg: &Config) -> Vec<String> {
         issues.push("no roles".to_string());
     }
 
+    let role_linked_models = cfg
+        .roles
+        .values()
+        .map(|role| role.model.as_str())
+        .collect::<HashSet<_>>();
+    let role_linked_providers = cfg
+        .roles
+        .values()
+        .filter_map(|role| cfg.models.iter().find(|model| model.id == role.model))
+        .map(|model| model.provider.as_str())
+        .collect::<HashSet<_>>();
+
     for (provider_name, provider) in &cfg.providers {
-        if provider.kind != "ollama"
+        let provider_is_required = role_linked_providers.contains(provider_name.as_str());
+        if provider_is_required
+            && provider.kind != "ollama"
             && provider
                 .api_key
                 .as_deref()
@@ -1268,7 +1282,7 @@ fn status_config_issues(cfg: &Config) -> Vec<String> {
         {
             issues.push(format!("{provider_name} api key missing"));
         }
-        if provider_needs_base_url(provider_name, provider) {
+        if provider_is_required && provider_needs_base_url(provider_name, provider) {
             issues.push(format!("{provider_name} base_url missing"));
         }
     }
@@ -1279,7 +1293,9 @@ fn status_config_issues(cfg: &Config) -> Vec<String> {
         .map(|model| model.id.as_str())
         .collect::<HashSet<_>>();
     for model in &cfg.models {
-        if !cfg.providers.contains_key(&model.provider) {
+        if role_linked_models.contains(model.id.as_str())
+            && !cfg.providers.contains_key(&model.provider)
+        {
             issues.push(format!("{} provider {} missing", model.id, model.provider));
         }
     }
@@ -5396,6 +5412,57 @@ mod tests {
     }
 
     #[test]
+    fn status_config_health_ignores_unused_provider_and_model_gaps() {
+        let mut cfg = config_with_models();
+        cfg.providers
+            .insert("anthropic".to_string(), provider("anthropic"));
+        cfg.providers.insert(
+            "google".to_string(),
+            ProviderConfig {
+                kind: "google".to_string(),
+                api_key: None,
+                base_url: None,
+            },
+        );
+        cfg.models.push(ModelConfig {
+            id: "unused-openai".to_string(),
+            provider: "openai".to_string(),
+            name: "gpt-4o".to_string(),
+        });
+        cfg.roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "sonnet".to_string(),
+                runtime: "claude-code".to_string(),
+                agent_teams: true,
+            },
+        );
+
+        let issues = status_config_issues(&cfg);
+
+        assert_eq!(issues, Vec::<String>::new());
+        assert_eq!(status_config_health(&cfg), "ok");
+    }
+
+    #[test]
+    fn status_config_health_reports_role_linked_missing_provider() {
+        let mut cfg = config_with_models();
+        cfg.roles.insert(
+            "worker-codex".to_string(),
+            RoleConfig {
+                model: "gpt4o".to_string(),
+                runtime: "codex".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        let issues = status_config_issues(&cfg);
+
+        assert!(issues.contains(&"gpt4o provider openai missing".to_string()));
+        assert!(status_config_health(&cfg).contains("model provider links"));
+    }
+
+    #[test]
     fn status_config_health_reports_internal_config_gaps() {
         let mut cfg = Config::default();
         cfg.providers.insert(
@@ -5408,13 +5475,13 @@ mod tests {
         );
         cfg.models.push(ModelConfig {
             id: "gpt".to_string(),
-            provider: "missing-provider".to_string(),
+            provider: "openai".to_string(),
             name: "gpt-test".to_string(),
         });
         cfg.roles.insert(
             "planner".to_string(),
             RoleConfig {
-                model: "missing-model".to_string(),
+                model: "gpt".to_string(),
                 runtime: "missing-runtime".to_string(),
                 agent_teams: false,
             },
@@ -5423,14 +5490,11 @@ mod tests {
         let issues = status_config_issues(&cfg);
 
         assert!(issues.contains(&"openai api key missing".to_string()));
-        assert!(issues.contains(&"gpt provider missing-provider missing".to_string()));
-        assert!(issues.contains(&"planner model missing-model missing".to_string()));
         assert!(issues.contains(&"planner runtime missing-runtime missing".to_string()));
         assert!(issues.contains(&"no default worker".to_string()));
         let health = status_config_health(&cfg);
         assert!(health.contains("issue(s):"));
         assert!(health.contains("provider auth missing for 1: openai"));
-        assert!(health.contains("model provider links:"));
         assert!(health.contains("role/model wiring:"));
     }
 
@@ -5443,6 +5507,19 @@ mod tests {
                 kind: "openai".to_string(),
                 api_key: Some("set".to_string()),
                 base_url: None,
+            },
+        );
+        cfg.models.push(ModelConfig {
+            id: "minimax-m3".to_string(),
+            provider: "minimax".to_string(),
+            name: "MiniMax-M3".to_string(),
+        });
+        cfg.roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "minimax-m3".to_string(),
+                runtime: "claude-code".to_string(),
+                agent_teams: true,
             },
         );
 
