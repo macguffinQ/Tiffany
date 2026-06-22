@@ -204,6 +204,11 @@ jobs:
               echo "HOMEBREW_TAP_TOKEN is not configured, so this workflow published the GitHub Release but did not update \`${HOMEBREW_TAP_REPO}\`."
               echo
               echo "Configure a repository secret named \`HOMEBREW_TAP_TOKEN\` with write access to \`${HOMEBREW_TAP_REPO}\`, or update the tap manually with the commands in \`docs/homebrew.md\`."
+              echo
+              echo "\`\`\`bash"
+              echo "git clone https://github.com/${HOMEBREW_TAP_REPO}.git ../homebrew-tap 2>/dev/null || true"
+              echo "./scripts/tiffany-update-homebrew-tap --tag ${GITHUB_REF_NAME} --tap-dir ../homebrew-tap --commit --push"
+              echo "\`\`\`"
             } >> "${GITHUB_STEP_SUMMARY}"
             echo "::warning::HOMEBREW_TAP_TOKEN is not configured. GitHub Release publishing continues; update ${HOMEBREW_TAP_REPO} manually or add the secret for automatic tap updates."
           else
@@ -276,6 +281,7 @@ jobs:
             test do
               assert_match "orchestrator", shell_output("#{bin}/orchestrator --help")
               assert_match "orchestrator", shell_output("#{bin}/tiffany-loop orchestrator --help 2>/dev/null")
+              assert_match "orchestrator status", shell_output("#{bin}/tiffany-loop status --help 2>/dev/null")
             end
           end
           EOF
