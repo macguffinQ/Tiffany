@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.23] - 2026-06-22
+
+### Fixed
+
+- Synchronized the packaged `tiffany-loop` UI crate versions with the root
+  release version so `tiffany-loop --version`, `tiffany --version`, and
+  `orchestrator --version` agree after Homebrew installs.
+- Added release checks that fail when root and UI crate versions drift.
+
 ## [0.1.22] - 2026-06-22
 
 ### Added

@@ -84,6 +84,37 @@ root_package_version() {
   ' "$repo_dir/Cargo.toml"
 }
 
+package_version_at() {
+  local manifest="$1"
+  awk '
+    /^\[package\]/ { in_package = 1; next }
+    /^\[/ && in_package { exit }
+    in_package && $1 == "version" {
+      gsub(/"/, "", $3)
+      print $3
+      exit
+    }
+  ' "$manifest"
+}
+
+check_release_version_sync() {
+  local expected="$1"
+  local manifest version
+  for manifest in \
+    "$repo_dir/tiffany-ui/codex-rs/tiffany-cli/Cargo.toml" \
+    "$repo_dir/tiffany-ui/codex-rs/tui/Cargo.toml"
+  do
+    version="$(package_version_at "$manifest")"
+    if [[ "$version" != "$expected" ]]; then
+      echo "Release version mismatch in ${manifest#$repo_dir/}" >&2
+      echo "expected: $expected" >&2
+      echo "actual:   ${version:-<missing>}" >&2
+      exit 1
+    fi
+  done
+  echo "root, tiffany-cli, and codex-tui versions match $expected"
+}
+
 previous_release_tag() {
   local current_tag="$1"
   git -C "$repo_dir" tag --list 'v[0-9]*' --sort=-v:refname | while read -r tag; do
@@ -115,6 +146,7 @@ if [[ -n "$release_tag" ]]; then
     exit 1
   fi
   echo "tag $release_tag matches package version $package_version"
+  check_release_version_sync "$package_version"
 
   if [[ "${TIFFANY_RELEASE_ALLOW_FREQUENT:-}" != "1" ]]; then
     previous_tag="$(previous_release_tag "$release_tag")"
