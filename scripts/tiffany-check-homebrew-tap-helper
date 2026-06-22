@@ -60,6 +60,13 @@ assert_contains 'url "https://github.com/example/tiffany-loop/releases/download/
 assert_contains 'sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
 assert_contains 'url "https://github.com/example/tiffany-loop/archive/refs/tags/v9.8.7.tar.gz"'
 assert_contains "sha256 \"${source_sha}\""
+assert_contains 'bin.install "orchestrator", "tiffany-loop", "tiffany"'
+assert_contains 'system "cargo", "install", *std_cargo_args, "--profile", "tiffany-dist"'
+assert_contains 'system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/tiffany-cli"), "--profile", "tiffany-dist"'
+assert_contains 'system "strip", bin/"orchestrator", bin/"tiffany-loop", bin/"tiffany" if OS.mac? || OS.linux?'
+assert_contains 'assert_match "orchestrator", shell_output("#{bin}/orchestrator --help")'
+assert_contains 'assert_match "orchestrator", shell_output("#{bin}/tiffany-loop orchestrator --help 2>/dev/null")'
+assert_contains 'assert_match "orchestrator status", shell_output("#{bin}/tiffany-loop status --help 2>/dev/null")'
 
 if command -v ruby >/dev/null 2>&1; then
   ruby -c "$formula" >/dev/null

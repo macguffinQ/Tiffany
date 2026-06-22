@@ -287,7 +287,7 @@ fn codex_role_command(spec: &RoleCliSpec, system_prompt: &str, user_prompt: &str
         .arg("--ignore-user-config")
         .arg("--model")
         .arg(&spec.model)
-        .arg("--cwd")
+        .arg("--cd")
         .arg(cwd);
     for (key, value) in &spec.config_overrides {
         cmd.arg("-c")
@@ -1193,5 +1193,19 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair[0] == "--permission-mode" && pair[1] == "bypassPermissions"));
+    }
+
+    #[test]
+    fn codex_role_command_uses_current_workdir_flag() {
+        let spec = RoleCliSpec::new(RoleCliRuntime::Codex, "codex", "gpt-5.1");
+        let cmd = codex_role_command(&spec, "system", "user");
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.iter().any(|arg| arg == "--cd"));
+        assert!(!args.iter().any(|arg| arg == "--cwd"));
     }
 }

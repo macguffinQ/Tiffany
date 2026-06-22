@@ -87,15 +87,9 @@ impl WorkerAdapter for CodexCLIAdapter {
             format!("{}\n\n---\nPrior context:\n{}", task.prompt, history)
         };
 
-        // codex CLI usage: `codex exec --json --model <m> --cwd <d> <prompt>`
+        // codex CLI usage: `codex exec --json --model <m> --cd <d> <prompt>`
         // (Reads the OpenAI-style base_url + key from ~/.codex/config.toml)
-        let mut cmd = Command::new(&self.binary);
-        cmd.arg("exec")
-            .arg("--json")
-            .arg("--model")
-            .arg(&model)
-            .arg("--cwd")
-            .arg(&worktree);
+        let mut cmd = codex_exec_command(&self.binary, &model, &worktree);
 
         if let Some(provider_id) = task.model_provider_hint.as_deref() {
             if let Some(provider) = self.providers.get(provider_id) {
@@ -261,6 +255,17 @@ impl WorkerAdapter for CodexCLIAdapter {
     }
 }
 
+fn codex_exec_command(binary: &str, model: &str, worktree: &std::path::Path) -> Command {
+    let mut cmd = Command::new(binary);
+    cmd.arg("exec")
+        .arg("--json")
+        .arg("--model")
+        .arg(model)
+        .arg("--cd")
+        .arg(worktree);
+    cmd
+}
+
 fn apply_codex_provider_config(cmd: &mut Command, provider_id: &str, provider: &ProviderConfig) {
     let kind = provider.kind.to_ascii_lowercase();
     if kind != "openai" && kind != "ollama" {
@@ -359,4 +364,28 @@ fn toml_string_literal(value: &str) -> String {
     }
     escaped.push('"');
     escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_exec_command_uses_current_workdir_flag() {
+        let cmd = codex_exec_command("codex", "gpt-5.1", std::path::Path::new("/tmp/repo"));
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.iter().any(|arg| arg == "--cd"));
+        assert!(!args.iter().any(|arg| arg == "--cwd"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--model" && pair[1] == "gpt-5.1"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--cd" && pair[1] == "/tmp/repo"));
+    }
 }
