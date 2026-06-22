@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.22] - 2026-06-22
+
+### Added
+
+- Added `orchestrator doctor` and `/doctor` diagnostics for Codex CLI
+  `exec --cd` compatibility so outdated or miswired Codex runtimes are caught
+  before planner, critic, reviewer, or `worker-codex` runs fail.
+
 ## [0.1.21] - 2026-06-22
 
 ### Fixed
