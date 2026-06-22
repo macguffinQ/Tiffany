@@ -21,15 +21,24 @@ if [[ "$#" -ge 3 && "$1" == "release" && "$2" == "view" ]]; then
   exit 0
 fi
 
-if [[ "$#" -ge 2 && "$1" == "api" ]]; then
-  printf 'source archive bytes for tiffany-loop test\n'
-  exit 0
-fi
-
 echo "unexpected fake gh invocation: $*" >&2
 exit 2
 EOF
 chmod +x "$fake_bin/gh"
+
+cat > "$fake_bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -ge 1 && "${*: -1}" == "https://github.com/example/tiffany-loop/archive/refs/tags/v9.8.7.tar.gz" ]]; then
+  printf 'source archive bytes for tiffany-loop test\n'
+  exit 0
+fi
+
+echo "unexpected fake curl invocation: $*" >&2
+exit 2
+EOF
+chmod +x "$fake_bin/curl"
 
 formula="$tmp_root/tiffany-loop.rb"
 PATH="$fake_bin:$PATH" "$repo_dir/scripts/tiffany-update-homebrew-tap" \

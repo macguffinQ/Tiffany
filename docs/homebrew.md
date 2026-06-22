@@ -83,9 +83,10 @@ additional release archives are wired into the workflow and formula.
 
 The workflow calls `./scripts/tiffany-update-homebrew-tap` to generate and
 commit the formula. Keep formula changes in that script so automatic releases
-and manual tap repairs stay identical. The workflow computes checksums from
-authenticated GitHub APIs, so it works while the main repository is private and
-continues to work after the repository is public.
+and manual tap repairs stay identical. The generated formula uses the public
+release asset URL and the public tagged source archive URL, and computes
+checksums from those exact URLs so Homebrew validates the same bytes it
+downloads.
 
 Tagged preflight checks enforce a 24-hour cooldown after the previous release
 tag. This keeps small fixes batched under `CHANGELOG.md` `Unreleased` instead
@@ -121,14 +122,12 @@ Use `--dry-run` to print the generated formula without writing files, or
 After pushing the tap, verify the published archive before telling users to install:
 
 ```bash
-gh release download "$tag" \
-  --repo macguffinQ/Tiffany \
-  --pattern "$asset" \
-  --dir /tmp \
-  --clobber
-shasum -a 256 "/tmp/${asset}"
-tar -tzf "/tmp/${asset}" | head
+./scripts/tiffany-post-release-check --tag "$tag"
 ```
+
+Use `--skip-install` to verify only the GitHub Release asset and Homebrew tap
+formula checksums without running `brew upgrade`, `tiffany-loop doctor`, and
+`brew test`.
 
 From a source checkout with matching binaries built, maintainers can also run
 the isolated install smoke against a binary directory:

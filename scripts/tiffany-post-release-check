@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/tiffany-post-release-check --tag vX.Y.Z [options]
+
+Verifies the published GitHub Release, Homebrew tap formula, and local Homebrew
+install surface for a release tag.
+
+Options:
+  --tag TAG        Release tag to verify.
+  --repo REPO      GitHub release repo. Default: macguffinQ/Tiffany.
+  --tap REPO       Homebrew tap repo. Default: macguffinQ/tap.
+  --formula NAME   Formula name. Default: tiffany-loop.
+  --skip-install   Skip brew update/upgrade/test and only verify release + tap metadata.
+
+Examples:
+  ./scripts/tiffany-post-release-check --tag v0.1.21
+  ./scripts/tiffany-post-release-check --tag v0.1.21 --skip-install
+EOF
+}
+
+sha256_stream() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  else
+    echo "sha256sum or shasum is required" >&2
+    exit 1
+  fi
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "$1 is required" >&2
+    exit 1
+  fi
+}
+
+tag=""
+release_repo="macguffinQ/Tiffany"
+tap_repo="macguffinQ/tap"
+formula_name="tiffany-loop"
+skip_install=false
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --tag)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      tag="$2"
+      shift
+      ;;
+    --tag=*)
+      tag="${1#--tag=}"
+      ;;
+    --repo)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      release_repo="$2"
+      shift
+      ;;
+    --repo=*)
+      release_repo="${1#--repo=}"
+      ;;
+    --tap)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      tap_repo="$2"
+      shift
+      ;;
+    --tap=*)
+      tap_repo="${1#--tap=}"
+      ;;
+    --formula)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      formula_name="$2"
+      shift
+      ;;
+    --formula=*)
+      formula_name="${1#--formula=}"
+      ;;
+    --skip-install)
+      skip_install=true
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ -z "$tag" ]]; then
+  usage >&2
+  exit 2
+fi
+
+require_cmd gh
+require_cmd jq
+require_cmd curl
+require_cmd brew
+
+version="${tag#v}"
+asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
+asset_url="https://github.com/${release_repo}/releases/download/${tag}/${asset}"
+source_url="https://github.com/${release_repo}/archive/refs/tags/${tag}.tar.gz"
+formula_ref="${tap_repo}/${formula_name}"
+
+step() {
+  printf '\n== %s ==\n' "$1"
+}
+
+assert_eq() {
+  local label="$1"
+  local expected="$2"
+  local actual="$3"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "$label mismatch" >&2
+    echo "expected: $expected" >&2
+    echo "actual:   $actual" >&2
+    exit 1
+  fi
+}
+
+step "GitHub Release"
+release_json="$(gh release view "$tag" --repo "$release_repo" --json tagName,isDraft,isPrerelease,assets)"
+assert_eq "release tag" "$tag" "$(printf '%s' "$release_json" | jq -r '.tagName')"
+assert_eq "release draft state" "false" "$(printf '%s' "$release_json" | jq -r '.isDraft')"
+asset_digest="$(printf '%s' "$release_json" | jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .digest')"
+asset_size="$(printf '%s' "$release_json" | jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .size')"
+if [[ -z "$asset_digest" || "$asset_digest" == "null" ]]; then
+  echo "release asset not found: $asset" >&2
+  exit 1
+fi
+arm_sha="${asset_digest#sha256:}"
+echo "asset: $asset"
+echo "asset sha256: $arm_sha"
+echo "asset size: $asset_size"
+
+step "Homebrew tap formula"
+brew update >/dev/null
+tap_dir="$(brew --repository "$tap_repo")"
+formula_path="$tap_dir/Formula/${formula_name}.rb"
+if [[ ! -f "$formula_path" ]]; then
+  echo "formula not found: $formula_path" >&2
+  exit 1
+fi
+
+formula_text="$(cat "$formula_path")"
+if ! grep -F -- "$asset_url" "$formula_path" >/dev/null; then
+  echo "formula does not reference expected asset URL: $asset_url" >&2
+  exit 1
+fi
+if ! grep -F -- "$source_url" "$formula_path" >/dev/null; then
+  echo "formula does not reference expected source URL: $source_url" >&2
+  exit 1
+fi
+formula_arm_sha="$(printf '%s' "$formula_text" | awk -v url="$asset_url" '
+  $0 ~ "url \"" url "\"" { in_url = 1; next }
+  in_url && $1 == "sha256" {
+    gsub(/"/, "", $2)
+    print $2
+    exit
+  }
+')"
+formula_source_sha="$(printf '%s' "$formula_text" | awk -v url="$source_url" '
+  $0 ~ "url \"" url "\"" { in_url = 1; next }
+  in_url && $1 == "sha256" {
+    gsub(/"/, "", $2)
+    print $2
+    exit
+  }
+')"
+assert_eq "formula asset sha256" "$arm_sha" "$formula_arm_sha"
+source_sha="$(curl -fsSL "$source_url" | sha256_stream)"
+assert_eq "formula source sha256" "$source_sha" "$formula_source_sha"
+echo "formula: $formula_path"
+echo "source sha256: $source_sha"
+
+if [[ "$skip_install" == "true" ]]; then
+  step "result"
+  echo "post-release metadata checks passed for $tag"
+  exit 0
+fi
+
+step "Homebrew install"
+brew upgrade "$formula_ref"
+installed_version="$(brew list --versions "$formula_ref" | awk '{print $2}' | tail -n 1)"
+assert_eq "installed formula version" "$version" "$installed_version"
+
+tiffany_version="$(tiffany-loop --version | awk '{print $2}')"
+orchestrator_version="$(orchestrator --version | awk '{print $2}')"
+alias_version="$(tiffany --version | awk '{print $2}')"
+assert_eq "tiffany-loop version" "$version" "$tiffany_version"
+assert_eq "orchestrator version" "$version" "$orchestrator_version"
+assert_eq "tiffany alias version" "$version" "$alias_version"
+
+tiffany-loop doctor >/tmp/tiffany-post-release-doctor.log
+if ! grep -F -- "all required checks passed" /tmp/tiffany-post-release-doctor.log >/dev/null; then
+  cat /tmp/tiffany-post-release-doctor.log >&2
+  exit 1
+fi
+brew test "$formula_ref"
+
+step "result"
+echo "post-release checks passed for $tag"
