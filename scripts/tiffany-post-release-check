@@ -138,6 +138,15 @@ assert_eq() {
   fi
 }
 
+assert_formula_contains() {
+  local needle="$1"
+  if ! grep -F -- "$needle" "$formula_path" >/dev/null; then
+    echo "formula missing expected text: $needle" >&2
+    print_tap_checkout_diagnostics "$tap_dir" "$tap_repo"
+    exit 1
+  fi
+}
+
 print_tap_checkout_diagnostics() {
   local tap_dir="$1"
   local tap_repo="$2"
@@ -203,6 +212,10 @@ if ! grep -F -- "$source_url" "$formula_path" >/dev/null; then
   print_tap_checkout_diagnostics "$tap_dir" "$tap_repo"
   exit 1
 fi
+assert_formula_contains "def caveats"
+assert_formula_contains "Start Tiffany Loop with:"
+assert_formula_contains "brew untap macguffinQ/tap"
+assert_formula_contains "tiffany-loop is the primary command"
 formula_arm_sha="$(printf '%s' "$formula_text" | awk -v url="$asset_url" '
   $0 ~ "url \"" url "\"" { in_url = 1; next }
   in_url && $1 == "sha256" {
