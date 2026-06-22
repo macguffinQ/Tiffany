@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.21] - 2026-06-22
+
+### Fixed
+
+- Updated Codex CLI subprocess invocations for planner, critic, reviewer, and
+  `worker-codex` to use the current `--cd` workdir flag instead of the removed
+  `--cwd` flag, fixing empty planner/reviewer JSON failures with newer Codex
+  CLI versions.
+- Added Homebrew tap helper assertions that the generated formula installs and
+  tests all shipped binaries: `orchestrator`, `tiffany-loop`, and `tiffany`.
+
 ## [0.1.20] - 2026-06-22
 
 ### Added
