@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_dir/scripts/lib/tiffany-cargo.sh"
 
 usage() {
   cat <<'EOF'
@@ -56,10 +57,7 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 
-cargo_bin="${CARGO:-cargo}"
-if ! command -v "$cargo_bin" >/dev/null 2>&1; then
-  cargo_bin="$HOME/.cargo/bin/cargo"
-fi
+cargo_bin="$(tiffany_resolve_cargo)"
 
 target_dir="${TIFFANY_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_dir/target}}"
 case "$target_dir" in
@@ -202,6 +200,9 @@ fi
 
 step "homebrew tap helper"
 "$repo_dir/scripts/tiffany-check-homebrew-tap-helper"
+
+step "script helpers"
+"$repo_dir/scripts/tiffany-check-script-helpers"
 
 if [[ "$mode" == "full" ]]; then
   step "tiffany fork targeted format"

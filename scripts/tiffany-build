@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_dir/scripts/lib/tiffany-cargo.sh"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   printf '%s\n' \
@@ -28,10 +29,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-cargo_bin="${CARGO:-cargo}"
-if ! command -v "$cargo_bin" >/dev/null 2>&1; then
-  cargo_bin="$HOME/.cargo/bin/cargo"
-fi
+cargo_bin="$(tiffany_resolve_cargo)"
 
 target_dir="${TIFFANY_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_dir/target}}"
 case "$target_dir" in

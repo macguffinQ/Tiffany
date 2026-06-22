@@ -1357,8 +1357,13 @@ fn check_rust_tool(
     args: &[&str],
     description: &str,
 ) {
-    let candidates =
-        rust_tool_candidates(binary, env_var, std::env::var_os(env_var), home::home_dir());
+    let candidates = rust_tool_candidates(
+        binary,
+        env_var,
+        std::env::var_os(env_var),
+        std::env::var_os("CARGO_HOME"),
+        home::home_dir(),
+    );
     let mut failures = Vec::new();
 
     for candidate in candidates {
@@ -1382,7 +1387,7 @@ fn check_rust_tool(
 
     builder.warn(format!("{binary}: not found ({description})"));
     builder.hint(
-        "install Rust with rustup, or export PATH=\"$HOME/.cargo/bin:$PATH\" before running tiffany-loop",
+        "install Rust with rustup, set CARGO/CARGO_HOME, or export PATH=\"$HOME/.cargo/bin:$PATH\" before running tiffany-loop",
     );
     if let Some(last_failure) = failures
         .iter()
@@ -1411,6 +1416,7 @@ fn rust_tool_candidates(
     binary: &str,
     env_var: &str,
     env_value: Option<OsString>,
+    cargo_home: Option<OsString>,
     home_dir: Option<PathBuf>,
 ) -> Vec<RustToolCandidate> {
     let mut candidates = Vec::new();
@@ -1425,6 +1431,17 @@ fn rust_tool_candidates(
         command: binary.to_string(),
         source: "PATH".to_string(),
     });
+
+    if let Some(cargo_home) = cargo_home.filter(|value| !value.is_empty()) {
+        candidates.push(RustToolCandidate {
+            command: PathBuf::from(cargo_home)
+                .join("bin")
+                .join(binary)
+                .to_string_lossy()
+                .to_string(),
+            source: "CARGO_HOME/bin".to_string(),
+        });
+    }
 
     if let Some(home) = home_dir {
         candidates.push(RustToolCandidate {
@@ -2315,6 +2332,7 @@ mod tests {
             "cargo",
             "CARGO",
             Some(OsString::from("/opt/rust/bin/cargo")),
+            Some(OsString::from("/custom/cargo-home")),
             Some(PathBuf::from("/home/alice")),
         );
 
@@ -2330,6 +2348,10 @@ mod tests {
                     source: "PATH".into(),
                 },
                 RustToolCandidate {
+                    command: "/custom/cargo-home/bin/cargo".into(),
+                    source: "CARGO_HOME/bin".into(),
+                },
+                RustToolCandidate {
                     command: "/home/alice/.cargo/bin/cargo".into(),
                     source: "~/.cargo/bin".into(),
                 },
@@ -2340,7 +2362,7 @@ mod tests {
     #[test]
     fn rust_tool_candidates_deduplicate_env_matching_path() {
         let candidates =
-            rust_tool_candidates("cargo", "CARGO", Some(OsString::from("cargo")), None);
+            rust_tool_candidates("cargo", "CARGO", Some(OsString::from("cargo")), None, None);
 
         assert_eq!(
             candidates,

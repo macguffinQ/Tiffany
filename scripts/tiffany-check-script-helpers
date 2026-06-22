@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+tmp_root="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_root"
+}
+trap cleanup EXIT
+
+fake_cargo_home="$tmp_root/cargo-home"
+mkdir -p "$fake_cargo_home/bin"
+cat >"$fake_cargo_home/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+printf 'fake cargo from CARGO_HOME\n'
+EOF
+chmod +x "$fake_cargo_home/bin/cargo"
+
+resolved="$(
+  env -i \
+    HOME="$tmp_root/home" \
+    CARGO_HOME="$fake_cargo_home" \
+    PATH="/usr/bin:/bin" \
+    bash -c "source '$repo_dir/scripts/lib/tiffany-cargo.sh'; tiffany_resolve_cargo"
+)"
+
+if [[ "$resolved" != "$fake_cargo_home/bin/cargo" ]]; then
+  echo "expected CARGO_HOME/bin cargo fallback" >&2
+  echo "expected: $fake_cargo_home/bin/cargo" >&2
+  echo "actual:   $resolved" >&2
+  exit 1
+fi
+
+explicit="$(
+  env -i \
+    CARGO="$fake_cargo_home/bin/cargo" \
+    PATH="/usr/bin:/bin" \
+    bash -c "source '$repo_dir/scripts/lib/tiffany-cargo.sh'; tiffany_resolve_cargo"
+)"
+
+if [[ "$explicit" != "$fake_cargo_home/bin/cargo" ]]; then
+  echo "expected explicit CARGO to win" >&2
+  echo "expected: $fake_cargo_home/bin/cargo" >&2
+  echo "actual:   $explicit" >&2
+  exit 1
+fi
+
+echo "script helper checks passed"
