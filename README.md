@@ -316,8 +316,8 @@ strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v ti
 
 ```bash
 # Example: install a downloaded archive
-tar -xzf tiffany-loop-v0.1.24-aarch64-apple-darwin.tar.gz
-cd tiffany-loop-v0.1.24-aarch64-apple-darwin
+tar -xzf tiffany-loop-v0.1.25-aarch64-apple-darwin.tar.gz
+cd tiffany-loop-v0.1.25-aarch64-apple-darwin
 chmod +x orchestrator tiffany-loop tiffany
 ./tiffany-loop setup
 ./tiffany-loop doctor
@@ -730,8 +730,8 @@ cargo build --release    # release, ~5-8min first time
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --quick
-./scripts/tiffany-release-preflight --full --tag v0.1.24   # before tagging
-./scripts/tiffany-post-release-check --tag v0.1.24          # after release/tap update
+./scripts/tiffany-release-preflight --full --tag v0.1.25   # before tagging
+./scripts/tiffany-post-release-check --tag v0.1.25          # after release/tap update
 # Same-day follow-up tags are blocked by default; reserve this for urgent fixes:
 # TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full --tag vX.Y.Z
 

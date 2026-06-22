@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.25] - 2026-06-22
+
+### Added
+
+- Added `doctor` diagnostics for stale or divergent Homebrew tap checkouts,
+  including the tap checkout commit, upstream, ahead/behind state, dirty state,
+  and repair commands when local tap history blocks package updates.
+- Added post-release check diagnostics that print the same tap repair commands
+  when the local Homebrew formula does not reference the expected release URLs.
+
 ## [0.1.24] - 2026-06-22
 
 ### Fixed
