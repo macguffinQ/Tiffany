@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.24] - 2026-06-22
+
+### Fixed
+
+- Kept completed worker output visible when reviewer JSON parsing or reviewer
+  subprocess calls fail; these now render as review warnings instead of
+  aborting the whole orchestrator run.
+- Added `doctor` checks for both PATH-visible command versions and the actual
+  launch pair versions used by `orchestrator tui`, catching stale adjacent
+  `tiffany-loop` binaries before users hit confusing runtime failures.
+
 ## [0.1.23] - 2026-06-22
 
 ### Fixed
