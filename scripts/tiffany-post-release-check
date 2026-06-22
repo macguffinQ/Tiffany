@@ -138,6 +138,36 @@ assert_eq() {
   fi
 }
 
+print_tap_checkout_diagnostics() {
+  local tap_dir="$1"
+  local tap_repo="$2"
+  echo "tap checkout: $tap_dir" >&2
+  if [[ ! -d "$tap_dir/.git" ]]; then
+    echo "tap checkout is not a git repository" >&2
+    echo "fix: brew untap $tap_repo && brew tap $tap_repo" >&2
+    return
+  fi
+
+  local head upstream counts ahead behind dirty
+  head="$(git -C "$tap_dir" rev-parse --short HEAD 2>/dev/null || true)"
+  upstream="$(git -C "$tap_dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  counts="$(git -C "$tap_dir" rev-list --left-right --count 'HEAD...@{u}' 2>/dev/null || true)"
+  ahead="$(awk '{print $1}' <<<"$counts")"
+  behind="$(awk '{print $2}' <<<"$counts")"
+  dirty="$(git -C "$tap_dir" status --porcelain 2>/dev/null || true)"
+
+  echo "tap git head: ${head:-unknown}" >&2
+  echo "tap upstream: ${upstream:-none}" >&2
+  if [[ -n "$counts" ]]; then
+    echo "tap ahead/behind: ${ahead:-0}/${behind:-0}" >&2
+  fi
+  if [[ -n "$dirty" ]]; then
+    echo "tap has local changes" >&2
+  fi
+  echo "fix: git -C \"$tap_dir\" fetch origin main && git -C \"$tap_dir\" reset --hard origin/main" >&2
+  echo "or:  brew untap $tap_repo && brew tap $tap_repo" >&2
+}
+
 step "GitHub Release"
 release_json="$(gh release view "$tag" --repo "$release_repo" --json tagName,isDraft,isPrerelease,assets)"
 assert_eq "release tag" "$tag" "$(printf '%s' "$release_json" | jq -r '.tagName')"
@@ -165,10 +195,12 @@ fi
 formula_text="$(cat "$formula_path")"
 if ! grep -F -- "$asset_url" "$formula_path" >/dev/null; then
   echo "formula does not reference expected asset URL: $asset_url" >&2
+  print_tap_checkout_diagnostics "$tap_dir" "$tap_repo"
   exit 1
 fi
 if ! grep -F -- "$source_url" "$formula_path" >/dev/null; then
   echo "formula does not reference expected source URL: $source_url" >&2
+  print_tap_checkout_diagnostics "$tap_dir" "$tap_repo"
   exit 1
 fi
 formula_arm_sha="$(printf '%s' "$formula_text" | awk -v url="$asset_url" '

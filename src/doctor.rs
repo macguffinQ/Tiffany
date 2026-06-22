@@ -1475,6 +1475,7 @@ fn check_homebrew(builder: &mut DoctorReportBuilder) {
         )),
         Err(err) => builder.warn(format!("homebrew tap check failed: {err}")),
     }
+    check_homebrew_tap_checkout(builder, "macguffinQ/tap");
 
     match command_summary("brew", &["list", "--versions", "tiffany-loop"]) {
         Ok(summary) if summary.success && !summary.stdout.trim().is_empty() => {
@@ -1505,6 +1506,139 @@ fn check_homebrew(builder: &mut DoctorReportBuilder) {
     }
 
     check_homebrew_binary_visibility(builder);
+}
+
+fn check_homebrew_tap_checkout(builder: &mut DoctorReportBuilder, tap: &str) {
+    let tap_dir = match command_summary("brew", &["--repository", tap]) {
+        Ok(summary) if summary.success && !summary.stdout.trim().is_empty() => {
+            PathBuf::from(summary.stdout.trim())
+        }
+        Ok(summary) => {
+            builder.warn(format!(
+                "homebrew tap repository check failed: {}",
+                summary.short_failure()
+            ));
+            return;
+        }
+        Err(err) => {
+            builder.warn(format!("homebrew tap repository check failed: {err}"));
+            return;
+        }
+    };
+
+    if !tap_dir.join(".git").exists() {
+        builder.warn(format!(
+            "homebrew tap checkout is not a git repository: {}",
+            tap_dir.display()
+        ));
+        builder.hint(format!("run `brew untap {tap} && brew tap {tap}`"));
+        return;
+    }
+
+    match homebrew_tap_git_state(&tap_dir) {
+        Ok(state) => report_homebrew_tap_git_state(builder, tap, &tap_dir, &state),
+        Err(err) => builder.warn(format!(
+            "homebrew tap git state unavailable for {}: {err}",
+            tap_dir.display()
+        )),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HomebrewTapGitState {
+    head: String,
+    upstream: Option<String>,
+    ahead: usize,
+    behind: usize,
+    dirty: bool,
+}
+
+fn homebrew_tap_git_state(path: &Path) -> std::io::Result<HomebrewTapGitState> {
+    let head = git_stdout(path, &["rev-parse", "--short", "HEAD"])?;
+    let upstream = git_stdout(
+        path,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .ok()
+    .filter(|value| !value.trim().is_empty());
+    let (ahead, behind) = if upstream.is_some() {
+        let counts = git_stdout(
+            path,
+            &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
+        )?;
+        parse_git_ahead_behind(&counts).unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
+    let dirty = !git_stdout(path, &["status", "--porcelain"])?
+        .trim()
+        .is_empty();
+    Ok(HomebrewTapGitState {
+        head,
+        upstream,
+        ahead,
+        behind,
+        dirty,
+    })
+}
+
+fn git_stdout(path: &Path, args: &[&str]) -> std::io::Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn parse_git_ahead_behind(output: &str) -> Option<(usize, usize)> {
+    let mut parts = output.split_whitespace();
+    let ahead = parts.next()?.parse().ok()?;
+    let behind = parts.next()?.parse().ok()?;
+    Some((ahead, behind))
+}
+
+fn report_homebrew_tap_git_state(
+    builder: &mut DoctorReportBuilder,
+    tap: &str,
+    tap_dir: &Path,
+    state: &HomebrewTapGitState,
+) {
+    let upstream = state.upstream.as_deref().unwrap_or("no upstream");
+    if state.ahead == 0 && state.behind == 0 && !state.dirty {
+        builder.ok(format!(
+            "homebrew tap checkout: {} at {} ({upstream})",
+            tap_dir.display(),
+            state.head
+        ));
+        return;
+    }
+
+    builder.warn(format!(
+        "homebrew tap checkout may block updates: {} at {} ({upstream}, ahead {}, behind {}, dirty {})",
+        tap_dir.display(),
+        state.head,
+        state.ahead,
+        state.behind,
+        if state.dirty { "yes" } else { "no" }
+    ));
+    if state.ahead > 0 || state.dirty {
+        builder.hint(format!(
+            "reset the local tap checkout with `git -C {} fetch origin main && git -C {} reset --hard origin/main`",
+            tap_dir.display(),
+            tap_dir.display()
+        ));
+        builder.hint(format!(
+            "or recreate it with `brew untap {tap} && brew tap {tap}`"
+        ));
+    } else if state.behind > 0 {
+        builder.hint("run `brew update` before upgrading tiffany-loop");
+    }
 }
 
 fn parse_homebrew_tiffany_version(output: &str) -> Option<&str> {
@@ -2088,6 +2222,65 @@ mod tests {
             Some("0.1.7")
         );
         assert_eq!(parse_homebrew_tiffany_version("other 1.0\n"), None);
+    }
+
+    #[test]
+    fn parses_git_ahead_behind_counts() {
+        assert_eq!(parse_git_ahead_behind("2\t1\n"), Some((2, 1)));
+        assert_eq!(parse_git_ahead_behind("0 0"), Some((0, 0)));
+        assert_eq!(parse_git_ahead_behind("bad"), None);
+    }
+
+    #[test]
+    fn homebrew_tap_state_reports_divergent_local_checkout() {
+        let mut builder = DoctorReportBuilder::default();
+        let state = HomebrewTapGitState {
+            head: "060974f".into(),
+            upstream: Some("origin/main".into()),
+            ahead: 2,
+            behind: 10,
+            dirty: false,
+        };
+
+        report_homebrew_tap_git_state(
+            &mut builder,
+            "macguffinQ/tap",
+            Path::new("/opt/homebrew/Library/Taps/macguffinq/homebrew-tap"),
+            &state,
+        );
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 0);
+        assert!(rendered.contains("homebrew tap checkout may block updates"));
+        assert!(rendered.contains("ahead 2, behind 10"));
+        assert!(rendered.contains("reset --hard origin/main"));
+        assert!(rendered.contains("brew untap macguffinQ/tap && brew tap macguffinQ/tap"));
+    }
+
+    #[test]
+    fn homebrew_tap_state_reports_clean_checkout_as_ok() {
+        let mut builder = DoctorReportBuilder::default();
+        let state = HomebrewTapGitState {
+            head: "5983c0e".into(),
+            upstream: Some("origin/main".into()),
+            ahead: 0,
+            behind: 0,
+            dirty: false,
+        };
+
+        report_homebrew_tap_git_state(
+            &mut builder,
+            "macguffinQ/tap",
+            Path::new("/opt/homebrew/Library/Taps/macguffinq/homebrew-tap"),
+            &state,
+        );
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert!(rendered.contains("homebrew tap checkout:"));
+        assert!(rendered.contains("5983c0e"));
+        assert!(!rendered.contains("may block updates"));
     }
 
     #[test]
