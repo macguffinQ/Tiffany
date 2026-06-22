@@ -164,6 +164,24 @@ tiffany-loop setup
 tiffany-loop
 ```
 
+已经安装过时，升级用：
+
+```bash
+brew update
+brew upgrade macguffinQ/tap/tiffany-loop
+tiffany-loop --version
+```
+
+如果 Homebrew 仍然提示旧版本已经是最新，说明本地 tap 缓存卡住了，重置 tap：
+
+```bash
+brew untap macguffinQ/tap
+brew tap macguffinQ/tap
+brew reinstall macguffinQ/tap/tiffany-loop
+tiffany-loop --version
+orchestrator --version
+```
+
 Homebrew 包会同时安装三个命令：
 
 - `tiffany-loop`：主终端 UI，优先使用这个命令。

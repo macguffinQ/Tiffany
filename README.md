@@ -259,6 +259,24 @@ tiffany-loop setup
 tiffany-loop
 ```
 
+Already installed:
+
+```bash
+brew update
+brew upgrade macguffinQ/tap/tiffany-loop
+tiffany-loop --version
+```
+
+If Homebrew still says an old version is up to date, reset the local tap cache:
+
+```bash
+brew untap macguffinQ/tap
+brew tap macguffinQ/tap
+brew reinstall macguffinQ/tap/tiffany-loop
+tiffany-loop --version
+orchestrator --version
+```
+
 The Homebrew package installs three commands:
 
 - `tiffany-loop` - the primary terminal UI. Start here.

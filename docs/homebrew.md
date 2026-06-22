@@ -37,6 +37,35 @@ Inside the TUI, use `/provider` and `/role`.
 
 Note: if `macguffinQ/Tiffany` is private, public Homebrew installs cannot download the release archive or source archive. Maintainers with repository access can still use the formula for validation.
 
+## Upgrade Or Stale Tap Recovery
+
+Use `brew upgrade` or `brew reinstall` for an existing install. `brew install`
+can legitimately print "already installed and up-to-date" when the local tap
+checkout is stale, even if GitHub already has a newer formula.
+
+```bash
+brew update
+brew upgrade macguffinQ/tap/tiffany-loop
+tiffany-loop --version
+```
+
+If the version is still old, reset the local tap checkout:
+
+```bash
+brew untap macguffinQ/tap
+brew tap macguffinQ/tap
+brew reinstall macguffinQ/tap/tiffany-loop
+tiffany-loop --version
+orchestrator --version
+```
+
+To inspect what Homebrew is actually using:
+
+```bash
+brew --repo macguffinQ/tap
+sed -n '1,16p' "$(brew --repo macguffinQ/tap)/Formula/tiffany-loop.rb"
+```
+
 If Homebrew reports that `tiffany-loop` is installed but the shell cannot find
 the command, first check the package prefix and PATH:
 
