@@ -58,8 +58,9 @@ Homebrew's `bin` directory to the shell startup file.
 The release workflow includes a `homebrew` job. When `HOMEBREW_TAP_TOKEN` is
 configured, tagged releases automatically update the Homebrew tap after the
 GitHub Release is published. If the secret is missing, the GitHub Release still
-publishes successfully and the workflow summary prints a warning with the manual
-tap update path.
+publishes successfully, but the `homebrew` job fails and the workflow summary
+prints the manual tap update path. Treat that red job as intentional: Homebrew
+is not synchronized until the tap commit is pushed and post-release checks pass.
 
 Create a fine-grained GitHub token with contents read/write access to `macguffinQ/homebrew-tap`, then add it to this repository:
 
@@ -94,8 +95,8 @@ of producing noisy patch releases. For an urgent installer, startup, or security
 fix, set the repository variable `TIFFANY_RELEASE_ALLOW_FREQUENT=1` for that
 tag push, then remove it after the release.
 
-If the automatic tap update is skipped or fails, confirm the GitHub Release, tap
-commit, and formula with:
+If the automatic tap update fails, confirm the GitHub Release, tap commit, and
+formula with:
 
 ```bash
 gh run list --repo macguffinQ/Tiffany --workflow Release --limit 5

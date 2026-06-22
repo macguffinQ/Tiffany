@@ -217,36 +217,29 @@ jobs:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Check Homebrew tap token
-        id: tap-token
+      - name: Require Homebrew tap token
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${HOMEBREW_TAP_TOKEN}" ]]; then
-            echo "available=false" >> "${GITHUB_OUTPUT}"
             {
-              echo "## Homebrew tap update skipped"
+              echo "## Homebrew tap update required"
               echo
-              echo "HOMEBREW_TAP_TOKEN is not configured, so this workflow published the GitHub Release but did not update \`${HOMEBREW_TAP_REPO}\`."
+              echo "The GitHub Release was published, but \`HOMEBREW_TAP_TOKEN\` is not configured, so this workflow cannot update \`${HOMEBREW_TAP_REPO}\`."
               echo
-              echo "Configure a repository secret named \`HOMEBREW_TAP_TOKEN\` with write access to \`${HOMEBREW_TAP_REPO}\`, or update the tap manually with the commands in \`docs/homebrew.md\`."
+              echo "Configure a repository secret named \`HOMEBREW_TAP_TOKEN\` with contents write access to \`${HOMEBREW_TAP_REPO}\`, or update the tap manually:"
               echo
               echo "\`\`\`bash"
-              echo "git clone https://github.com/${HOMEBREW_TAP_REPO}.git ../homebrew-tap 2>/dev/null || true"
+              echo "git clone https://github.com/${HOMEBREW_TAP_REPO}.git ../homebrew-tap 2>/dev/null || git -C ../homebrew-tap pull --ff-only"
               echo "./scripts/tiffany-update-homebrew-tap --tag ${GITHUB_REF_NAME} --tap-dir ../homebrew-tap --commit --push"
+              echo "./scripts/tiffany-post-release-check --tag ${GITHUB_REF_NAME}"
               echo "\`\`\`"
             } >> "${GITHUB_STEP_SUMMARY}"
-            echo "::warning::HOMEBREW_TAP_TOKEN is not configured. GitHub Release publishing continues; update ${HOMEBREW_TAP_REPO} manually or add the secret for automatic tap updates."
-          else
-            echo "available=true" >> "${GITHUB_OUTPUT}"
+            echo "::error::HOMEBREW_TAP_TOKEN is not configured. GitHub Release was published, but Homebrew is not synchronized until ${HOMEBREW_TAP_REPO} is updated."
+            exit 1
           fi
 
-      - name: Skip tap update
-        if: ${{ steps.tap-token.outputs.available != 'true' }}
-        run: echo "Skipping checkout because HOMEBREW_TAP_TOKEN is not configured."
-
       - name: Checkout tap
-        if: ${{ steps.tap-token.outputs.available == 'true' }}
         uses: actions/checkout@v5
         with:
           repository: ${{ env.HOMEBREW_TAP_REPO }}
@@ -254,7 +247,6 @@ jobs:
           path: homebrew-tap
 
       - name: Update formula
-        if: ${{ steps.tap-token.outputs.available == 'true' }}
         shell: bash
         run: |
           set -euo pipefail

@@ -12,7 +12,9 @@ Use this before making the repository public.
 - [x] Preserve Codex fork license and notice files.
 - [x] Configure or manually update the Homebrew tap for the current release.
   `HOMEBREW_TAP_TOKEN` enables automatic tap updates for future tagged releases;
-  without it, update the tap manually after release. See [docs/homebrew.md](homebrew.md).
+  without it, the release workflow's Homebrew job fails after publishing the
+  GitHub Release so maintainers do not miss the required manual tap update. See
+  [docs/homebrew.md](homebrew.md).
 - [ ] Run full release preflight before publishing the next tag:
 
 ```bash
