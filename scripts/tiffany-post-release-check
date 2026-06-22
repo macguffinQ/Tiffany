@@ -16,8 +16,8 @@ Options:
   --skip-install   Skip brew update/upgrade/test and only verify release + tap metadata.
 
 Examples:
-  ./scripts/tiffany-post-release-check --tag v0.1.24
-  ./scripts/tiffany-post-release-check --tag v0.1.24 --skip-install
+  ./scripts/tiffany-post-release-check --tag vX.Y.Z
+  ./scripts/tiffany-post-release-check --tag vX.Y.Z --skip-install
 EOF
 }
 

@@ -219,8 +219,8 @@ strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v ti
 
 ```bash
 # 示例：安装下载好的 macOS Apple Silicon 压缩包
-tar -xzf tiffany-loop-v0.1.20-aarch64-apple-darwin.tar.gz
-cd tiffany-loop-v0.1.20-aarch64-apple-darwin
+tar -xzf tiffany-loop-v0.1.25-aarch64-apple-darwin.tar.gz
+cd tiffany-loop-v0.1.25-aarch64-apple-darwin
 chmod +x orchestrator tiffany-loop tiffany
 ./tiffany-loop setup
 ./tiffany-loop doctor
