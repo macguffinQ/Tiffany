@@ -1,4 +1,4 @@
-//! Diagnoses whether Codex update paths target the running installation.
+//! Diagnoses whether Tiffany update paths target the running installation.
 //!
 //! Update diagnostics combine cached version metadata, install-channel hints,
 //! and bounded latest-version probes. For npm-managed launches, this module also
@@ -22,8 +22,9 @@ use super::npm_global_root_check;
 use super::run_command;
 
 const VERSION_FILE_NAME: &str = "version.json";
-const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
-const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
+const GITHUB_LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/macguffinQ/Tiffany/releases/latest";
+const TIFFANY_HOMEBREW_UPGRADE: &str = "brew upgrade macguffinQ/tap/tiffany-loop";
 
 /// Builds the update-health row for the current installation.
 ///
@@ -131,22 +132,16 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 
 fn update_action_label(context: &InstallContext) -> &'static str {
     match &context.method {
-        InstallMethod::Npm => "npm install -g @openai/codex",
-        InstallMethod::Bun => "bun install -g @openai/codex",
-        InstallMethod::Brew => "brew upgrade --cask codex",
-        InstallMethod::Standalone { .. } => "standalone installer",
+        InstallMethod::Npm
+        | InstallMethod::Bun
+        | InstallMethod::Brew
+        | InstallMethod::Standalone { .. } => TIFFANY_HOMEBREW_UPGRADE,
         InstallMethod::Other => "manual or unknown",
     }
 }
 
-fn fetch_latest_version(context: &InstallContext) -> Result<String, String> {
-    match &context.method {
-        InstallMethod::Brew => fetch_homebrew_cask_version(),
-        InstallMethod::Npm
-        | InstallMethod::Bun
-        | InstallMethod::Standalone { .. }
-        | InstallMethod::Other => fetch_latest_github_release_version(),
-    }
+fn fetch_latest_version(_context: &InstallContext) -> Result<String, String> {
+    fetch_latest_github_release_version()
 }
 
 fn fetch_latest_github_release_version() -> Result<String, String> {
@@ -156,19 +151,15 @@ fn fetch_latest_github_release_version() -> Result<String, String> {
     }
 
     let info = http_get_json::<ReleaseInfo>(GITHUB_LATEST_RELEASE_URL)?;
-    info.tag_name
-        .strip_prefix("rust-v")
-        .map(str::to_string)
-        .ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
+    extract_version_from_latest_tag(&info.tag_name)
 }
 
-fn fetch_homebrew_cask_version() -> Result<String, String> {
-    #[derive(Deserialize)]
-    struct HomebrewCaskInfo {
-        version: String,
-    }
-
-    http_get_json::<HomebrewCaskInfo>(HOMEBREW_CASK_API_URL).map(|info| info.version)
+fn extract_version_from_latest_tag(tag_name: &str) -> Result<String, String> {
+    tag_name
+        .strip_prefix('v')
+        .or_else(|| tag_name.strip_prefix("rust-v"))
+        .map(str::to_string)
+        .ok_or_else(|| format!("failed to parse latest tag {tag_name}"))
 }
 
 fn http_get_json<T>(url: &str) -> Result<T, String>
@@ -221,7 +212,14 @@ mod tests {
                 method: InstallMethod::Npm,
                 package_layout: None,
             }),
-            "npm install -g @openai/codex"
+            TIFFANY_HOMEBREW_UPGRADE
+        );
+        assert_eq!(
+            update_action_label(&InstallContext {
+                method: InstallMethod::Brew,
+                package_layout: None,
+            }),
+            TIFFANY_HOMEBREW_UPGRADE
         );
         assert_eq!(
             update_action_label(&InstallContext {
@@ -230,5 +228,18 @@ mod tests {
             }),
             "manual or unknown"
         );
+    }
+
+    #[test]
+    fn extracts_tiffany_release_tags() {
+        assert_eq!(
+            extract_version_from_latest_tag("v0.1.25"),
+            Ok("0.1.25".to_string())
+        );
+        assert_eq!(
+            extract_version_from_latest_tag("rust-v0.1.25"),
+            Ok("0.1.25".to_string())
+        );
+        assert!(extract_version_from_latest_tag("0.1.25").is_err());
     }
 }

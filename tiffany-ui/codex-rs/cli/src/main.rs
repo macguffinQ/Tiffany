@@ -747,7 +747,7 @@ fn run_update_command() -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     {
         anyhow::bail!(
-            "`codex update` is not available in debug builds. Install a release build of tiffany-loop to use this command."
+            "`tiffany-loop update` is not available in debug builds. Install a release build of tiffany-loop to use this command."
         );
     }
 
@@ -755,7 +755,7 @@ fn run_update_command() -> anyhow::Result<()> {
     {
         let Some(action) = codex_tui::get_update_action() else {
             anyhow::bail!(
-                "Could not detect the tiffany-loop installation method. Please update manually: https://developers.openai.com/codex/cli/"
+                "Could not detect the tiffany-loop installation method. Please update manually: https://github.com/macguffinQ/Tiffany/releases/latest"
             );
         };
         run_update_action(action)
