@@ -1,17 +1,27 @@
 # Security Policy
 
-Thank you for helping us keep Codex secure!
+This directory contains Tiffany Loop's terminal UI fork. Security reporting for
+this repository follows the root [`SECURITY.md`](../SECURITY.md).
 
-## Reporting Security Issues
+Tiffany Loop is a local developer tool that can start configured worker
+runtimes, pass project context into them, and store process/session logs. Treat
+provider credentials, runtime auth files, session logs, SQLite databases, and
+local config as sensitive.
 
-The security is essential to OpenAI's mission. We appreciate the work of security researchers acting in good faith to identify and responsibly report potential vulnerabilities, helping us maintain strong privacy and security standards for our users and technology.
+## Reporting
 
-Our security program is managed through Bugcrowd, and we ask that any validated vulnerabilities be reported via the [Bugcrowd program](https://bugcrowd.com/engagements/openai).
+Please report security issues privately to the maintainers before opening a
+public issue. Include the affected version or commit, reproduction steps,
+impact, and redacted logs.
 
-## Vulnerability Disclosure Program
+Relevant issues include:
 
-Our Vulnerability Program Guidelines are defined on our [Bugcrowd program page](https://bugcrowd.com/engagements/openai).
+- provider credential leakage through UI, logs, traces, session replay, or
+  handoff packages;
+- unsafe command execution or incorrect approval handling;
+- unexpected access to files outside the intended project;
+- leakage from `~/.tiffany`, `~/.orchestrator`, Claude Code state, or
+  Codex-compatible runtime state.
 
-## How to operate CODEX safely
-
-For details on Codex security boundaries, including sandboxing, approvals, and network controls, see [Agent approvals & security](https://developers.openai.com/codex/agent-approvals-security).
+Run `/doctor` or `orchestrator doctor` to inspect local runtime wiring before
+sharing diagnostics.

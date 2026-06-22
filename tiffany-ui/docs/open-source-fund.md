@@ -1,8 +1,13 @@
-## Codex open source fund
+# Open Source Support
 
-We're excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
+Tiffany Loop is an independent community project. It does not run an affiliated
+grant or credit program from this repository.
 
-- Grants are awarded up to **$25,000** API credits.
-- Applications are reviewed **on a rolling basis**.
+If you want to support the project:
 
-**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
+- open focused issues with reproducible details;
+- send small pull requests with tests;
+- improve documentation for install, provider setup, role registration, and TUI
+  workflows;
+- report security issues privately as described in
+  [`SECURITY.md`](../../SECURITY.md).

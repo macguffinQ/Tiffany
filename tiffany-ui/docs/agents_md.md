@@ -1,7 +1,19 @@
-# AGENTS.md
+# AGENTS.md And Project Instructions
 
-For information about AGENTS.md, see [this documentation](https://developers.openai.com/codex/guides/agents-md).
+Tiffany Loop reads project guidance from the orchestrator runtime and from
+compatible worker tools.
 
-## Hierarchical agents message
+Supported instruction sources include:
 
-When the `child_agents_md` feature flag is enabled (via `[features]` in `config.toml`), Codex appends additional guidance about AGENTS.md scope and precedence to the user instructions message and emits that message even when no AGENTS.md is present.
+- `AGENTS.md` in the project or `.orchestrator` directories;
+- `CLAUDE.md`, Claude Code agents, commands, settings, MCP config, and prior
+  Claude sessions when Claude Code workers are configured;
+- orchestrator session history stored under `~/.orchestrator/sessions`.
+
+Precedence is handled by the parent orchestrator runtime. Use
+`orchestrator doctor`, `/doctor`, and `/roles` when a role appears to ignore the
+intended instructions.
+
+The fork still contains upstream `child_agents_md` feature plumbing because it
+shares the upstream terminal UI architecture. Tiffany-facing behavior should be
+validated through orchestrator integration tests.

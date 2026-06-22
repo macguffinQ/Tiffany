@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Replaced upstream Codex placeholder docs in `tiffany-ui/docs` with
+  Tiffany-specific setup, config, security, slash-command, and contribution
+  guidance.
+
 ## [0.1.25] - 2026-06-22
 
 ### Added
