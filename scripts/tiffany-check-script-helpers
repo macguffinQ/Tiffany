@@ -47,3 +47,31 @@ if [[ "$explicit" != "$fake_cargo_home/bin/cargo" ]]; then
 fi
 
 echo "script helper checks passed"
+
+tap_name_default="$(
+  env -i \
+    PATH="/usr/bin:/bin" \
+    bash -c "source '$repo_dir/scripts/tiffany-update-homebrew-tap'; homebrew_tap_name macguffinQ/homebrew-tap"
+)"
+
+if [[ "$tap_name_default" != "macguffinQ/tap" ]]; then
+  echo "expected default Homebrew tap name derivation" >&2
+  echo "expected: macguffinQ/tap" >&2
+  echo "actual:   $tap_name_default" >&2
+  exit 1
+fi
+
+tap_name_custom="$(
+  env -i \
+    PATH="/usr/bin:/bin" \
+    bash -c "source '$repo_dir/scripts/tiffany-update-homebrew-tap'; homebrew_tap_name example/homebrew-tools"
+)"
+
+if [[ "$tap_name_custom" != "example/tools" ]]; then
+  echo "expected custom Homebrew tap name derivation" >&2
+  echo "expected: example/tools" >&2
+  echo "actual:   $tap_name_custom" >&2
+  exit 1
+fi
+
+echo "tap name helper checks passed"

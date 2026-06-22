@@ -44,6 +44,7 @@ formula="$tmp_root/tiffany-loop.rb"
 PATH="$fake_bin:$PATH" "$repo_dir/scripts/tiffany-update-homebrew-tap" \
   --tag v9.8.7 \
   --repo example/tiffany-loop \
+  --tap-repo example/homebrew-tools \
   --dry-run > "$formula"
 
 source_sha="$(printf 'source archive bytes for tiffany-loop test\n' | {
@@ -74,7 +75,9 @@ assert_contains 'system "cargo", "install", *std_cargo_args, "--profile", "tiffa
 assert_contains 'system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/tiffany-cli"), "--profile", "tiffany-dist"'
 assert_contains 'system "strip", bin/"orchestrator", bin/"tiffany-loop", bin/"tiffany" if OS.mac? || OS.linux?'
 assert_contains 'def caveats'
-assert_contains 'brew untap macguffinQ/tap'
+assert_contains 'brew untap example/tools'
+assert_contains 'brew tap example/tools'
+assert_contains 'brew reinstall example/tools/tiffany-loop'
 assert_contains 'tiffany-loop is the primary command'
 assert_contains 'assert_match "orchestrator", shell_output("#{bin}/orchestrator --help")'
 assert_contains 'assert_match "orchestrator", shell_output("#{bin}/tiffany-loop orchestrator --help 2>/dev/null")'

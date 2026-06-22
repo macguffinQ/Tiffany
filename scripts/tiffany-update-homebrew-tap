@@ -49,6 +49,21 @@ sha256_stream() {
   fi
 }
 
+homebrew_tap_name() {
+  local repo="$1"
+  local owner="${repo%%/*}"
+  local name="${repo#*/}"
+  if [[ -n "$owner" && "$name" == homebrew-* && "$owner/$name" == "$repo" ]]; then
+    printf '%s/%s\n' "$owner" "${name#homebrew-}"
+  else
+    printf '%s\n' "$repo"
+  fi
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
 release_repo="macguffinQ/Tiffany"
 tap_repo="macguffinQ/homebrew-tap"
 tap_dir="${TIFFANY_HOMEBREW_TAP_DIR:-}"
@@ -157,6 +172,7 @@ if [[ -z "$arm_sha" || "$arm_sha" == "$asset_digest" || -z "$source_sha" ]]; the
 fi
 
 arm_url="https://github.com/${release_repo}/releases/download/${tag}/${asset}"
+tap_name="$(homebrew_tap_name "$tap_repo")"
 
 formula_tmp="$(mktemp)"
 cleanup() {
@@ -196,9 +212,9 @@ class TiffanyLoop < Formula
 
       If Homebrew still reports an old tiffany-loop version after a release:
         brew update
-        brew untap macguffinQ/tap
-        brew tap macguffinQ/tap
-        brew reinstall macguffinQ/tap/tiffany-loop
+        brew untap ${tap_name}
+        brew tap ${tap_name}
+        brew reinstall ${tap_name}/tiffany-loop
 
       The tiffany command is a compatibility alias; tiffany-loop is the primary command.
     EOS
