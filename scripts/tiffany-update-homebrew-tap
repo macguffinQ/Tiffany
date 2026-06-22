@@ -173,6 +173,7 @@ fi
 
 arm_url="https://github.com/${release_repo}/releases/download/${tag}/${asset}"
 tap_name="$(homebrew_tap_name "$tap_repo")"
+formula_version="${tag#v}"
 
 formula_tmp="$(mktemp)"
 cleanup() {
@@ -184,6 +185,7 @@ cat > "$formula_tmp" <<EOF
 class TiffanyLoop < Formula
   desc "Lightweight multi-agent orchestration shell for LLM CLIs"
   homepage "https://github.com/${release_repo}"
+  version "${formula_version}"
 
   if OS.mac? && Hardware::CPU.arm?
     url "${arm_url}"
@@ -212,6 +214,7 @@ class TiffanyLoop < Formula
 
       If Homebrew still reports an old tiffany-loop version after a release:
         brew update
+        brew upgrade ${tap_name}/tiffany-loop
         brew untap ${tap_name}
         brew tap ${tap_name}
         brew reinstall ${tap_name}/tiffany-loop

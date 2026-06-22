@@ -225,7 +225,9 @@ if ! grep -F -- "$source_url" "$formula_path" >/dev/null; then
   exit 1
 fi
 assert_formula_contains "def caveats"
+assert_formula_contains "version \"${version}\""
 assert_formula_contains "Start Tiffany Loop with:"
+assert_formula_contains "brew upgrade ${tap_name}/${formula_name}"
 assert_formula_contains "brew untap ${tap_name}"
 assert_formula_contains "brew tap ${tap_name}"
 assert_formula_contains "brew reinstall ${tap_name}/${formula_name}"
