@@ -81,7 +81,11 @@ The generated formula uses that archive on Apple Silicon Macs. Intel Macs,
 Linuxbrew, and other platforms build from the tagged source archive until
 additional release archives are wired into the workflow and formula.
 
-The workflow computes checksums from authenticated GitHub APIs, so it works while the main repository is private and continues to work after the repository is public.
+The workflow calls `./scripts/tiffany-update-homebrew-tap` to generate and
+commit the formula. Keep formula changes in that script so automatic releases
+and manual tap repairs stay identical. The workflow computes checksums from
+authenticated GitHub APIs, so it works while the main repository is private and
+continues to work after the repository is public.
 
 Tagged preflight checks enforce a 24-hour cooldown after the previous release
 tag. This keeps small fixes batched under `CHANGELOG.md` `Unreleased` instead

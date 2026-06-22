@@ -225,6 +225,7 @@ jobs:
         with:
           repository: ${{ env.HOMEBREW_TAP_REPO }}
           token: ${{ env.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
 
       - name: Update formula
         if: ${{ steps.tap-token.outputs.available == 'true' }}
@@ -232,76 +233,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          arm_asset="tiffany-loop-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz"
-          arm_url="https://github.com/macguffinQ/Tiffany/releases/download/${GITHUB_REF_NAME}/tiffany-loop-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz"
-          source_url="https://github.com/macguffinQ/Tiffany/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
-
-          arm_sha="$(
-            gh release view "${GITHUB_REF_NAME}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --json assets \
-              --jq ".assets[] | select(.name == \"${arm_asset}\") | .digest" |
-              sed 's/^sha256://'
-          )"
-          source_sha="$(gh api "repos/${GITHUB_REPOSITORY}/tarball/${GITHUB_REF_NAME}" | sha256sum | awk '{print $1}')"
-
-          if [[ -z "${arm_sha}" || -z "${source_sha}" ]]; then
-            echo "Failed to calculate formula checksums" >&2
-            exit 1
-          fi
-
-          mkdir -p Formula
-          cat > Formula/tiffany-loop.rb <<EOF
-          class TiffanyLoop < Formula
-            desc "Lightweight multi-agent orchestration shell for LLM CLIs"
-            homepage "https://github.com/macguffinQ/Tiffany"
-
-            if OS.mac? && Hardware::CPU.arm?
-              url "${arm_url}"
-              sha256 "${arm_sha}"
-            else
-              url "${source_url}"
-              sha256 "${source_sha}"
-              depends_on "rust" => :build
-            end
-
-            def install
-              if OS.mac? && Hardware::CPU.arm?
-                bin.install "orchestrator", "tiffany-loop", "tiffany"
-              else
-                system "cargo", "install", *std_cargo_args, "--profile", "tiffany-dist"
-                system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/tiffany-cli"), "--profile", "tiffany-dist"
-              end
-
-              if OS.mac? || OS.linux?
-                system "strip", "#{bin}/orchestrator", "#{bin}/tiffany-loop", "#{bin}/tiffany"
-              end
-            end
-
-            test do
-              assert_match "orchestrator", shell_output("#{bin}/orchestrator --help")
-              assert_match "orchestrator", shell_output("#{bin}/tiffany-loop orchestrator --help 2>/dev/null")
-              assert_match "orchestrator status", shell_output("#{bin}/tiffany-loop status --help 2>/dev/null")
-            end
-          end
-          EOF
-
-          sed -i 's/^          //' Formula/tiffany-loop.rb
-
-      - name: Commit formula
-        if: ${{ steps.tap-token.outputs.available == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/tiffany-loop.rb
-
-          if git diff --cached --quiet; then
-            echo "Formula already up to date"
-            exit 0
-          fi
-
-          git commit -m "Update tiffany-loop to ${GITHUB_REF_NAME}"
-          git push
+          git -C homebrew-tap config user.name "github-actions[bot]"
+          git -C homebrew-tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ./scripts/tiffany-update-homebrew-tap \
+            --tag "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tap-dir homebrew-tap \
+            --commit \
+            --push
