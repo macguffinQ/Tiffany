@@ -560,7 +560,7 @@ Troubleshooting first:
 - Run `orchestrator status` when you are unsure which `tiffany-loop` / `orchestrator` binaries or config roots are being used.
 - `orchestrator status` prints targeted next actions, for example `/provider env minimax <ENV_NAME>`, `/provider endpoint minimax <url>`, or `orchestrator roles register worker-cc ...` when provider/model/runtime wiring is incomplete.
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
-- Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, and worker CLI binaries.
+- Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, worker CLI binaries, and Codex CLI `exec --cd` compatibility.
 - Doctor also checks whether a Homebrew-installed package actually exposes
   `tiffany-loop` and `orchestrator` on `PATH`. If `brew install` says the
   package exists but the shell cannot find it, run `eval "$(brew shellenv)"` or

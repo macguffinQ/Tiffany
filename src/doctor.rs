@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Output;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,7 +110,10 @@ impl DoctorReport {
                 provider_auth.push(format!("{provider}={envs}"));
             } else if let Some(provider) = provider_key_missing(message) {
                 provider_auth.push(provider.to_string());
-            } else if message.contains("not found on PATH") {
+            } else if message.contains("not found on PATH")
+                || message.contains("Codex CLI exec")
+                || message.contains("codex exec")
+            {
                 runtime_tools.push(message.to_string());
             } else if message.contains("missing role config")
                 || message.contains("no worker role configured")
@@ -245,6 +249,15 @@ impl DoctorReport {
             push_unique(
                 &mut steps,
                 "Install the selected worker CLI (`claude` or `codex`) or update role runtime bindings.",
+            );
+        }
+        if messages
+            .iter()
+            .any(|message| message.contains("Codex CLI exec"))
+        {
+            push_unique(
+                &mut steps,
+                "Upgrade Codex CLI or set `runtimes.codex.binary` to a Codex executable that supports `codex exec --cd`.",
             );
         }
 
@@ -618,7 +631,10 @@ fn check_runtimes(builder: &mut DoctorReportBuilder, cfg: &Config) {
         if rt.kind == "subprocess" {
             let binary = rt.binary.as_deref().unwrap_or(name);
             match which::which(binary) {
-                Ok(path) => builder.ok(format!("{name}: `{binary}` -> {}", path.display())),
+                Ok(path) => {
+                    builder.ok(format!("{name}: `{binary}` -> {}", path.display()));
+                    check_subprocess_runtime_compatibility(builder, name, binary, &path);
+                }
                 Err(_) => {
                     builder.fail(format!("{name}: `{binary}` not found on PATH"));
                     builder.hint(format!(
@@ -630,6 +646,87 @@ fn check_runtimes(builder: &mut DoctorReportBuilder, cfg: &Config) {
             builder.ok(format!("{name}: runtime type `{}`", rt.kind));
         }
     }
+}
+
+fn check_subprocess_runtime_compatibility(
+    builder: &mut DoctorReportBuilder,
+    name: &str,
+    binary: &str,
+    path: &Path,
+) {
+    if !should_check_codex_exec_help(name, binary) {
+        return;
+    }
+
+    match command_summary_path(path, &["exec", "--help"]) {
+        Ok(summary) if summary.success => {
+            let output = format!("{}\n{}", summary.stdout, summary.stderr);
+            if codex_exec_help_supports_cd(&output) {
+                builder.ok(format!("{name}: codex exec supports `--cd`"));
+                return;
+            }
+
+            builder.fail(format!(
+                "{name}: Codex CLI exec does not support required `--cd` workdir flag ({})",
+                path.display()
+            ));
+            if codex_exec_help_mentions_cwd(&output) {
+                builder.hint(
+                    "this Codex CLI appears to expose the old `--cwd` flag; Tiffany now uses `--cd`",
+                );
+            }
+            builder.hint(format!(
+                "upgrade Codex CLI or set runtimes.{name}.binary to a compatible executable"
+            ));
+        }
+        Ok(summary) => {
+            builder.fail(format!(
+                "{name}: codex exec --help failed: {}",
+                summary.short_failure()
+            ));
+            builder.hint(format!(
+                "check `{}` or set runtimes.{name}.binary to a working Codex CLI",
+                path.display()
+            ));
+        }
+        Err(err) => {
+            builder.fail(format!("{name}: codex exec --help failed: {err}"));
+            builder.hint(format!(
+                "check `{}` or set runtimes.{name}.binary in config.yaml",
+                path.display()
+            ));
+        }
+    }
+}
+
+fn should_check_codex_exec_help(runtime_name: &str, binary: &str) -> bool {
+    let runtime_name = runtime_name.trim().to_ascii_lowercase();
+    if runtime_name == "codex" || runtime_name == "worker-codex" {
+        return true;
+    }
+
+    let binary_name = Path::new(binary)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(binary)
+        .to_ascii_lowercase();
+    matches!(binary_name.as_str(), "codex" | "codex.exe" | "codex-cli")
+}
+
+fn codex_exec_help_supports_cd(output: &str) -> bool {
+    output_mentions_long_flag(output, "--cd")
+}
+
+fn codex_exec_help_mentions_cwd(output: &str) -> bool {
+    output_mentions_long_flag(output, "--cwd")
+}
+
+fn output_mentions_long_flag(output: &str, flag: &str) -> bool {
+    output
+        .split(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ',' | '[' | ']' | '(' | ')' | '`' | '\'' | '"' | '=')
+        })
+        .any(|part| part == flag)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1547,7 +1644,15 @@ impl CommandSummary {
 }
 
 fn command_summary(binary: &str, args: &[&str]) -> std::io::Result<CommandSummary> {
+    command_summary_path(Path::new(binary), args)
+}
+
+fn command_summary_path(binary: &Path, args: &[&str]) -> std::io::Result<CommandSummary> {
     let output = Command::new(binary).args(args).output()?;
+    Ok(command_output_summary(output))
+}
+
+fn command_output_summary(output: Output) -> CommandSummary {
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let first_line = stdout
@@ -1558,13 +1663,13 @@ fn command_summary(binary: &str, args: &[&str]) -> std::io::Result<CommandSummar
         .unwrap_or("no output")
         .to_string();
 
-    Ok(CommandSummary {
+    CommandSummary {
         success: output.status.success(),
         code: output.status.code(),
         stdout,
         stderr,
         first_line,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -1662,6 +1767,26 @@ mod tests {
         assert!(rendered.contains("Run `orchestrator setup`"));
         assert!(rendered.contains("Register roles with `/role`"));
         assert!(rendered.contains("--provider <provider> --model-name <api-model>"));
+        assert!(rendered.contains("Rerun `orchestrator doctor`"));
+    }
+
+    #[test]
+    fn report_next_steps_include_codex_exec_compatibility_fix() {
+        let report = test_report(
+            vec![DoctorLine {
+                level: DoctorLevel::Fail,
+                message:
+                    "codex: Codex CLI exec does not support required `--cd` workdir flag (/bin/codex)"
+                        .into(),
+            }],
+            1,
+        );
+
+        let rendered = report.render_text();
+
+        assert!(rendered.contains("Runtime binaries missing:"));
+        assert!(rendered.contains("Upgrade Codex CLI"));
+        assert!(rendered.contains("codex exec --cd"));
         assert!(rendered.contains("Rerun `orchestrator doctor`"));
     }
 
@@ -1994,6 +2119,58 @@ mod tests {
         assert!(rendered.contains("local-api: runtime type `direct`"));
         assert!(rendered.contains("openai: api key missing"));
         assert_eq!(report.issue_count, 1);
+    }
+
+    #[test]
+    fn codex_exec_help_detection_accepts_current_cd_flag() {
+        let help = r#"
+Usage: codex exec [OPTIONS] [PROMPT]
+
+Options:
+  -C, --cd <DIR>  Tell the agent to use the specified directory as its working root
+      --json      Print events to stdout as JSONL
+"#;
+
+        assert!(codex_exec_help_supports_cd(help));
+        assert!(!codex_exec_help_mentions_cwd(help));
+    }
+
+    #[test]
+    fn codex_exec_help_detection_rejects_old_cwd_only_flag() {
+        let help = r#"
+Usage: codex exec [OPTIONS] [PROMPT]
+
+Options:
+      --cwd <DIR>  Set working directory
+      --json       Print events to stdout as JSONL
+"#;
+
+        assert!(!codex_exec_help_supports_cd(help));
+        assert!(codex_exec_help_mentions_cwd(help));
+    }
+
+    #[test]
+    fn codex_exec_help_detection_does_not_match_substrings() {
+        let help = "Options:\n  --cdn-cache <URL>\n  --cwd-backup <DIR>\n";
+
+        assert!(!codex_exec_help_supports_cd(help));
+        assert!(!codex_exec_help_mentions_cwd(help));
+    }
+
+    #[test]
+    fn codex_runtime_compatibility_probe_only_targets_codex_binaries() {
+        assert!(should_check_codex_exec_help("codex", "anything"));
+        assert!(should_check_codex_exec_help("worker-codex", "anything"));
+        assert!(should_check_codex_exec_help("planner", "codex"));
+        assert!(should_check_codex_exec_help("planner", "/opt/bin/codex"));
+        assert!(should_check_codex_exec_help(
+            "planner",
+            "/opt/bin/codex-cli"
+        ));
+        assert!(should_check_codex_exec_help("planner", "codex.exe"));
+
+        assert!(!should_check_codex_exec_help("claude-code", "claude"));
+        assert!(!should_check_codex_exec_help("planner", "claude"));
     }
 
     #[test]
