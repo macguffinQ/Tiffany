@@ -117,10 +117,26 @@ jobs:
           name="tiffany-loop-${GITHUB_REF_NAME}-${{ matrix.target }}"
           staging="dist/${name}"
           binary_dir="target/tiffany-dist"
+          expected_version="${GITHUB_REF_NAME#v}"
           if [[ "${{ matrix.native }}" != "true" ]]; then
             binary_dir="target/${{ matrix.target }}/tiffany-dist"
           fi
           mkdir -p "${staging}"
+
+          assert_binary_version() {
+            local binary="$1"
+            local label
+            label="$(basename "${binary}")"
+            local output
+            output="$("${binary}" --version)"
+            local actual
+            actual="$(awk '{print $2}' <<<"${output}")"
+            if [[ "${actual}" != "${expected_version}" ]]; then
+              echo "::error::${label} --version mismatch: expected ${expected_version}, got ${actual:-<empty>} (${output})"
+              exit 1
+            fi
+            echo "${label} version ${actual}"
+          }
 
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             for binary in orchestrator.exe tiffany-loop.exe tiffany.exe; do
@@ -133,6 +149,11 @@ jobs:
             cp "${binary_dir}/orchestrator.exe" "${staging}/"
             cp "${binary_dir}/tiffany-loop.exe" "${staging}/"
             cp "${binary_dir}/tiffany.exe" "${staging}/"
+            if [[ "${{ matrix.native }}" == "true" ]]; then
+              assert_binary_version "${staging}/orchestrator.exe"
+              assert_binary_version "${staging}/tiffany-loop.exe"
+              assert_binary_version "${staging}/tiffany.exe"
+            fi
           else
             for binary in orchestrator tiffany-loop tiffany; do
               if [[ ! -x "${binary_dir}/${binary}" ]]; then
@@ -144,6 +165,11 @@ jobs:
             cp "${binary_dir}/orchestrator" "${staging}/"
             cp "${binary_dir}/tiffany-loop" "${staging}/"
             cp "${binary_dir}/tiffany" "${staging}/"
+            if [[ "${{ matrix.native }}" == "true" ]]; then
+              assert_binary_version "${staging}/orchestrator"
+              assert_binary_version "${staging}/tiffany-loop"
+              assert_binary_version "${staging}/tiffany"
+            fi
             strip "${staging}/orchestrator" "${staging}/tiffany-loop" "${staging}/tiffany" || true
           fi
 

@@ -180,6 +180,36 @@ assert_log_not_contains() {
   fi
 }
 
+command_version() {
+  local binary="$1"
+  local output
+  output="$("$binary" --version)"
+  local version
+  version="$(awk '{print $2}' <<<"$output")"
+  if [[ -z "$version" ]]; then
+    echo "could not parse version from $binary: $output" >&2
+    exit 1
+  fi
+  printf '%s\n' "$version"
+}
+
+orchestrator_version="$(command_version "$orchestrator_bin")"
+tiffany_version="$(command_version "$tiffany_bin")"
+tiffany_alias_version="$(command_version "$tiffany_alias_bin")"
+if [[ "$tiffany_version" != "$orchestrator_version" ]]; then
+  echo "tiffany-loop version mismatch" >&2
+  echo "orchestrator: $orchestrator_version" >&2
+  echo "tiffany-loop: $tiffany_version" >&2
+  exit 1
+fi
+if [[ "$tiffany_alias_version" != "$orchestrator_version" ]]; then
+  echo "tiffany alias version mismatch" >&2
+  echo "orchestrator: $orchestrator_version" >&2
+  echo "tiffany: $tiffany_alias_version" >&2
+  exit 1
+fi
+echo "checking versions... $orchestrator_version" >&2
+
 log="$(run_log orchestrator-help "$orchestrator_bin" --help)"
 assert_log_contains "$log" "Multi-agent orchestration platform"
 assert_log_contains "$log" "setup"
