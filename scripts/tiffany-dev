@@ -26,6 +26,24 @@ case "$target_dir" in
 esac
 export CARGO_TARGET_DIR="$target_dir"
 
+root_package_version() {
+  awk '
+    /^\[package\]/ { in_package = 1; next }
+    /^\[/ && in_package { exit }
+    in_package && $1 == "version" {
+      gsub(/"/, "", $3)
+      print $3
+      exit
+    }
+  ' "$repo_dir/Cargo.toml"
+}
+
+expected_version="$(root_package_version)"
+if [[ -z "$expected_version" ]]; then
+  echo "Could not read root package version from Cargo.toml" >&2
+  exit 1
+fi
+
 usage() {
   cat <<'EOF'
 tiffany-dev - run tiffany-loop from this source checkout
@@ -91,6 +109,31 @@ if [[ "$dev_profile" != "dev" ]]; then
   cargo_profile_args=(--profile "$dev_profile")
 fi
 
+binary_version() {
+  local binary="$1"
+  local output
+  if [[ ! -x "$binary" ]]; then
+    return 1
+  fi
+  output="$("$binary" --version 2>/dev/null)" || return 1
+  awk '{print $2}' <<<"$output"
+}
+
+needs_rebuild() {
+  local binary="$1"
+  local actual
+  actual="$(binary_version "$binary" || true)"
+  [[ "$actual" != "$expected_version" ]]
+}
+
+build_orchestrator_bin() {
+  (cd "$repo_dir" && "$cargo_bin" build "${cargo_profile_args[@]}" --bin orchestrator)
+}
+
+build_tiffany_bin() {
+  (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" build "${cargo_profile_args[@]}" -p tiffany-cli --bin tiffany-loop --bin tiffany)
+}
+
 ensure_orchestrator_bin() {
   if [[ -n "${TIFFANY_ORCHESTRATOR_BIN:-}" ]]; then
     orchestrator_bin="$TIFFANY_ORCHESTRATOR_BIN"
@@ -98,17 +141,26 @@ ensure_orchestrator_bin() {
       echo "TIFFANY_ORCHESTRATOR_BIN is not executable: $orchestrator_bin" >&2
       exit 1
     fi
+    actual_version="$(binary_version "$orchestrator_bin" || true)"
+    if [[ -n "$actual_version" && "$actual_version" != "$expected_version" ]]; then
+      echo "warning: TIFFANY_ORCHESTRATOR_BIN version $actual_version does not match source $expected_version: $orchestrator_bin" >&2
+    fi
     return
   fi
 
   orchestrator_bin="$(profile_dir)/orchestrator"
-  if [[ ! -x "$orchestrator_bin" ]]; then
-    (cd "$repo_dir" && "$cargo_bin" build "${cargo_profile_args[@]}" --bin orchestrator)
+  if needs_rebuild "$orchestrator_bin"; then
+    build_orchestrator_bin
   fi
 }
 
 run_orchestrator_cli() {
   ensure_orchestrator_bin
+  case "${1:-}" in
+    doctor|status)
+      ensure_tiffany_bin
+      ;;
+  esac
   exec "$orchestrator_bin" "$@"
 }
 
@@ -118,8 +170,8 @@ ensure_tiffany_bin() {
     return
   fi
 
-  if [[ ! -x "$tiffany_bin" ]]; then
-    (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" build "${cargo_profile_args[@]}" -p tiffany-cli --bin tiffany-loop)
+  if needs_rebuild "$tiffany_bin"; then
+    build_tiffany_bin
   fi
 }
 
