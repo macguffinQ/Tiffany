@@ -449,6 +449,142 @@ fn check_tiffany_ui(builder: &mut DoctorReportBuilder, config_path: &Path) {
         "launch bridge: {}",
         tiffany_install::launch_command_preview(config_path)
     ));
+    check_tiffany_command_versions(builder);
+}
+
+fn check_tiffany_command_versions(builder: &mut DoctorReportBuilder) {
+    let commands = ["orchestrator", "tiffany-loop", "tiffany"];
+    let mut versions = Vec::new();
+    let mut missing = Vec::new();
+
+    for command in commands {
+        match command_version(command) {
+            Ok(Some(version)) => {
+                builder.ok(format!("{command}: version {version}"));
+                versions.push((command.to_string(), version));
+            }
+            Ok(None) => {
+                builder.warn(format!("{command}: version output unavailable"));
+            }
+            Err(_) => {
+                missing.push(command);
+            }
+        }
+    }
+
+    if !missing.is_empty() {
+        builder.warn(format!(
+            "Tiffany command(s) not found on PATH: {}",
+            missing.join(", ")
+        ));
+        builder.hint("install/reinstall with `brew reinstall tiffany-loop` or fix PATH");
+        return;
+    }
+
+    check_tiffany_version_consistency(builder, &versions);
+    check_tiffany_launch_pair_versions(builder);
+}
+
+fn check_tiffany_version_consistency(
+    builder: &mut DoctorReportBuilder,
+    versions: &[(String, String)],
+) {
+    let Some((_, expected)) = versions.first() else {
+        return;
+    };
+
+    let mismatched = versions
+        .iter()
+        .filter(|(_, version)| version != expected)
+        .map(|(command, version)| format!("{command}={version}"))
+        .collect::<Vec<_>>();
+    if mismatched.is_empty() {
+        builder.ok(format!("Tiffany command versions match: {expected}"));
+    } else {
+        builder.fail(format!(
+            "Tiffany command version mismatch: expected {expected}, got {}",
+            mismatched.join(", ")
+        ));
+        builder.hint("run `brew update && brew reinstall tiffany-loop`");
+        builder.hint("then verify with `tiffany-loop --version && orchestrator --version`");
+    }
+}
+
+fn check_tiffany_launch_pair_versions(builder: &mut DoctorReportBuilder) {
+    let mut versions = Vec::new();
+
+    if let Some(path) = tiffany_install::current_orchestrator_exe() {
+        match command_path_version(&path) {
+            Ok(Some(version)) => {
+                builder.ok(format!(
+                    "launch orchestrator version: {} ({})",
+                    version,
+                    path.display()
+                ));
+                versions.push(("launch orchestrator".to_string(), version));
+            }
+            Ok(None) => builder.warn(format!(
+                "launch orchestrator version unavailable: {}",
+                path.display()
+            )),
+            Err(err) => builder.warn(format!(
+                "launch orchestrator version check failed: {} ({err})",
+                path.display()
+            )),
+        }
+    }
+
+    if let Some(binary) = tiffany_install::resolve_tiffany_binary() {
+        if binary.verified {
+            match command_path_version(&binary.path) {
+                Ok(Some(version)) => {
+                    builder.ok(format!(
+                        "launch tiffany-loop version: {} ({}, {})",
+                        version,
+                        binary.path.display(),
+                        binary.source_label()
+                    ));
+                    versions.push(("launch tiffany-loop".to_string(), version));
+                }
+                Ok(None) => builder.warn(format!(
+                    "launch tiffany-loop version unavailable: {} ({})",
+                    binary.path.display(),
+                    binary.source_label()
+                )),
+                Err(err) => builder.warn(format!(
+                    "launch tiffany-loop version check failed: {} ({}, {err})",
+                    binary.path.display(),
+                    binary.source_label()
+                )),
+            }
+        }
+    }
+
+    check_tiffany_launch_pair_consistency(builder, &versions);
+}
+
+fn check_tiffany_launch_pair_consistency(
+    builder: &mut DoctorReportBuilder,
+    versions: &[(String, String)],
+) {
+    let Some((_, expected)) = versions.first() else {
+        return;
+    };
+    let mismatched = versions
+        .iter()
+        .filter(|(_, version)| version != expected)
+        .map(|(command, version)| format!("{command}={version}"))
+        .collect::<Vec<_>>();
+    if mismatched.is_empty() {
+        builder.ok(format!("Tiffany launch pair versions match: {expected}"));
+    } else {
+        builder.fail(format!(
+            "Tiffany launch pair version mismatch: expected {expected}, got {}",
+            mismatched.join(", ")
+        ));
+        builder.hint("rebuild local binaries with `./scripts/tiffany-build --small`");
+        builder.hint("for Homebrew installs, run `brew update && brew reinstall tiffany-loop`");
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1618,6 +1754,56 @@ fn check_version_command(
     }
 }
 
+fn command_version(binary: &str) -> std::io::Result<Option<String>> {
+    let summary = command_summary(binary, &["--version"])?;
+    version_from_summary(&summary)
+}
+
+fn command_path_version(binary: &Path) -> std::io::Result<Option<String>> {
+    let summary = command_summary_path(binary, &["--version"])?;
+    version_from_summary(&summary)
+}
+
+fn version_from_summary(summary: &CommandSummary) -> std::io::Result<Option<String>> {
+    if !summary.success {
+        return Ok(None);
+    }
+    Ok(parse_version_from_output(&summary.stdout)
+        .or_else(|| parse_version_from_output(&summary.stderr)))
+}
+
+fn parse_version_from_output(output: &str) -> Option<String> {
+    output
+        .split_whitespace()
+        .find(|part| looks_like_semver(part))
+        .map(|part| part.trim_start_matches('v').to_string())
+}
+
+fn looks_like_semver(value: &str) -> bool {
+    let value = value.trim_start_matches('v');
+    let mut parts = value.split('.');
+    let Some(major) = parts.next() else {
+        return false;
+    };
+    let Some(minor) = parts.next() else {
+        return false;
+    };
+    let Some(patch) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    !major.is_empty()
+        && !minor.is_empty()
+        && !patch.is_empty()
+        && major.chars().all(|ch| ch.is_ascii_digit())
+        && minor.chars().all(|ch| ch.is_ascii_digit())
+        && patch
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || ch == '-' || ch.is_ascii_alphanumeric())
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct CommandSummary {
     success: bool,
@@ -1832,10 +2018,63 @@ mod tests {
         let report = builder.finish();
         let rendered = report.render_text();
 
-        assert_eq!(report.issue_count, 0);
         assert!(rendered.contains("Tiffany UI:"));
         assert!(rendered.contains("orchestrator config:"));
         assert!(rendered.contains("launch bridge:"));
+    }
+
+    #[test]
+    fn parses_command_version_output_shapes() {
+        assert_eq!(
+            parse_version_from_output("tiffany-loop 0.1.23\n"),
+            Some("0.1.23".to_string())
+        );
+        assert_eq!(
+            parse_version_from_output("orchestrator v0.1.23\n"),
+            Some("0.1.23".to_string())
+        );
+        assert_eq!(
+            parse_version_from_output("tiffany-loop version 0.1.23-beta1\n"),
+            Some("0.1.23-beta1".to_string())
+        );
+        assert_eq!(parse_version_from_output("no version here\n"), None);
+    }
+
+    #[test]
+    fn tiffany_version_consistency_reports_mismatch() {
+        let mut builder = DoctorReportBuilder::default();
+        let versions = vec![
+            ("orchestrator".to_string(), "0.1.23".to_string()),
+            ("tiffany-loop".to_string(), "0.1.22".to_string()),
+            ("tiffany".to_string(), "0.1.23".to_string()),
+        ];
+
+        check_tiffany_version_consistency(&mut builder, &versions);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 1);
+        assert!(rendered.contains("Tiffany command version mismatch"));
+        assert!(rendered.contains("tiffany-loop=0.1.22"));
+        assert!(rendered.contains("brew update && brew reinstall tiffany-loop"));
+    }
+
+    #[test]
+    fn tiffany_launch_pair_consistency_reports_adjacent_mismatch() {
+        let mut builder = DoctorReportBuilder::default();
+        let versions = vec![
+            ("launch orchestrator".to_string(), "0.1.23".to_string()),
+            ("launch tiffany-loop".to_string(), "0.1.11".to_string()),
+        ];
+
+        check_tiffany_launch_pair_consistency(&mut builder, &versions);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 1);
+        assert!(rendered.contains("Tiffany launch pair version mismatch"));
+        assert!(rendered.contains("launch tiffany-loop=0.1.11"));
+        assert!(rendered.contains("./scripts/tiffany-build --small"));
     }
 
     #[test]

@@ -79,6 +79,10 @@ pub enum RunProgress {
         approved: bool,
         issues: usize,
     },
+    ReviewUnavailable {
+        task_id: Uuid,
+        message: String,
+    },
     Done {
         task_count: usize,
     },
@@ -362,11 +366,27 @@ impl Orchestrator {
                             .unwrap_or_else(|| std::path::PathBuf::from(".")),
                     });
                 let rev_start = std::time::Instant::now();
-                let rev = self
+                let rev = match self
                     .reviewer
                     .review_with_progress(t, &ctx, Some(tx.clone()))
                     .await
-                    .with_context(|| format!("reviewing task {}", t.id))?;
+                    .with_context(|| format!("reviewing task {}", t.id))
+                {
+                    Ok(rev) => rev,
+                    Err(err) => {
+                        let message = format!("{:#}", err);
+                        tracing::warn!(
+                            "reviewer failed for task {}; continuing with completed worker output: {}",
+                            t.id,
+                            message
+                        );
+                        let _ = tx.send(RunProgress::ReviewUnavailable {
+                            task_id: t.id,
+                            message: first_error_line(&message),
+                        });
+                        continue;
+                    }
+                };
                 tracing::info!(
                     "→ Reviewing done task {}: approved={}, {} issues in {:?}",
                     &t.id.to_string()[..8],
@@ -581,6 +601,15 @@ fn duration_ms(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+fn first_error_line(message: &str) -> String {
+    message
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("reviewer unavailable")
+        .to_string()
+}
+
 fn spawn_progress_recorder(
     store: Arc<SessionStore>,
     session_id: Uuid,
@@ -773,6 +802,16 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "task_id": task_id,
                 "approved": approved,
                 "issues": issues,
+            }),
+        ),
+        RunProgress::ReviewUnavailable { task_id, message } => (
+            "reviewer",
+            *task_id,
+            serde_json::json!({
+                "status": "warning",
+                "message": format!("review unavailable - {message}"),
+                "task_id": task_id,
+                "reason": message,
             }),
         ),
         RunProgress::Done { task_count } => (
@@ -990,7 +1029,7 @@ mod tests {
     #[async_trait::async_trait]
     impl Reviewer for FailingReviewer {
         async fn review(&self, _task: &Task, _ctx: &ReviewContext) -> Result<ReviewOutput> {
-            anyhow::bail!("reviewer should be skipped for conversational tasks")
+            anyhow::bail!("reviewer unavailable")
         }
     }
 
@@ -1272,6 +1311,65 @@ mod tests {
         }
         assert!(saw_review_skipped, "expected visible review skipped event");
         assert!(!saw_review_result, "reviewer should not produce a result");
+    }
+
+    #[tokio::test]
+    async fn run_with_progress_continues_when_reviewer_fails() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(StaticPlanner),
+            Arc::new(ApprovingCritic),
+            Arc::new(FailingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            true,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let completed = orch
+            .run_with_progress(Task::new("write an implementation plan"), tx)
+            .await
+            .expect("reviewer failure should not abort completed worker output");
+
+        assert_eq!(completed.len(), 1);
+        let mut saw_review_unavailable = false;
+        let mut saw_done = false;
+        let mut saw_failed = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::ReviewUnavailable { message, .. } => {
+                    saw_review_unavailable = message.contains("reviewer unavailable");
+                }
+                RunProgress::Done { task_count } => saw_done = task_count == 1,
+                RunProgress::Failed(_) => saw_failed = true,
+                _ => {}
+            }
+        }
+        assert!(
+            saw_review_unavailable,
+            "expected visible review unavailable event"
+        );
+        assert!(saw_done, "pipeline should still finish");
+        assert!(!saw_failed, "reviewer failure should not be terminal");
     }
 
     #[tokio::test]

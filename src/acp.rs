@@ -2028,6 +2028,11 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
                 ))
             }
         }
+        RunProgress::ReviewUnavailable { task_id, message } => Some(format!(
+            "Review unavailable for task {}: {}.",
+            short_uuid(task_id),
+            agent_events::humanize_jsonish(message, 1600)
+        )),
         RunProgress::Done { task_count } => Some(format!("Done: {task_count} task(s) completed.")),
         RunProgress::Failed(msg) => Some(format!(
             "Failed: {}",

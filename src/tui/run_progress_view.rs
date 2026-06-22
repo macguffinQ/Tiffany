@@ -111,6 +111,9 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
                 )))
             }
         }
+        RunProgress::ReviewUnavailable { task_id, message } => Some(running(
+            format_review_lifecycle_line("unavailable", task_id, Some(message.clone())),
+        )),
         RunProgress::Failed(message) => Some(error(format!("error — {message}"))),
         RunProgress::WorkerOutput { .. }
         | RunProgress::RoleOutput { .. }
@@ -237,6 +240,14 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
                 },
                 "",
                 None::<String>,
+            ))
+        }
+        RunProgress::ReviewUnavailable { task_id, message } => {
+            let id = short_task_id(task_id);
+            Some(status(
+                format!("review: unavailable · {id}"),
+                message.clone(),
+                Some(format!("⚠ review  unavailable · {id} · {message}")),
             ))
         }
         RunProgress::WorkerOutput { .. }

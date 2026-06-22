@@ -337,6 +337,25 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 duration_ms: None,
                 reason: None,
             },
+            RunProgress::ReviewUnavailable { task_id, message } => Self {
+                role: "reviewer",
+                status: "warning",
+                message: format!("review unavailable - {message}"),
+                task_id: Some(task_id.to_string()),
+                agent: None,
+                worker_role: None,
+                runtime: None,
+                cc_agent: None,
+                model: None,
+                provider: None,
+                task_prompt: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+                duration_ms: None,
+                reason: Some(message),
+            },
             RunProgress::Done { task_count } => Self {
                 role: "orchestrator",
                 status: "done",
@@ -536,6 +555,11 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
                 ))
             }
         }
+        RunProgress::ReviewUnavailable { task_id, message } => Some(format!(
+            "⚠ reviewer unavailable · {} · {}",
+            short_id(task_id),
+            agent_events::humanize_jsonish(message, TEXT_OUTPUT_SUMMARY_MAX_CHARS)
+        )),
         RunProgress::Done { task_count } => {
             Some(format!("✓ done     {task_count} sub-task(s) completed"))
         }
@@ -647,6 +671,11 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
                 ))
             }
         }
+        RunProgress::ReviewUnavailable { task_id, message } => Some(format!(
+            "review  unavailable · {} · {}",
+            short_id(task_id),
+            agent_events::humanize_jsonish(message, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)
+        )),
         RunProgress::Done { task_count } => {
             Some(format!("done  {task_count} sub-task(s) completed"))
         }

@@ -213,6 +213,9 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
                 input.run_review_issue_count += issues.max(1);
             }
         }
+        RunProgress::ReviewUnavailable { .. } => {
+            input.run_review_issue_count += 1;
+        }
         RunProgress::Done { task_count } => {
             let review_issues = input.run_review_issue_count;
             let worker_failures = input.run_worker_failure_count;

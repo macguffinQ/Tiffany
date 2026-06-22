@@ -3071,6 +3071,19 @@ mod tests {
             line_text(&waterfall_status_line(&needs_fixes)),
             "⚠ review  needs fixes · 12345678 · 3 issue(s)"
         );
+
+        let unavailable = TiffanyProgressEvent {
+            status: "warning".to_string(),
+            message: "review unavailable - no JSON found in CLI response".to_string(),
+            approved: None,
+            issues: None,
+            reason: Some("no JSON found in CLI response".to_string()),
+            ..needs_fixes
+        };
+        assert_eq!(
+            line_text(&waterfall_status_line(&unavailable)),
+            "⚠ review  review unavailable · no JSON found in CLI response · 12345678"
+        );
     }
 
     #[test]
