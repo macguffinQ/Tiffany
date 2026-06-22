@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 2503
 expression: popup
 ---
   Memories
-  Choose how Codex uses and creates memories. Changes are saved to config.toml
+  Choose how tiffany-loop uses memories. Saved to config.toml
 
 › [x] Use memories       Use memories in the following threads. Applied at
                          next thread.
@@ -12,6 +13,6 @@ expression: popup
   Reset all memories     Clear local memory files and summaries. Existing
                          threads stay intact.
 
-  Learn more: https://developers.openai.com/codex/memories
+  Learn more: https://github.com/macguffinQ/Tiffany/blob/main/tiffany-ui/docs
 
   Press space to toggle; enter to save or select

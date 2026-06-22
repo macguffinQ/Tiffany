@@ -1,10 +1,11 @@
 ---
 source: tui/src/chatwidget/tests/permissions.rs
+assertion_line: 462
 expression: "render_bottom_popup(&chat, 120)"
 ---
-  Your organization requires the default Codex agent sandbox to continue. Set it up to protect your files and control
-  network access.
-  Learn more <https://developers.openai.com/codex/windows>
+  Your organization requires the default tiffany-loop agent sandbox to continue. Set it up to protect your files and
+  control network access.
+  Learn more <https://github.com/macguffinQ/Tiffany/blob/main/tiffany-ui/docs/windows.md>
 
 › 1. Set up default sandbox (requires Administrator permissions)
   2. Quit

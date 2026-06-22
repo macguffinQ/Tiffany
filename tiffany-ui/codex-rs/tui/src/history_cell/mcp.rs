@@ -326,7 +326,7 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         Line::from(vec![
             "    See the ".into(),
             crate::terminal_hyperlinks::osc8_hyperlink(
-                "https://developers.openai.com/codex/mcp",
+                "https://github.com/macguffinQ/Tiffany/blob/main/tiffany-ui/docs/mcp.md",
                 "MCP docs",
             )
             .underlined(),

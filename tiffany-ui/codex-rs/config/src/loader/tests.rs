@@ -145,7 +145,8 @@ model = "gpt-work"
         "unexpected error message: {message}"
     );
     assert!(
-        message.contains("https://developers.openai.com/codex/config-advanced#profiles"),
+        message
+            .contains("https://github.com/macguffinQ/Tiffany/blob/main/tiffany-ui/docs/config.md"),
         "unexpected error message: {message}"
     );
 }

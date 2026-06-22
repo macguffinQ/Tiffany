@@ -486,7 +486,7 @@ struct AppServerCommand {
     /// enabled = false
     /// ```
     ///
-    /// See https://developers.openai.com/codex/config-advanced/#metrics for more details.
+    /// See https://github.com/macguffinQ/Tiffany/blob/main/tiffany-ui/docs/config.md for more details.
     #[arg(long = "analytics-default-enabled")]
     analytics_default_enabled: bool,
 

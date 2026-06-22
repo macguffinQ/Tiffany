@@ -30,7 +30,7 @@ use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
 
-const MEMORIES_DOC_URL: &str = "https://developers.openai.com/codex/memories";
+const MEMORIES_DOC_URL: &str = "https://github.com/macguffinQ/Tiffany/blob/main/tiffany-ui/docs";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MemoriesSetting {
@@ -116,8 +116,7 @@ impl MemoriesSettingsView {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Memories".bold()));
         header.push(Line::from(
-            "Choose how tiffany-loop uses and creates memories. Changes are saved to config.toml"
-                .dim(),
+            "Choose how tiffany-loop uses memories. Saved to config.toml".dim(),
         ));
         header
     }

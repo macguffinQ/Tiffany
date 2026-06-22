@@ -9,6 +9,8 @@ All notable changes to this project will be documented in this file.
 - Replaced upstream Codex placeholder docs in `tiffany-ui/docs` with
   Tiffany-specific setup, config, security, slash-command, and contribution
   guidance.
+- Repointed user-visible fork runtime help links for sandbox, config, MCP,
+  memories, and Windows sandbox prompts to Tiffany documentation.
 
 ## [0.1.25] - 2026-06-22
 

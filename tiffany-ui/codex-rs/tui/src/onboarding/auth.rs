@@ -555,7 +555,7 @@ impl AuthModeWidget {
             Line::from(vec![
                 "  For more details see the ".into(),
                 crate::terminal_hyperlinks::osc8_hyperlink(
-                    "https://developers.openai.com/codex/security",
+                    "https://github.com/macguffinQ/Tiffany/blob/main/tiffany-ui/docs/sandbox.md",
                     "tiffany-loop docs",
                 )
                 .underlined(),
