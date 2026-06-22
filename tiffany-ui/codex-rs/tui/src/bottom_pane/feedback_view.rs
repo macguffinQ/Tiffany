@@ -29,7 +29,7 @@ use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
 const BASE_CLI_BUG_ISSUE_URL: &str =
-    "https://github.com/openai/codex/issues/new?template=3-cli.yml";
+    "https://github.com/macguffinQ/Tiffany/issues/new?template=bug_report.md";
 /// Internal routing link for employee feedback follow-ups. This must not be shown to external users.
 const CODEX_FEEDBACK_INTERNAL_URL: &str = "http://go/codex-feedback-internal";
 
@@ -368,8 +368,8 @@ fn issue_url_for_category(
     feedback_audience: FeedbackAudience,
 ) -> Option<String> {
     // Only certain categories provide a follow-up link. We intentionally keep
-    // the external GitHub behavior identical while routing internal users to
-    // the internal go link.
+    // External users should report Tiffany issues in the Tiffany repository;
+    // internal OpenAI employee routing stays on the upstream feedback channel.
     match category {
         FeedbackCategory::Bug
         | FeedbackCategory::BadResult
@@ -855,7 +855,7 @@ mod tests {
         );
         let bug_url_non_employee =
             issue_url_for_category(FeedbackCategory::Bug, "t", FeedbackAudience::External);
-        let expected_external_url = "https://github.com/openai/codex/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20t";
+        let expected_external_url = "https://github.com/macguffinQ/Tiffany/issues/new?template=bug_report.md&steps=Uploaded%20thread:%20t";
         assert_eq!(bug_url_non_employee.as_deref(), Some(expected_external_url));
     }
 
@@ -872,7 +872,7 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            "• Feedback uploaded. Please open an issue using the following URL:\n\n  https://github.com/openai/codex/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20thread-1\n\n  Or mention your thread ID thread-1 in an existing issue."
+            "• Feedback uploaded. Please open an issue using the following URL:\n\n  https://github.com/macguffinQ/Tiffany/issues/new?template=bug_report.md&steps=Uploaded%20thread:%20thread-1\n\n  Or mention your thread ID thread-1 in an existing issue."
         );
     }
 

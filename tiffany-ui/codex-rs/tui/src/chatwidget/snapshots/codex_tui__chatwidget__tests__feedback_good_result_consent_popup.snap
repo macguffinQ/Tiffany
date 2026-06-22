@@ -1,17 +1,18 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 2957
 expression: popup
 ---
   Upload logs?
 
   The following files will be sent:
-    • codex-logs.log
+    • tiffany-logs.log
     • codex-doctor-report.json
     • auto-review-rollout-thread-1.jsonl
     • codex-connectivity-diagnostics.txt
 
-› 1. Yes  Share the current Codex session logs and diagnostics with the team
-          for troubleshooting.
+› 1. Yes  Share the current tiffany-loop session logs and diagnostics with the
+          team for troubleshooting.
   2. No
 
   Press enter to confirm or esc to go back

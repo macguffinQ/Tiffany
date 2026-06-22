@@ -6,7 +6,7 @@ expression: rendered
 Upload logs?
 
 The following files will be sent:
-  • codex-logs.log
+  • tiffany-logs.log
   • codex-doctor-report.json
   • windows-sandbox.log
   • rollout.jsonl
