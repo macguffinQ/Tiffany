@@ -1055,6 +1055,7 @@ fn process_events_include_stage(events: &[&String], stage: &str) -> bool {
 
 #[derive(Default)]
 struct ProcessWorkerCounts {
+    ready: usize,
     started: usize,
     done: usize,
     failed: usize,
@@ -1068,30 +1069,43 @@ fn process_worker_summary(input: &InputState, events: &[&String]) -> Option<Stri
     let mut counts = ProcessWorkerCounts::default();
     for line in events {
         let body = normalized_process_body(line);
-        if !body.starts_with("worker  ") && !body.starts_with("Worker ") {
+        let body = body.as_str();
+        if let Some(worker) = compact_worker_body(body) {
+            if worker.starts_with("ready ·")
+                || worker.contains(" ready ·")
+                || worker.starts_with("direct answer ready")
+            {
+                counts.ready += 1;
+            }
+            if worker.contains(" started ·") {
+                counts.started += 1;
+            }
+            if worker.contains(" done ·") {
+                counts.done += 1;
+            }
+            if worker.contains(" failed ·") {
+                counts.failed += 1;
+            }
+            if worker.starts_with("tool call ·") {
+                counts.tool_calls += 1;
+            }
+            if worker.starts_with("tool result ·") {
+                counts.tool_results += 1;
+            }
+            if worker.starts_with("stderr ·") {
+                counts.stderr += 1;
+            }
+            if worker.starts_with("alert ·") {
+                counts.alerts += 1;
+            }
             continue;
         }
-        let body = body.as_str();
-        if body.contains(" started ·") || body.starts_with("Worker started:") {
+        if body.starts_with("Worker started:") {
             counts.started += 1;
-        }
-        if body.contains(" done ·") || body.starts_with("Worker done:") {
+        } else if body.starts_with("Worker done:") {
             counts.done += 1;
-        }
-        if body.contains(" failed ·") || body.starts_with("Worker failed:") {
+        } else if body.starts_with("Worker failed:") {
             counts.failed += 1;
-        }
-        if body.starts_with("worker  tool call ·") {
-            counts.tool_calls += 1;
-        }
-        if body.starts_with("worker  tool result ·") {
-            counts.tool_results += 1;
-        }
-        if body.starts_with("worker  stderr ·") {
-            counts.stderr += 1;
-        }
-        if body.starts_with("worker  alert ·") {
-            counts.alerts += 1;
         }
     }
     if counts.failed == 0 {
@@ -1099,6 +1113,7 @@ fn process_worker_summary(input: &InputState, events: &[&String]) -> Option<Stri
     }
 
     let mut parts = Vec::new();
+    push_count(&mut parts, counts.ready, "ready");
     push_count(&mut parts, counts.started, "started");
     push_count(&mut parts, counts.done, "done");
     push_count(&mut parts, counts.failed, "failed");
@@ -1300,20 +1315,28 @@ fn process_event_is_important(line: &str) -> bool {
 }
 
 fn compact_worker_event_is_important(body: &str) -> bool {
-    let Some(worker) = body.strip_prefix("worker  ") else {
+    let Some(worker) = compact_worker_body(body) else {
         return false;
     };
-    let worker = worker.trim_start();
     if matches!(
         worker.split_once(" · ").map(|(kind, _)| kind),
         Some("tool call" | "tool result" | "stderr" | "alert")
     ) {
         return true;
     }
-    worker.contains(" started ·")
+    worker.starts_with("ready ·")
+        || worker.contains(" started ·")
+        || worker.contains(" ready ·")
+        || worker.starts_with("direct answer ready")
         || worker.contains(" done ·")
         || worker.contains(" failed ·")
         || worker.contains(" cancelled ·")
+}
+
+fn compact_worker_body(body: &str) -> Option<&str> {
+    body.strip_prefix("worker  ")
+        .or_else(|| body.strip_prefix("worker "))
+        .map(str::trim_start)
 }
 
 fn format_process_for_copy(input: &InputState) -> String {
@@ -1641,6 +1664,9 @@ mod tests {
         let formatted = format_process_capture(&input, 20);
         assert!(formatted.contains("ready"));
         assert!(!formatted.contains("plan ready"));
+        let summary = format_process_summary(&input);
+        assert!(summary.contains("workers: 1 ready"));
+        assert!(summary.contains("worker  ready · 1 run(s)"));
 
         let mut input = InputState {
             run_route: Some("direct-answer".into()),
@@ -1650,6 +1676,9 @@ mod tests {
         record_run_progress(&mut input, &RunProgress::Planned { sub_task_count: 1 });
 
         assert!(input.run_events[0].contains("worker  direct answer ready"));
+        let summary = format_process_summary(&input);
+        assert!(summary.contains("workers: 1 ready"));
+        assert!(summary.contains("worker  direct answer ready"));
     }
 
     #[test]
@@ -1738,6 +1767,7 @@ mod tests {
         let mut input = InputState::default();
         input.run_events = vec![
             "10:00:00  worker  output · abcdef12 claude-code: incremental log line".into(),
+            "10:00:00  worker  ready · 1 run(s)".into(),
             "10:00:01  worker  tool call · abcdef12 claude-code: tool Bash: cargo test".into(),
             "10:00:02  worker  stderr · abcdef12 worker-codex: API Error: model not found".into(),
             "10:00:03  worker  worker-cc done · abcdef12 · 1.2s".into(),
@@ -1745,7 +1775,8 @@ mod tests {
 
         let formatted = format_process_summary(&input);
 
-        assert!(formatted.contains("workers: 1 done, 1 tool call(s), 1 stderr"));
+        assert!(formatted.contains("workers: 1 ready, 1 done, 1 tool call(s), 1 stderr"));
+        assert!(formatted.contains("worker  ready · 1 run(s)"));
         assert!(formatted.contains("tool call · abcdef12 claude-code"));
         assert!(formatted.contains("stderr · abcdef12 worker-codex"));
         assert!(formatted.contains("worker  worker-cc done"));
