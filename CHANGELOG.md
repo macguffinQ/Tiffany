@@ -14,6 +14,12 @@ All notable changes to this project will be documented in this file.
 - Routed conversational requests directly to worker execution, skipping
   planner, critic, and reviewer noise while keeping full orchestration for
   engineering tasks.
+- Marked direct-answer runs with a dedicated progress event in terminal, TUI,
+  ACP, and persisted orchestration logs instead of showing them as DAG
+  execution.
+- Treated pure URL/link-inspection prompts as direct worker answers while
+  keeping creation, code, and implementation requests on the full orchestration
+  pipeline.
 - Surfaced non-zero planner/critic/reviewer CLI exits with stderr context so
   runtime, model, and permission failures are explicit in the TUI.
 

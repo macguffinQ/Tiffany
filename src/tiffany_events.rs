@@ -144,6 +144,25 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 duration_ms: None,
                 reason: None,
             },
+            RunProgress::DirectAnswer => Self {
+                role: "worker",
+                status: "running",
+                message: "answering directly".to_string(),
+                task_id: None,
+                agent: None,
+                worker_role: None,
+                runtime: None,
+                cc_agent: None,
+                model: None,
+                provider: None,
+                task_prompt: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+                duration_ms: None,
+                reason: None,
+            },
             RunProgress::Executing { sub_task_count } => Self {
                 role: "worker",
                 status: "running",
@@ -470,6 +489,7 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::Replanning { attempt } => {
             Some(format!("● planner  replanning · attempt {attempt}"))
         }
+        RunProgress::DirectAnswer => Some("● worker   answering directly".into()),
         RunProgress::Executing { sub_task_count } => {
             Some(format!("● worker   running {sub_task_count} sub-task(s)"))
         }
@@ -587,6 +607,7 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::Replanning { attempt } => {
             Some(format!("plan  updating plan · attempt {attempt}"))
         }
+        RunProgress::DirectAnswer => Some("run  answering directly".into()),
         RunProgress::Executing { sub_task_count } => {
             Some(format!("run  running {sub_task_count} sub-task(s)"))
         }
@@ -872,6 +893,10 @@ mod tests {
     fn compact_formatter_matches_tui_process_capture_shape() {
         let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
 
+        let direct =
+            format_compact_progress_event(&RunProgress::DirectAnswer).expect("direct answer line");
+        assert_eq!(direct, "run  answering directly");
+
         let started = format_compact_progress_event(&RunProgress::WorkerStarted {
             task_id,
             agent: "claude-code".into(),
@@ -923,5 +948,19 @@ mod tests {
         assert_eq!(json["task_id"], "12345678-0000-0000-0000-000000000000");
         assert_eq!(json["reason"], "conversational answer");
         assert_eq!(json["message"], "review skipped - conversational answer");
+    }
+
+    #[test]
+    fn direct_answer_event_is_visible_and_structured() {
+        let line = format_text_progress_event(&RunProgress::DirectAnswer)
+            .expect("direct answer text line");
+        assert_eq!(line, "● worker   answering directly");
+
+        let json = serde_json::to_value(TiffanyProgressEvent::from(RunProgress::DirectAnswer))
+            .expect("serializes direct answer event");
+        assert_eq!(json["role"], "worker");
+        assert_eq!(json["status"], "running");
+        assert_eq!(json["message"], "answering directly");
+        assert!(json.get("count").is_none());
     }
 }

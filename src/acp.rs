@@ -1997,6 +1997,7 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
             }
         }
         RunProgress::Replanning { attempt } => Some(format!("Replanning, attempt {attempt}.")),
+        RunProgress::DirectAnswer => Some("Answering directly.".into()),
         RunProgress::Executing { sub_task_count } => {
             Some(format!("Executing {sub_task_count} sub-task(s)."))
         }

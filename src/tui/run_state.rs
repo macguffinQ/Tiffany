@@ -185,6 +185,7 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
         | RunProgress::Critiquing { .. }
         | RunProgress::CritiqueResult { .. }
         | RunProgress::Replanning { .. }
+        | RunProgress::DirectAnswer
         | RunProgress::Executing { .. }
         | RunProgress::WorkerStarted { .. }
         | RunProgress::Reviewing { .. }

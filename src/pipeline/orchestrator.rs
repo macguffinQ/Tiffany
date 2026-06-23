@@ -39,6 +39,7 @@ pub enum RunProgress {
     Replanning {
         attempt: u32,
     },
+    DirectAnswer,
     Executing {
         sub_task_count: usize,
     },
@@ -439,9 +440,7 @@ impl Orchestrator {
         attach_parent_session(orchestration_session_id, &mut plan.sub_tasks);
 
         let tasks = plan.sub_tasks;
-        let _ = tx.send(RunProgress::Executing {
-            sub_task_count: tasks.len(),
-        });
+        let _ = tx.send(RunProgress::DirectAnswer);
         let completed = self
             .execute_dag(tasks, tx.clone())
             .await
@@ -720,6 +719,15 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "status": "running",
                 "message": format!("replanning - attempt {attempt}"),
                 "attempt": attempt,
+            }),
+        ),
+        RunProgress::DirectAnswer => (
+            "worker",
+            top_task_id,
+            serde_json::json!({
+                "status": "running",
+                "message": "answering directly",
+                "direct": true,
             }),
         ),
         RunProgress::Executing { sub_task_count } => (
@@ -1340,6 +1348,7 @@ mod tests {
         let mut saw_planning = false;
         let mut saw_critic = false;
         let mut saw_review = false;
+        let mut saw_direct = false;
         let mut saw_executing = false;
         let mut saw_review_result = false;
         while let Ok(event) = rx.try_recv() {
@@ -1351,12 +1360,14 @@ mod tests {
                 RunProgress::Reviewing { .. }
                 | RunProgress::ReviewSkipped { .. }
                 | RunProgress::ReviewUnavailable { .. } => saw_review = true,
+                RunProgress::DirectAnswer => saw_direct = true,
                 RunProgress::Executing { .. } => saw_executing = true,
                 RunProgress::ReviewResult { .. } => saw_review_result = true,
                 _ => {}
             }
         }
-        assert!(saw_executing, "expected direct worker execution event");
+        assert!(saw_direct, "expected direct answer progress event");
+        assert!(!saw_executing, "conversation should not show DAG execution");
         assert!(!saw_planning, "conversation should not invoke planner");
         assert!(!saw_critic, "conversation should not invoke critic");
         assert!(!saw_review, "conversation should not invoke reviewer");

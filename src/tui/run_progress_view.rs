@@ -43,6 +43,7 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
         RunProgress::Replanning { attempt } => {
             Some(running(format!("replanning — attempt {attempt}")))
         }
+        RunProgress::DirectAnswer => Some(running("answering directly")),
         RunProgress::Executing { sub_task_count } => {
             Some(running(format!("running {sub_task_count} sub-task(s)")))
         }
@@ -163,6 +164,11 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
             Some(format!(
                 "▸ Replanning (attempt {attempt}) — incorporating feedback…"
             )),
+        )),
+        RunProgress::DirectAnswer => Some(status(
+            "Direct answer",
+            "running worker",
+            Some("▸ Answering directly…"),
         )),
         RunProgress::Executing { sub_task_count } => Some(status(
             format!("Executing {sub_task_count} sub-task(s)"),
@@ -423,6 +429,18 @@ mod tests {
         assert_eq!(
             skipped.line,
             "review  skipped · 00000000 · conversational answer"
+        );
+
+        let direct = progress_history_view(&RunProgress::DirectAnswer).expect("direct view");
+        assert_eq!(direct.icon, "●");
+        assert_eq!(direct.line, "answering directly");
+
+        let direct_status = run_status_view(&RunProgress::DirectAnswer).expect("direct status");
+        assert_eq!(direct_status.stage, "Direct answer");
+        assert_eq!(direct_status.detail, "running worker");
+        assert_eq!(
+            direct_status.assistant_update.as_deref(),
+            Some("▸ Answering directly…")
         );
     }
 }

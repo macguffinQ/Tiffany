@@ -91,6 +91,14 @@ fn contains_engineering_action(text: &str) -> bool {
         "实现",
         "新增",
         "删除",
+        "创建",
+        "新建",
+        "生成",
+        "搭建",
+        "脚手架",
+        "写参赛",
+        "写 agent",
+        "写个 agent",
         "提交",
         "推送",
         "执行",
@@ -118,6 +126,10 @@ fn contains_engineering_action(text: &str) -> bool {
         "整合",
         "fix",
         "implement",
+        "create",
+        "generate",
+        "scaffold",
+        "write code",
         "change",
         "edit",
         "refactor",
@@ -159,6 +171,11 @@ fn looks_like_conversation(text: &str) -> bool {
         "建议",
         "计划",
         "坏处",
+        "看看",
+        "看下",
+        "了解",
+        "分析",
+        "调研",
         "对不",
         "可以吗",
         "行不行",
@@ -178,6 +195,20 @@ fn looks_like_conversation(text: &str) -> bool {
     ]
     .iter()
     .any(|needle| lower.contains(needle))
+        || looks_like_link_reference(text)
+}
+
+fn looks_like_link_reference(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return true;
+    }
+    trimmed
+        .split_whitespace()
+        .any(|part| part.starts_with("http://") || part.starts_with("https://"))
 }
 
 #[cfg(test)]
@@ -188,6 +219,12 @@ mod tests {
     fn classifies_plain_chat_as_conversation() {
         assert!(is_conversational_task(&Task::new("你好")));
         assert!(is_conversational_task(&Task::new("你叫啥\n你能干啥")));
+        assert!(is_conversational_task(&Task::new(
+            "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle"
+        )));
+        assert!(is_conversational_task(&Task::new(
+            "看看这个链接 https://example.com"
+        )));
     }
 
     #[test]
@@ -195,6 +232,8 @@ mod tests {
         assert!(!is_conversational_task(&Task::new("优化 TUI 显示")));
         assert!(!is_conversational_task(&Task::new("fix the build error")));
         assert!(!is_conversational_task(&Task::new("按照这个计划来做")));
+        assert!(!is_conversational_task(&Task::new("写参赛 agent")));
+        assert!(!is_conversational_task(&Task::new("创建一个 worker")));
     }
 
     #[test]
