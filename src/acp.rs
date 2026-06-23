@@ -2007,10 +2007,13 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
             role,
             message,
             reason,
-        } => Some(format!(
-            "{role} fallback: {message}: {}.",
-            agent_events::humanize_jsonish(reason, 1600)
-        )),
+        } => {
+            let display = agent_events::control_fallback_display(role, message, reason, 1600);
+            Some(format!(
+                "{} fallback: {}.",
+                display.role_label, display.summary
+            ))
+        }
         RunProgress::DirectAnswer => Some("Answering directly.".into()),
         RunProgress::Executing { sub_task_count } => {
             Some(format!("Running {sub_task_count} worker run(s)."))
@@ -2823,7 +2826,22 @@ mod tests {
 
         assert_eq!(
             text,
-            "critic fallback: critique unavailable; continuing with current plan: codex exec --cd unsupported."
+            "critic fallback: critique unavailable; continuing with current plan · codex exec --cd unsupported."
+        );
+
+        let text = progress_text(
+            &RunProgress::ControlFallback {
+                role: "planner".into(),
+                message: "planning unavailable; using original task".into(),
+                reason: "planner unavailable".into(),
+            },
+            &mut capture,
+        )
+        .expect("planner fallback progress text");
+
+        assert_eq!(
+            text,
+            "planner fallback: single-worker fallback · planner unavailable."
         );
     }
 

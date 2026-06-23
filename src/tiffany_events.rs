@@ -363,12 +363,15 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
             role,
             message,
             reason,
-        } => Some(format!(
-            "⚠ {:<8}{} · {}",
-            role_label(role),
-            message,
-            agent_events::humanize_jsonish(reason, TEXT_OUTPUT_SUMMARY_MAX_CHARS)
-        )),
+        } => {
+            let display = agent_events::control_fallback_display(
+                role,
+                message,
+                reason,
+                TEXT_OUTPUT_SUMMARY_MAX_CHARS,
+            );
+            Some(format!("⚠ {:<8}{}", display.role_label, display.summary))
+        }
         RunProgress::DirectAnswer => Some("● worker   answering directly".into()),
         RunProgress::Executing { sub_task_count } => {
             Some(format!("● worker   running {sub_task_count} worker run(s)"))
@@ -495,12 +498,19 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
             role,
             message,
             reason,
-        } => Some(format!(
-            "{}  {} · {}",
-            compact_role_label(role),
-            message,
-            agent_events::humanize_jsonish(reason, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)
-        )),
+        } => {
+            let display = agent_events::control_fallback_display(
+                role,
+                message,
+                reason,
+                COMPACT_OUTPUT_SUMMARY_MAX_CHARS,
+            );
+            Some(format!(
+                "{}  {}",
+                compact_role_label_from_control(display.role_label),
+                display.summary
+            ))
+        }
         RunProgress::DirectAnswer => Some("run  answering directly".into()),
         RunProgress::Executing { sub_task_count } => {
             Some(format!("run  running {sub_task_count} worker run(s)"))
@@ -647,6 +657,15 @@ fn compact_role_label(role: &str) -> &'static str {
         "critic" => "critic",
         "reviewer" => "review",
         _ => "role",
+    }
+}
+
+fn compact_role_label_from_control(role: &str) -> &'static str {
+    match role {
+        "planner" => "plan",
+        "critic" => "critic",
+        "reviewer" => "review",
+        _ => "control",
     }
 }
 
@@ -857,14 +876,14 @@ mod tests {
         let line = format_text_progress_event(&event).expect("fallback line");
         assert_eq!(
             line,
-            "⚠ planner planning unavailable; using original task · planner unavailable"
+            "⚠ planner single-worker fallback · planner unavailable"
         );
         assert!(!line.contains("output"));
 
         let compact = format_compact_progress_event(&event).expect("compact fallback");
         assert_eq!(
             compact,
-            "plan  planning unavailable; using original task · planner unavailable"
+            "plan  single-worker fallback · planner unavailable"
         );
 
         let critic_limit = RunProgress::ControlFallback {

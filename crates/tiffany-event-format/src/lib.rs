@@ -95,6 +95,12 @@ pub struct AgentFailureHint {
     pub evidence: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlFallbackDisplay {
+    pub role_label: &'static str,
+    pub summary: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrchestrationRoute {
     DirectAnswer,
@@ -1166,6 +1172,54 @@ pub fn is_redundant_role_output(role: &str, content: &str, max: usize) -> bool {
         }
         _ => false,
     }
+}
+
+pub fn control_fallback_display(
+    role: &str,
+    message: &str,
+    reason: &str,
+    max: usize,
+) -> ControlFallbackDisplay {
+    let role_label = control_role_label(role);
+    let reason = humanize_jsonish(reason, max);
+    let reason = reason.trim();
+    let message = message.trim();
+
+    let summary = if control_fallback_is_single_worker_downgrade(message, reason) {
+        if reason.is_empty() {
+            "single-worker fallback".to_string()
+        } else {
+            format!("single-worker fallback · {reason}")
+        }
+    } else if reason.is_empty() {
+        message.to_string()
+    } else {
+        format!("{message} · {reason}")
+    };
+
+    ControlFallbackDisplay {
+        role_label,
+        summary,
+    }
+}
+
+fn control_role_label(role: &str) -> &'static str {
+    match role {
+        "planner" => "planner",
+        "critic" => "critic",
+        "reviewer" => "reviewer",
+        _ => "control",
+    }
+}
+
+fn control_fallback_is_single_worker_downgrade(message: &str, reason: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    let reason = reason.to_ascii_lowercase();
+    message.contains("fell back to original task")
+        || message.contains("using original task")
+        || reason.contains("using original task")
+        || reason.contains("no usable worker runs")
+        || reason.contains("non-json output")
 }
 
 fn role_output_has_actionable_detail(lines: &[&str]) -> bool {
@@ -2416,6 +2470,44 @@ mod tests {
             "plan ready: not a planner status",
             200
         ));
+    }
+
+    #[test]
+    fn formats_control_fallbacks_for_user_visible_surfaces() {
+        let planner = control_fallback_display(
+            "planner",
+            "planning unavailable; using original task",
+            "planner unavailable",
+            200,
+        );
+        assert_eq!(planner.role_label, "planner");
+        assert_eq!(
+            planner.summary,
+            "single-worker fallback · planner unavailable"
+        );
+
+        let replan = control_fallback_display(
+            "planner",
+            "replan fell back to original task",
+            "replanner returned no usable worker runs; using original task",
+            200,
+        );
+        assert_eq!(
+            replan.summary,
+            "single-worker fallback · replanner returned no usable worker runs; using original task"
+        );
+
+        let critic = control_fallback_display(
+            "critic",
+            "critique unavailable; continuing with current plan",
+            "codex exec --cd unsupported",
+            200,
+        );
+        assert_eq!(critic.role_label, "critic");
+        assert_eq!(
+            critic.summary,
+            "critique unavailable; continuing with current plan · codex exec --cd unsupported"
+        );
     }
 
     #[test]

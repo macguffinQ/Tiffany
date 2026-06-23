@@ -830,12 +830,11 @@ fn control_fallback_summary(payload: &Value) -> Option<String> {
         return None;
     }
     let message = normalized_payload_message(payload, "fallback");
-    let reason = payload_str(payload, "reason")
-        .map(|reason| agent_events::humanize_jsonish(reason, EVENT_SUMMARY_MAX_CHARS));
-    match reason.map(|reason| reason.trim().to_string()) {
-        Some(reason) if !reason.is_empty() => Some(format!("{message} · {reason}")),
-        _ => Some(message),
-    }
+    let reason = payload_str(payload, "reason").unwrap_or("");
+    Some(
+        agent_events::control_fallback_display("", &message, reason, EVENT_SUMMARY_MAX_CHARS)
+            .summary,
+    )
 }
 
 fn worker_event_summary(payload: &Value) -> String {
@@ -1344,9 +1343,7 @@ mod tests {
         };
 
         let line = format_session_event(&planner);
-        assert!(
-            line.contains("plan planning unavailable; using original task · planner unavailable")
-        );
+        assert!(line.contains("plan single-worker fallback · planner unavailable"));
         assert!(!line.contains("0 issue"));
 
         let critic = Event {

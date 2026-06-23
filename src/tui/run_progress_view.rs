@@ -201,16 +201,15 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
             role,
             message,
             reason,
-        } => Some(status(
-            format!("{}: fallback", role_display_name(role)),
-            reason.clone(),
-            Some(format!(
-                "⚠ {}  {} · {}",
-                role_display_name(role),
-                message,
-                reason
-            )),
-        )),
+        } => {
+            let display =
+                crate::agent_events::control_fallback_display(role, message, reason, usize::MAX);
+            Some(status(
+                format!("{}: fallback", display.role_label),
+                display.summary.clone(),
+                Some(format!("⚠ {}  {}", display.role_label, display.summary)),
+            ))
+        }
         RunProgress::DirectAnswer => Some(status(
             "Direct answer",
             "running worker",
@@ -401,12 +400,8 @@ fn format_review_lifecycle_line(
 }
 
 fn format_control_fallback_line(role: &str, message: &str, reason: &str) -> String {
-    format!(
-        "{}  {} · {}",
-        role_display_name(role),
-        message.trim(),
-        reason.trim()
-    )
+    let display = crate::agent_events::control_fallback_display(role, message, reason, usize::MAX);
+    format!("{}  {}", display.role_label, display.summary)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -455,15 +450,6 @@ fn format_route_line(route: &str, reason: &str, style: RouteLineStyle) -> String
         line.push_str(steps);
     }
     line
-}
-
-fn role_display_name(role: &str) -> &'static str {
-    match role {
-        "planner" => "planner",
-        "critic" => "critic",
-        "reviewer" => "reviewer",
-        _ => "control",
-    }
 }
 
 fn provider_model_label(provider: Option<&str>, model: &str) -> String {
@@ -646,10 +632,24 @@ mod tests {
         })
         .expect("fallback status");
         assert_eq!(fallback_status.stage, "planner: fallback");
-        assert_eq!(fallback_status.detail, "planner unavailable");
+        assert_eq!(
+            fallback_status.detail,
+            "single-worker fallback · planner unavailable"
+        );
         assert_eq!(
             fallback_status.assistant_update.as_deref(),
-            Some("⚠ planner  planning unavailable; using original task · planner unavailable")
+            Some("⚠ planner  single-worker fallback · planner unavailable")
+        );
+
+        let soft_fallback = progress_history_view(&RunProgress::ControlFallback {
+            role: "planner".into(),
+            message: "replan fell back to original task".into(),
+            reason: "replanner returned no usable worker runs; using original task".into(),
+        })
+        .expect("soft fallback history");
+        assert_eq!(
+            soft_fallback.line,
+            "planner  single-worker fallback · replanner returned no usable worker runs; using original task"
         );
     }
 }

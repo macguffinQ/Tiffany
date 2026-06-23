@@ -1599,7 +1599,7 @@ mod tests {
         });
         assert_eq!(
             fallback,
-            "plan  planning unavailable; using original task · planner unavailable"
+            "plan  single-worker fallback · planner unavailable"
         );
 
         assert!(!started.contains("Worker started:"));
