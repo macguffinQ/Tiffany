@@ -1336,7 +1336,7 @@ fn help_text() -> String {
      /status                       Show current terminal chat/run status\n\
      /doctor                       Diagnose config, runtimes, API keys, and tools\n\
      /roles [show|route|use|snippet|save] Show/select/save role routing\n\
-     /workflow                     Show active role pipeline\n\
+     /workflow                     Show selected flow and role wiring\n\
      /model [role]                 Show model assignments\n\
      /agent [role|clear]           Route future worker tasks\n\
      /cc-agent [name|clear]        Use a Claude Code subagent for Claude workers\n\

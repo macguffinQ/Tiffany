@@ -1844,11 +1844,7 @@ fn run_status_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
     } else {
         format!("{} turn(s)", launch.context_turn_count)
     };
-    let flow = if launch_looks_direct(launch) {
-        "direct"
-    } else {
-        "full"
-    };
+    let flow = launch_route(launch).display_label();
     Line::from(vec![
         status_chip("status", "running", TIFFANY_BLUE),
         Span::raw("  "),
@@ -1863,14 +1859,34 @@ fn run_status_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
 }
 
 fn workflow_line() -> Line<'static> {
-    full_workflow_line()
+    Line::from(vec![
+        Span::styled(
+            "flow",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled("direct", Style::default().fg(TIFFANY_SOFT)),
+        Span::styled(" / ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled("single", Style::default().fg(TIFFANY_SOFT)),
+        Span::styled(" / ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled("full", Style::default().fg(TIFFANY_SOFT)),
+        Span::styled("  →  ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(
+            "selected per prompt",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
 }
 
 fn run_workflow_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
-    if launch_looks_direct(launch) {
-        direct_workflow_line()
-    } else {
-        full_workflow_line()
+    match launch_route(launch) {
+        event_format::OrchestrationRoute::DirectAnswer => direct_workflow_line("direct"),
+        event_format::OrchestrationRoute::SingleWorker => direct_workflow_line("single"),
+        event_format::OrchestrationRoute::FullPipeline => full_workflow_line(),
     }
 }
 
@@ -1898,7 +1914,7 @@ fn full_workflow_line() -> Line<'static> {
     ])
 }
 
-fn direct_workflow_line() -> Line<'static> {
+fn direct_workflow_line(label: &'static str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             "flow",
@@ -1907,7 +1923,7 @@ fn direct_workflow_line() -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled("direct", Style::default().fg(TIFFANY_SOFT)),
+        Span::styled(label, Style::default().fg(TIFFANY_SOFT)),
         Span::styled(" → ", Style::default().fg(TIFFANY_DARK)),
         Span::styled(
             "worker",
@@ -1920,8 +1936,8 @@ fn direct_workflow_line() -> Line<'static> {
     ])
 }
 
-fn launch_looks_direct(launch: &TiffanyOrchestratorLaunch) -> bool {
-    event_format::request_looks_direct_answer(&launch.user_prompt)
+fn launch_route(launch: &TiffanyOrchestratorLaunch) -> event_format::OrchestrationRoute {
+    event_format::classify_orchestration_route(&launch.user_prompt)
 }
 
 fn command_hint_line() -> Line<'static> {
@@ -2792,7 +2808,8 @@ mod tests {
 
         assert!(text.contains("◆ T>_  tiffany-loop orchestrator"));
         assert!(text.contains("status ready"));
-        assert!(text.contains("flow  planner → critic → worker → reviewer"));
+        assert!(text.contains("flow  direct / single / full  →  selected per prompt"));
+        assert!(!text.contains("status ready\nflow  planner → critic"));
         assert!(text.contains("cmd  /provider  /role  /roles  /doctor"));
         assert_eq!(lines[0].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[0].spans[2].style.fg, Some(TIFFANY_BLUE));
@@ -2832,6 +2849,43 @@ mod tests {
         let line = run_workflow_line(&launch);
 
         assert_eq!(line_text(&line), "flow  direct → worker → answer");
+    }
+
+    #[test]
+    fn run_intro_uses_single_flow_for_atomic_worker_requests() {
+        let launch = TiffanyOrchestratorLaunch {
+            bin: "orchestrator".into(),
+            user_prompt: "写参赛 agent".into(),
+            prompt: "写参赛 agent".into(),
+            extra_args: vec![],
+            config_path: None,
+            context_turn_count: 0,
+        };
+        let lines = [run_status_line(&launch), run_workflow_line(&launch)];
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("flow single"));
+        assert!(text.contains("flow  single → worker → answer"));
+        assert!(!text.contains("planner → critic"));
+    }
+
+    #[test]
+    fn run_intro_uses_single_flow_for_external_atomic_followups() {
+        let prompt = "Previous turns:\nuser:\n优化 tiffany-loop 编排流程\n\nassistant result:\n已完成。\n\n---\nCurrent user request:\n写参赛 agent";
+        let launch = TiffanyOrchestratorLaunch {
+            bin: "orchestrator".into(),
+            user_prompt: prompt.into(),
+            prompt: prompt.into(),
+            extra_args: vec![],
+            config_path: None,
+            context_turn_count: 1,
+        };
+        let lines = [run_status_line(&launch), run_workflow_line(&launch)];
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("flow single"));
+        assert!(text.contains("context 1 turn(s)"));
+        assert!(text.contains("flow  single → worker → answer"));
     }
 
     #[test]

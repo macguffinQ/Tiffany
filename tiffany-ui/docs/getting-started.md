@@ -24,6 +24,7 @@ Inside the TUI:
 - `/doctor` diagnoses missing binaries, keys, models, runtime mismatch, stale
   Homebrew installs, and Codex CLI `exec --cd` compatibility.
 
-The UI runs in Tiffany orchestration mode by default: prompts go through the
-planner -> critic -> worker -> reviewer pipeline, with conversational turns
-collapsed into direct worker answers and a visible `review skipped` event.
+The UI runs in Tiffany orchestration mode by default. Each prompt first selects
+a flow: `direct` for chat/Q&A, `single` for atomic worker tasks, or `full` for
+planner -> critic -> worker -> reviewer implementation work. `/workflow`,
+`/process`, and `/session flow` show the selected flow and route reason.

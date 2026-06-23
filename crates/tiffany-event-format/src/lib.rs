@@ -95,7 +95,74 @@ pub struct AgentFailureHint {
     pub evidence: String,
 }
 
-const DIRECT_REQUEST_MARKERS: &[&str] = &[
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrchestrationRoute {
+    DirectAnswer,
+    SingleWorker,
+    FullPipeline,
+}
+
+impl OrchestrationRoute {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DirectAnswer => "direct-answer",
+            Self::SingleWorker => "single-worker",
+            Self::FullPipeline => "full-pipeline",
+        }
+    }
+
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::DirectAnswer => "direct",
+            Self::SingleWorker => "single",
+            Self::FullPipeline => "full",
+        }
+    }
+
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::DirectAnswer => "simple conversational or explanatory request",
+            Self::SingleWorker => "atomic request; planner, critic, and reviewer are not needed",
+            Self::FullPipeline => {
+                "project or implementation work; planner, critic, worker, and reviewer will run"
+            }
+        }
+    }
+
+    pub fn review_skip_reason(self) -> Option<&'static str> {
+        match self {
+            Self::DirectAnswer => Some("conversational answer"),
+            Self::SingleWorker => Some("single worker route"),
+            Self::FullPipeline => None,
+        }
+    }
+}
+
+const DIRECT_QUESTION_PREFIXES: &[&str] = &[
+    "如何",
+    "怎么",
+    "为什么",
+    "为啥",
+    "能不能",
+    "可以吗",
+    "可以不",
+    "行不行",
+    "啥是",
+    "什么是",
+    "介绍",
+    "解释",
+    "说明",
+    "建议",
+    "计划",
+    "坏处",
+    "how ",
+    "what ",
+    "why ",
+    "can ",
+    "could ",
+];
+
+const DIRECT_CHAT_MARKERS: &[&str] = &[
     "你好",
     "你叫",
     "你能",
@@ -103,36 +170,84 @@ const DIRECT_REQUEST_MARKERS: &[&str] = &[
     "能干啥",
     "是谁",
     "是什么",
-    "介绍",
-    "解释",
-    "说明",
-    "如何",
-    "怎么",
-    "为什么",
-    "建议",
-    "计划",
-    "坏处",
-    "看看",
-    "看下",
-    "了解",
-    "分析",
-    "调研",
-    "对不",
-    "可以吗",
-    "行不行",
-    "?",
-    "？",
     "hello",
     "hi",
-    "answer",
-    "respond",
-    "greeting",
-    "what",
-    "how",
-    "why",
-    "explain",
-    "suggest",
-    "plan",
+];
+
+const DIAGNOSTIC_MARKERS: &[&str] = &[
+    "报错",
+    "错误",
+    "日志",
+    "看日志",
+    "网络",
+    "安装报错",
+    "不能用",
+    "无法启动",
+    "失败",
+    "doctor",
+];
+
+const IMPERATIVE_ACTION_MARKERS: &[&str] = &[
+    "修改",
+    "改一下",
+    "改成",
+    "修复",
+    "优化",
+    "重构",
+    "实现",
+    "新增",
+    "删除",
+    "创建",
+    "新建",
+    "生成",
+    "搭建",
+    "脚手架",
+    "写参赛",
+    "写 agent",
+    "写个 agent",
+    "提交",
+    "推送",
+    "执行",
+    "完成",
+    "继续做",
+    "开始做",
+    "来做",
+    "去做",
+    "做一下",
+    "做吧",
+    "做啊",
+    "搞定",
+    "开发",
+    "编译",
+    "构建",
+    "测试",
+    "报错",
+    "日志",
+    "权限",
+    "配置",
+    "安装",
+    "发布",
+    "接入",
+    "完善",
+    "整合",
+    "fix",
+    "implement",
+    "create",
+    "generate",
+    "scaffold",
+    "write code",
+    "change",
+    "edit",
+    "refactor",
+    "test",
+    "build",
+    "debug",
+    "error",
+    "commit",
+    "push",
+    "release",
+    "install",
+    "configure",
 ];
 
 const ENGINEERING_ACTION_MARKERS: &[&str] = &[
@@ -203,6 +318,57 @@ const ENGINEERING_ACTION_MARKERS: &[&str] = &[
     "worker",
 ];
 
+const CONTINUATION_ACTION_MARKERS: &[&str] = &[
+    "继续",
+    "继续做",
+    "按照计划",
+    "按计划",
+    "照顺序",
+    "下一步",
+    "都做",
+    "全部完成",
+    "complete the plan",
+    "continue",
+    "next step",
+];
+
+const FULL_PIPELINE_CONTEXT_MARKERS: &[&str] = &[
+    "当前工程",
+    "这个工程",
+    "当前项目",
+    "这个项目",
+    "项目",
+    "仓库",
+    "代码",
+    "代码库",
+    "tiffany",
+    "tiffany-loop",
+    "orchestrator",
+    "编排",
+    "tui",
+    "provider",
+    "worker",
+    "role",
+    "角色",
+    "codex",
+    "claude",
+    "readme",
+    "action",
+    "release",
+    "brew",
+    "homebrew",
+    "github",
+    "ci",
+    "workflow",
+    "提交",
+    "推送",
+    "src/",
+    "tests/",
+    ".rs",
+    ".toml",
+    ".md",
+];
+
 impl AgentFailureHint {
     pub fn title(&self) -> &'static str {
         self.category.title()
@@ -214,8 +380,7 @@ impl AgentFailureHint {
 }
 
 pub fn request_looks_direct_answer(text: &str) -> bool {
-    let request = current_user_request(text);
-    looks_like_direct_request(request) && !contains_engineering_action(request)
+    classify_orchestration_route(text) == OrchestrationRoute::DirectAnswer
 }
 
 pub fn contains_engineering_action(text: &str) -> bool {
@@ -226,11 +391,71 @@ pub fn contains_engineering_action(text: &str) -> bool {
 }
 
 pub fn looks_like_direct_request(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    DIRECT_REQUEST_MARKERS
+    looks_like_direct_answer_request(text)
+}
+
+pub fn classify_orchestration_route(text: &str) -> OrchestrationRoute {
+    let request = current_user_request(text);
+    let request_lower = request.to_lowercase();
+    let full_prompt = text.to_lowercase();
+    if has_marker(&request_lower, CONTINUATION_ACTION_MARKERS)
+        && has_marker(&full_prompt, FULL_PIPELINE_CONTEXT_MARKERS)
+    {
+        return OrchestrationRoute::FullPipeline;
+    }
+    if looks_like_direct_answer_request(request) {
+        return OrchestrationRoute::DirectAnswer;
+    }
+    if looks_like_single_worker_request(request) {
+        return OrchestrationRoute::SingleWorker;
+    }
+    OrchestrationRoute::FullPipeline
+}
+
+fn looks_like_direct_answer_request(text: &str) -> bool {
+    let request = text.trim();
+    let lower = request.to_lowercase();
+    if DIRECT_CHAT_MARKERS
         .iter()
         .any(|needle| lower.contains(needle))
-        || looks_like_link_reference(text)
+    {
+        return true;
+    }
+    if looks_like_link_reference(request) && !has_marker(&lower, IMPERATIVE_ACTION_MARKERS) {
+        return true;
+    }
+    if request.ends_with('?') || request.ends_with('？') {
+        return !starts_with_imperative_action(&lower);
+    }
+    DIRECT_QUESTION_PREFIXES
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+        && !starts_with_imperative_action(&lower)
+}
+
+fn looks_like_single_worker_request(request: &str) -> bool {
+    let lower = request.trim().to_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+    if has_marker(&lower, DIAGNOSTIC_MARKERS) && !has_marker(&lower, FULL_PIPELINE_CONTEXT_MARKERS)
+    {
+        return true;
+    }
+    if !has_marker(&lower, IMPERATIVE_ACTION_MARKERS) {
+        return false;
+    }
+    !has_marker(&lower, FULL_PIPELINE_CONTEXT_MARKERS)
+}
+
+fn starts_with_imperative_action(lower: &str) -> bool {
+    IMPERATIVE_ACTION_MARKERS
+        .iter()
+        .any(|marker| lower.starts_with(marker))
+}
+
+fn has_marker(lower: &str, markers: &[&str]) -> bool {
+    markers.iter().any(|marker| lower.contains(marker))
 }
 
 pub fn looks_like_link_reference(text: &str) -> bool {
@@ -2184,7 +2409,7 @@ mod tests {
         assert!(request_looks_direct_answer(
             "看看这个链接 https://example.com"
         ));
-        assert!(looks_like_direct_request("分析一下这个比赛"));
+        assert!(!request_looks_direct_answer("分析一下这个比赛"));
 
         assert!(!request_looks_direct_answer("优化 TUI 显示"));
         assert!(!request_looks_direct_answer("fix the build error"));
@@ -2192,6 +2417,18 @@ mod tests {
         assert!(!request_looks_direct_answer("写参赛 agent"));
         assert!(!request_looks_direct_answer("创建一个 worker"));
         assert!(contains_engineering_action("写参赛 agent"));
+        assert_eq!(
+            classify_orchestration_route("写参赛 agent"),
+            OrchestrationRoute::SingleWorker
+        );
+        assert_eq!(
+            classify_orchestration_route("生成一个 Python 脚手架"),
+            OrchestrationRoute::SingleWorker
+        );
+        assert_eq!(
+            classify_orchestration_route("当前工程日志报错了"),
+            OrchestrationRoute::FullPipeline
+        );
     }
 
     #[test]
@@ -2205,6 +2442,16 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         let engineering_followup = "Previous turns:\nuser:\n你好\n\nassistant result:\n你好。\n\n---\nCurrent user request:\n继续优化 TUI";
         assert_eq!(current_user_request(engineering_followup), "继续优化 TUI");
         assert!(!request_looks_direct_answer(engineering_followup));
+        assert_eq!(
+            classify_orchestration_route(engineering_followup),
+            OrchestrationRoute::FullPipeline
+        );
+
+        let external_atomic_followup = "Previous turns:\nuser:\n优化 tiffany-loop 编排流程\n\nassistant result:\n已完成。\n\n---\nCurrent user request:\n写参赛 agent";
+        assert_eq!(
+            classify_orchestration_route(external_atomic_followup),
+            OrchestrationRoute::SingleWorker
+        );
 
         let crlf = "Previous turns:\r\nuser:\r\nfix the build\r\n\r\n---\r\nCurrent user request:\r\n你能干啥\r\n";
         assert_eq!(current_user_request(crlf), "你能干啥");

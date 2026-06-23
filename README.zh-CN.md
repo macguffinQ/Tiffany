@@ -38,7 +38,7 @@ tiffany-loop orchestration mode
   -> 输出最终结果并记录会话
 ```
 
-对话或解释类输入仍会展示 planner/worker/run 过程，方便观察和回放；review 阶段会显示为 `review skipped · <task> · conversational answer`，避免把正常聊天误判成“没有实际工作”。
+每次输入会先选择 `direct`、`single` 或 `full` flow：对话/解释类输入走 direct，原子执行类输入走 single，工程实现类输入走 full。direct 和 single 仍会展示 route/worker/run 过程，方便观察和回放；review 阶段会显示为 `review skipped · <task> · conversational answer` 或 `review skipped · <task> · single worker route`，避免把正常聊天或不可拆分任务误判成“没有实际工作”。
 
 它适合这些场景：
 
@@ -455,7 +455,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - tiffany-loop UI 原生模式支持 `/role`：`/role` 打开独立角色注册表单，role、provider、model、name、runtime、teams 分开填写；`/role worker-codex` 会预填该角色；`/role register worker-cc --provider minimax --model-name MiniMax-M3 --runtime claude-code --agent-teams` 可直接写入 orchestrator 配置。
 - Claude Code worker 可以注册多个。`worker-cc` 只是默认示例；`worker-cc-minimax`、`worker-cc-sonnet`、`executor-ui` 这类角色只要 `runtime` 是 `claude-code`，都可以通过 `/roles use <role>` 精确选择。
 - tiffany-loop UI 原生模式支持 `/roles`：`/roles` 列出角色，`/roles show critic` 查看单个角色；`/roles save <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 会同时写入 model 和 role，旧的 `/roles save <role> <model> <runtime>` 仍可绑定已有 model id。
-- `/workflow`：查看 planner -> critic -> worker -> reviewer 流程。
+- `/workflow`：查看当前选择的 direct/single/full flow、route reason、flow steps，以及 full pipeline 的角色接线。
 - `/agent claude|codex|auto`：选择后续 worker 路由。
 - `/context compact|full|off|clear`：控制上下文记忆。
 - `/process summary|full|200`：查看运行过程捕获。

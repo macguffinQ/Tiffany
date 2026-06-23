@@ -32,7 +32,8 @@ The core idea: each "agent" is just a CLI subprocess (or a direct API call) wrap
 
 It's designed for software engineering tasks where:
 - You want **multiple AI agents** to collaborate, not just one
-- You want a **planner → critic → worker → reviewer** pipeline (not just chat)
+- You want dynamic **direct / single / full** routing, including a
+  **planner → critic → worker → reviewer** pipeline for implementation work
 - You want **shared context** across agents (Claude Code's prior sessions, orchestrator's prior sessions, project rules)
 - You want **observability** (who did what, cost, tokens)
 - You want to **stay in the terminal** (terminal chat, zellij integration, no web UI)
@@ -198,9 +199,11 @@ Providers: **Anthropic**, **OpenAI**, **Google Gemini**, **Ollama** (local), or 
 ```
 
 Conversational or explanatory prompts are intentionally treated as direct-answer
-turns. They still produce planner/worker/run events for transparency, but the
-review step is recorded as `review skipped · <task> · conversational answer`
-instead of forcing a code-review style rejection.
+turns. Atomic execution prompts can run as a single-worker flow. Both paths
+still emit route/worker/run events for transparency; review is recorded as
+`review skipped · <task> · conversational answer` or
+`review skipped · <task> · single worker route` instead of forcing a
+code-review style rejection.
 
 ### 3-tier role resolution
 
@@ -552,7 +555,7 @@ Useful commands:
 - `/provider [setup|edit <provider>]|list|delete <provider>|env <provider> <ENV>|key <provider> <value>|endpoint <provider> <url>` - open or edit a provider setup form, inspect config, delete a provider, or configure orchestrator providers
 - `/role [<role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]` - open the role-registration form or register one role; `--model <id>` remains supported for existing model ids
 - `/roles show|route|use <role>|snippet <role> <model> <runtime>|save <role> --provider <provider> --model-name <api-model> --runtime <runtime>` - inspect configured commander/critic/executor/reviewer roles, select a worker route, print a snippet, or write a role to config
-- `/workflow` - show the active planner -> critic -> worker -> reviewer pipeline
+- `/workflow` - show the selected direct/single/full flow, route reason, flow steps, and full-pipeline role wiring
 - `/agent claude|codex|auto` - route future worker tasks
 - `/context compact|full|off|clear` - control multi-turn memory
 - `/process summary|full|200` - inspect captured run events without raw JSON noise

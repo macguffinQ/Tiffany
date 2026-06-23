@@ -64,6 +64,12 @@ All notable changes to this project will be documented in this file.
 - Added selected flow-route summaries to `/session flow` history views so
   restored orchestration waterfalls explain whether a run used direct, single,
   or full routing before showing per-session events.
+- Updated the forked TUI idle intro and user docs so they describe dynamic
+  `direct` / `single` / `full` flow selection instead of implying every prompt
+  always runs the full planner/critic/worker/reviewer pipeline.
+- Unified route classification across the backend and forked TUI so atomic
+  single-worker prompts such as external scaffolding show `flow single` before
+  execution instead of being mislabeled as full pipeline runs.
 
 ## [0.1.25] - 2026-06-22
 

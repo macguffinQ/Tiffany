@@ -10,7 +10,8 @@ Core commands:
 - `/roles` shows current role routing, health, snippets, and save helpers.
 - `/doctor` diagnoses provider, model, runtime, Homebrew, and worker CLI issues.
 - `/agent` selects the worker route.
-- `/workflow` shows the active planner -> critic -> worker -> reviewer flow.
+- `/workflow` shows the selected `direct`, `single`, or `full` flow, including
+  the route reason, flow steps, and full-pipeline role wiring.
 - `/sessions`, `/trace`, `/process`, and `/result` inspect prior runs.
 - `/handoff` and `/continue` prepare continuation in Claude Code or Codex CLI.
 - `/acp` shows Agent Client Protocol server/client setup hints.

@@ -1278,7 +1278,7 @@ fn terminal_help() -> String {
      /status                       Show current run/config status\n\
      /doctor                       Diagnose config, runtimes, API keys, and tools\n\
      /roles [show|route|use|snippet|save] Show/select/save role routing\n\
-     /workflow                     Show active role pipeline\n\
+     /workflow                     Show selected flow and role wiring\n\
      /agent [role|clear]           Route future worker tasks\n\
      /model [role]                 Show model assignments\n\
      /usage [today|week|month|all] Show token/cost usage\n\
