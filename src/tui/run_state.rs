@@ -16,6 +16,7 @@ use crate::agent_events;
 use crate::core::session_store::SessionStore;
 use crate::core::types::Task;
 use crate::pipeline::orchestrator::{Orchestrator, RunProgress};
+use crate::task_policy::classify_task_route;
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Instant;
@@ -59,6 +60,7 @@ impl RunController {
         input.last_context_messages = contextual_prompt.message_count;
         input.last_context_chars = contextual_prompt.context_chars;
         let task_prompt = contextual_prompt.prompt;
+        apply_route_preview(input, &task_prompt);
 
         input.transcript.push(ChatMsg {
             role: "user".into(),
@@ -76,7 +78,7 @@ impl RunController {
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<RunProgress>();
         input.run_rx = Some(rx);
-        input.current_stage = "starting...".into();
+        input.current_stage = initial_stage_label(input);
         input.current_stage_detail.clear();
         input.last_event_at = Some(Instant::now());
         input.run_events.clear();
@@ -84,11 +86,6 @@ impl RunController {
         input.run_last_worker_output = None;
         input.run_review_issue_count = 0;
         input.run_worker_failure_count = 0;
-        input.run_route = None;
-        input.run_route_label = None;
-        input.run_route_reason = None;
-        input.run_route_reason_label = None;
-        input.run_flow_steps = None;
         input.run_visible_output_keys.clear();
         input.run_visible_status_keys.clear();
         input.run_recorded_output_keys.clear();
@@ -142,6 +139,12 @@ impl RunController {
 
 fn initial_run_status(input: &InputState, prompt: &str) -> String {
     let worker = input.agent_hint.as_deref().unwrap_or("auto");
+    let flow = input.run_route_label.as_deref().unwrap_or("auto");
+    let flow_reason = input.run_route_reason_label.as_deref().unwrap_or("pending");
+    let flow_steps = input
+        .run_flow_steps
+        .as_deref()
+        .unwrap_or("direct/single/full decided at run start");
     let context = if input.last_context_messages == 0 {
         "none".to_string()
     } else {
@@ -151,12 +154,32 @@ fn initial_run_status(input: &InputState, prompt: &str) -> String {
         )
     };
     format!(
-        "Working\n  status: starting orchestrator\n  worker: {}\n  claude agent: {}\n  context: {}\n  request: {}\n\nDetails: /process 200 · /o detail",
+        "Working\n  status: starting orchestrator\n  flow: {} · {}\n  steps: {}\n  worker: {}\n  claude agent: {}\n  context: {}\n  request: {}\n\nDetails: /process 200 · /o detail",
+        flow,
+        flow_reason,
+        flow_steps,
         worker,
         input.cc_agent_hint.as_deref().unwrap_or("default"),
         context,
         truncate_chars(prompt, 120)
     )
+}
+
+fn apply_route_preview(input: &mut InputState, task_prompt: &str) {
+    let route = classify_task_route(&Task::new(task_prompt));
+    input.run_route = Some(route.label().to_string());
+    input.run_route_label = Some(route.display_label().to_string());
+    input.run_route_reason = Some(route.reason().to_string());
+    input.run_route_reason_label = Some(route.short_reason_label().to_string());
+    input.run_flow_steps = Some(route.flow_steps().to_string());
+}
+
+fn initial_stage_label(input: &InputState) -> String {
+    input
+        .run_route_label
+        .as_deref()
+        .map(|flow| format!("starting {flow} flow"))
+        .unwrap_or_else(|| "starting...".into())
 }
 
 /// Run the orchestrator, but check the cancel flag before starting.
@@ -737,6 +760,60 @@ mod tests {
             input.run_route_reason_label.as_deref(),
             Some("implementation")
         );
+        assert_eq!(
+            input.run_flow_steps.as_deref(),
+            Some("planner -> critic -> worker -> reviewer -> answer")
+        );
+        assert_eq!(input.current_stage, "route: full");
+    }
+
+    #[test]
+    fn initial_status_shows_route_preview_before_backend_event() {
+        let mut input = InputState::default();
+
+        apply_route_preview(
+            &mut input,
+            "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle",
+        );
+        let status = initial_run_status(
+            &input,
+            "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle",
+        );
+
+        assert_eq!(input.run_route.as_deref(), Some("single-worker"));
+        assert_eq!(input.run_route_label.as_deref(), Some("single"));
+        assert_eq!(
+            input.run_route_reason_label.as_deref(),
+            Some("atomic worker")
+        );
+        assert_eq!(input.run_flow_steps.as_deref(), Some("worker -> answer"));
+        assert_eq!(initial_stage_label(&input), "starting single flow");
+        assert!(status.contains("flow: single · atomic worker"));
+        assert!(status.contains("steps: worker -> answer"));
+        assert!(!status.contains("planner -> critic"));
+    }
+
+    #[test]
+    fn route_event_can_replace_route_preview() {
+        let mut input = InputState::default();
+        apply_route_preview(&mut input, "你好");
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: initial_run_status(&input, "你好"),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        handle_run_event(
+            RunProgress::RouteSelected {
+                route: "full-pipeline".into(),
+                reason: "project or implementation work".into(),
+            },
+            &mut input,
+        );
+
+        assert_eq!(input.run_route.as_deref(), Some("full-pipeline"));
+        assert_eq!(input.run_route_label.as_deref(), Some("full"));
         assert_eq!(
             input.run_flow_steps.as_deref(),
             Some("planner -> critic -> worker -> reviewer -> answer")
