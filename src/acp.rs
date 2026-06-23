@@ -1388,12 +1388,16 @@ fn format_acp_context_entries(entries: &[AcpChatMsg]) -> String {
 struct AcpRunCapture {
     final_output: Option<String>,
     last_worker_output: Option<String>,
+    route: Option<String>,
     visible_output_keys: Vec<String>,
 }
 
 impl AcpRunCapture {
     fn record(&mut self, event: &RunProgress) {
         match event {
+            RunProgress::RouteSelected { route, .. } | RunProgress::RouteUpdated { route, .. } => {
+                self.route = Some(route.clone());
+            }
             RunProgress::WorkerOutput { content, .. } | RunProgress::RoleOutput { content, .. } => {
                 self.remember_output(content);
             }
@@ -1985,15 +1989,18 @@ async fn send_tool_call_update_status(
 fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<String> {
     match event {
         RunProgress::RouteSelected { route, reason } => {
+            capture.route = Some(route.clone());
             Some(format_acp_route_progress("selected", route, reason))
         }
         RunProgress::RouteUpdated { route, reason } => {
+            capture.route = Some(route.clone());
             Some(format_acp_route_progress("updated", route, reason))
         }
         RunProgress::Planning => Some("Planning task.".into()),
-        RunProgress::Planned { sub_task_count } => {
-            Some(format!("Plan ready with {sub_task_count} worker run(s)."))
-        }
+        RunProgress::Planned { sub_task_count } => Some(format_acp_planned_progress(
+            capture.route.as_deref(),
+            *sub_task_count,
+        )),
         RunProgress::Critiquing { round } => Some(format!("Critiquing plan, round {round}.")),
         RunProgress::CritiqueResult { approved, issues } => {
             if *approved {
@@ -2087,6 +2094,16 @@ fn format_acp_route_progress(action: &str, route: &str, reason: &str) -> String 
                 format!("Route {verb}: {route} · {reason}.")
             }
         }
+    }
+}
+
+fn format_acp_planned_progress(route: Option<&str>, sub_task_count: usize) -> String {
+    match route {
+        Some("single-worker") | Some("single") => {
+            format!("Worker ready with {sub_task_count} run(s).")
+        }
+        Some("direct-answer") | Some("direct") => "Direct answer ready.".into(),
+        _ => format!("Plan ready with {sub_task_count} worker run(s)."),
     }
 }
 
@@ -2882,6 +2899,33 @@ mod tests {
         .expect("custom route progress text");
 
         assert_eq!(text, "Route selected: custom-route · custom reason.");
+    }
+
+    #[test]
+    fn acp_planned_progress_respects_effective_route() {
+        let mut capture = AcpRunCapture::default();
+        let route = progress_text(
+            &RunProgress::RouteUpdated {
+                route: "single-worker".into(),
+                reason: "planner fallback; downgraded to single worker".into(),
+            },
+            &mut capture,
+        )
+        .expect("route update progress text");
+        assert_eq!(
+            route,
+            "Route updated: single · atomic worker · worker -> answer."
+        );
+
+        let planned = progress_text(&RunProgress::Planned { sub_task_count: 1 }, &mut capture)
+            .expect("single worker planned progress text");
+        assert_eq!(planned, "Worker ready with 1 run(s).");
+        assert!(!planned.contains("Plan ready"));
+
+        let mut capture = AcpRunCapture::default();
+        let planned = progress_text(&RunProgress::Planned { sub_task_count: 2 }, &mut capture)
+            .expect("full pipeline planned progress text");
+        assert_eq!(planned, "Plan ready with 2 worker run(s).");
     }
 
     #[test]
