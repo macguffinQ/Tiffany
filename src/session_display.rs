@@ -680,6 +680,9 @@ fn orchestration_output_summary(kind: &str, payload: &Value) -> Option<String> {
 }
 
 fn planner_event_summary(payload: &Value) -> String {
+    if let Some(summary) = control_fallback_summary(payload) {
+        return summary;
+    }
     let message = normalized_payload_message(payload, "planning");
     if message.starts_with("plan ready") {
         return message;
@@ -691,6 +694,9 @@ fn critic_event_summary(payload: &Value) -> String {
     if payload_str(payload, "status").is_none() && payload_bool(payload, "approved").is_some() {
         return agent_events::summarize_event_payload(payload, EVENT_SUMMARY_MAX_CHARS);
     }
+    if let Some(summary) = control_fallback_summary(payload) {
+        return summary;
+    }
     match payload_str(payload, "status") {
         Some("running") => normalized_payload_message(payload, "checking plan"),
         Some("done") if payload_bool(payload, "approved") == Some(true) => "plan approved".into(),
@@ -699,6 +705,22 @@ fn critic_event_summary(payload: &Value) -> String {
             format!("plan needs changes · {issues} issue(s)")
         }
         _ => normalized_payload_message(payload, "critic event"),
+    }
+}
+
+fn control_fallback_summary(payload: &Value) -> Option<String> {
+    if payload_str(payload, "status") != Some("warning")
+        || payload.get("issues").is_some()
+        || payload.get("approved").is_some()
+    {
+        return None;
+    }
+    let message = normalized_payload_message(payload, "fallback");
+    let reason = payload_str(payload, "reason")
+        .map(|reason| agent_events::humanize_jsonish(reason, EVENT_SUMMARY_MAX_CHARS));
+    match reason.map(|reason| reason.trim().to_string()) {
+        Some(reason) if !reason.is_empty() => Some(format!("{message} · {reason}")),
+        _ => Some(message),
     }
 }
 
@@ -1166,6 +1188,44 @@ mod tests {
         let line = format_session_event(&skipped);
         assert!(line.contains("review skipped · 12345678 · conversational answer"));
         assert!(!line.contains("review skipped -"));
+    }
+
+    #[test]
+    fn formats_control_fallback_warning_without_fake_issue_count() {
+        let planner = Event {
+            session_id: Uuid::new_v4(),
+            task_id: Uuid::new_v4(),
+            ts: Utc::now(),
+            kind: "planner".into(),
+            payload: serde_json::json!({
+                "status": "warning",
+                "message": "planning unavailable; using original task",
+                "reason": "planner unavailable"
+            }),
+        };
+
+        let line = format_session_event(&planner);
+        assert!(
+            line.contains("plan planning unavailable; using original task · planner unavailable")
+        );
+        assert!(!line.contains("0 issue"));
+
+        let critic = Event {
+            kind: "critic".into(),
+            payload: serde_json::json!({
+                "status": "warning",
+                "message": "critique unavailable; continuing with current plan",
+                "reason": "codex exec --cd unsupported"
+            }),
+            ..planner
+        };
+
+        let line = format_session_event(&critic);
+        assert!(line.contains(
+            "critic critique unavailable; continuing with current plan · codex exec --cd unsupported"
+        ));
+        assert!(!line.contains("plan needs changes"));
+        assert!(!line.contains("0 issue"));
     }
 
     #[test]
