@@ -772,12 +772,7 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
         RunProgress::RouteSelected { route, reason } => (
             "orchestrator",
             top_task_id,
-            serde_json::json!({
-                "status": "running",
-                "message": format!("route selected - {route}"),
-                "route": route,
-                "reason": reason,
-            }),
+            route_selected_payload(route, reason),
         ),
         RunProgress::Planning => (
             "planner",
@@ -1009,6 +1004,25 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
     }
 }
 
+fn route_selected_payload(route: &str, reason: &str) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "status": "running",
+        "message": format!("route selected - {route}"),
+        "route": route,
+        "reason": reason,
+    });
+
+    if let Some(metadata) = agent_events::OrchestrationRoute::from_label(route)
+        .or_else(|| agent_events::OrchestrationRoute::from_reason(reason))
+    {
+        payload["route_label"] = metadata.display_label().into();
+        payload["route_reason_label"] = metadata.short_reason_label().into();
+        payload["flow_steps"] = metadata.flow_steps().into();
+    }
+
+    payload
+}
+
 fn apply_top_task_agent_hint(top_task: &Task, sub_tasks: &mut [Task]) {
     for task in sub_tasks {
         if task.agent_hint.is_none() {
@@ -1053,6 +1067,32 @@ mod tests {
     };
     use crate::core::worker::WorkerHandle;
     use futures::stream::{self, BoxStream};
+
+    #[test]
+    fn route_progress_event_persists_display_metadata() {
+        let session_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+        let task_id = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+        let event = RunProgress::RouteSelected {
+            route: "full-pipeline".into(),
+            reason: crate::agent_events::OrchestrationRoute::FullPipeline
+                .reason()
+                .into(),
+        };
+
+        let stored = run_progress_to_event(session_id, task_id, &event);
+
+        assert_eq!(stored.session_id, session_id);
+        assert_eq!(stored.task_id, task_id);
+        assert_eq!(stored.kind, "orchestrator");
+        assert_eq!(stored.payload["message"], "route selected - full-pipeline");
+        assert_eq!(stored.payload["route"], "full-pipeline");
+        assert_eq!(stored.payload["route_label"], "full");
+        assert_eq!(stored.payload["route_reason_label"], "implementation");
+        assert_eq!(
+            stored.payload["flow_steps"],
+            "planner -> critic -> worker -> reviewer -> answer"
+        );
+    }
 
     #[test]
     fn top_task_agent_hint_is_applied_to_unhinted_subtasks() {

@@ -40,192 +40,72 @@ pub struct TiffanyProgressEvent {
     pub duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_reason_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_steps: Option<String>,
 }
 
 impl From<RunProgress> for TiffanyProgressEvent {
     fn from(event: RunProgress) -> Self {
         match event {
-            RunProgress::RouteSelected { route, reason } => Self {
-                role: "orchestrator",
-                status: "running",
-                message: format!("route selected - {route}"),
-                task_id: None,
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: Some(reason),
-            },
-            RunProgress::Planning => Self {
-                role: "planner",
-                status: "running",
-                message: "planning".to_string(),
-                task_id: None,
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: None,
-            },
-            RunProgress::Planned { sub_task_count } => Self {
-                role: "planner",
-                status: "done",
-                message: format!("plan ready - {sub_task_count} sub-task(s)"),
-                task_id: None,
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
+            RunProgress::RouteSelected { route, reason } => route_selected_event(route, reason),
+            RunProgress::Planning => progress_event("planner", "running", "planning"),
+            RunProgress::Planned { sub_task_count } => TiffanyProgressEvent {
                 count: Some(sub_task_count),
-                duration_ms: None,
-                reason: None,
+                ..progress_event(
+                    "planner",
+                    "done",
+                    format!("plan ready - {sub_task_count} sub-task(s)"),
+                )
             },
-            RunProgress::Critiquing { round } => Self {
-                role: "critic",
-                status: "running",
-                message: format!("checking plan - round {round}"),
-                task_id: None,
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: None,
-            },
-            RunProgress::CritiqueResult { approved, issues } => Self {
-                role: "critic",
+            RunProgress::Critiquing { round } => progress_event(
+                "critic",
+                "running",
+                format!("checking plan - round {round}"),
+            ),
+            RunProgress::CritiqueResult { approved, issues } => TiffanyProgressEvent {
                 status: if approved { "done" } else { "warning" },
-                message: if approved {
-                    "plan approved".to_string()
-                } else {
-                    format!("plan needs fixes - {issues} issue(s)")
-                },
-                task_id: None,
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
                 approved: Some(approved),
                 issues: Some(issues),
-                count: None,
-                duration_ms: None,
-                reason: None,
+                ..progress_event(
+                    "critic",
+                    "done",
+                    if approved {
+                        "plan approved".to_string()
+                    } else {
+                        format!("plan needs fixes - {issues} issue(s)")
+                    },
+                )
             },
-            RunProgress::Replanning { attempt } => Self {
-                role: "planner",
-                status: "running",
-                message: format!("replanning - attempt {attempt}"),
-                task_id: None,
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: None,
-            },
+            RunProgress::Replanning { attempt } => progress_event(
+                "planner",
+                "running",
+                format!("replanning - attempt {attempt}"),
+            ),
             RunProgress::ControlFallback {
                 role,
                 message,
                 reason,
             } => {
                 let role = progress_role_label(&role);
-                Self {
-                    role,
-                    status: "warning",
-                    message,
-                    task_id: None,
-                    agent: None,
-                    worker_role: None,
-                    runtime: None,
-                    cc_agent: None,
-                    model: None,
-                    provider: None,
-                    task_prompt: None,
-                    content: None,
-                    approved: None,
-                    issues: None,
-                    count: None,
-                    duration_ms: None,
+                TiffanyProgressEvent {
                     reason: Some(reason),
+                    ..progress_event(role, "warning", message)
                 }
             }
-            RunProgress::DirectAnswer => Self {
-                role: "worker",
-                status: "running",
-                message: "answering directly".to_string(),
-                task_id: None,
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: None,
-            },
-            RunProgress::Executing { sub_task_count } => Self {
-                role: "worker",
-                status: "running",
-                message: format!("running {sub_task_count} sub-task(s)"),
-                task_id: None,
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
+            RunProgress::DirectAnswer => progress_event("worker", "running", "answering directly"),
+            RunProgress::Executing { sub_task_count } => TiffanyProgressEvent {
                 count: Some(sub_task_count),
-                duration_ms: None,
-                reason: None,
+                ..progress_event(
+                    "worker",
+                    "running",
+                    format!("running {sub_task_count} sub-task(s)"),
+                )
             },
             RunProgress::WorkerStarted {
                 task_id,
@@ -236,48 +116,28 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 model,
                 provider,
                 prompt,
-            } => Self {
-                role: "worker",
-                status: "running",
-                message: format!("{role} started"),
+            } => TiffanyProgressEvent {
                 task_id: Some(task_id.to_string()),
                 agent: Some(agent),
-                worker_role: Some(role),
+                worker_role: Some(role.clone()),
                 runtime: Some(runtime),
                 cc_agent,
                 model: Some(model),
                 provider,
                 task_prompt: Some(prompt),
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: None,
+                ..progress_event("worker", "running", format!("{role} started"))
             },
             RunProgress::WorkerOutput {
                 task_id,
                 agent,
                 role,
                 content,
-            } => Self {
-                role: "worker",
-                status: "output",
-                message: format!("{role} output"),
+            } => TiffanyProgressEvent {
                 task_id: Some(task_id.to_string()),
                 agent: Some(agent),
-                worker_role: Some(role),
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
+                worker_role: Some(role.clone()),
                 content: Some(content),
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: None,
+                ..progress_event("worker", "output", format!("{role} output"))
             },
             RunProgress::RoleOutput { role, content } => {
                 let role = match role.as_str() {
@@ -287,24 +147,9 @@ impl From<RunProgress> for TiffanyProgressEvent {
                     "worker" => "worker",
                     _ => "orchestrator",
                 };
-                Self {
-                    role,
-                    status: "output",
-                    message: format!("{role} output"),
-                    task_id: None,
-                    agent: None,
-                    worker_role: None,
-                    runtime: None,
-                    cc_agent: None,
-                    model: None,
-                    provider: None,
-                    task_prompt: None,
+                TiffanyProgressEvent {
                     content: Some(content),
-                    approved: None,
-                    issues: None,
-                    count: None,
-                    duration_ms: None,
-                    reason: None,
+                    ..progress_event(role, "output", format!("{role} output"))
                 }
             }
             RunProgress::WorkerDone {
@@ -313,153 +158,122 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 role,
                 duration_ms,
                 ok,
-            } => Self {
-                role: "worker",
+            } => TiffanyProgressEvent {
                 status: if ok { "done" } else { "failed" },
-                message: if ok {
-                    format!("{role} done")
-                } else {
-                    format!("{role} failed")
-                },
                 task_id: Some(task_id.to_string()),
                 agent: Some(agent),
-                worker_role: Some(role),
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
+                worker_role: Some(role.clone()),
                 duration_ms: Some(duration_ms),
-                reason: None,
+                ..progress_event(
+                    "worker",
+                    "done",
+                    if ok {
+                        format!("{role} done")
+                    } else {
+                        format!("{role} failed")
+                    },
+                )
             },
-            RunProgress::Reviewing { task_id } => Self {
-                role: "reviewer",
-                status: "running",
-                message: "reviewing worker output".to_string(),
+            RunProgress::Reviewing { task_id } => TiffanyProgressEvent {
                 task_id: Some(task_id.to_string()),
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: None,
+                ..progress_event("reviewer", "running", "reviewing worker output")
             },
-            RunProgress::ReviewSkipped { task_id, reason } => Self {
-                role: "reviewer",
-                status: "skipped",
-                message: format!("review skipped - {reason}"),
+            RunProgress::ReviewSkipped { task_id, reason } => TiffanyProgressEvent {
                 task_id: Some(task_id.to_string()),
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: Some(reason),
+                reason: Some(reason.clone()),
+                ..progress_event("reviewer", "skipped", format!("review skipped - {reason}"))
             },
             RunProgress::ReviewResult {
                 task_id,
                 approved,
                 issues,
-            } => Self {
-                role: "reviewer",
+            } => TiffanyProgressEvent {
                 status: if approved { "done" } else { "warning" },
-                message: if approved {
-                    "review approved".to_string()
-                } else {
-                    format!("review needs fixes - {issues} issue(s)")
-                },
                 task_id: Some(task_id.to_string()),
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
                 approved: Some(approved),
                 issues: Some(issues),
-                count: None,
-                duration_ms: None,
-                reason: None,
+                ..progress_event(
+                    "reviewer",
+                    "done",
+                    if approved {
+                        "review approved".to_string()
+                    } else {
+                        format!("review needs fixes - {issues} issue(s)")
+                    },
+                )
             },
-            RunProgress::ReviewUnavailable { task_id, message } => Self {
-                role: "reviewer",
-                status: "warning",
-                message: format!("review unavailable - {message}"),
+            RunProgress::ReviewUnavailable { task_id, message } => TiffanyProgressEvent {
                 task_id: Some(task_id.to_string()),
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: Some(message),
+                reason: Some(message.clone()),
+                ..progress_event(
+                    "reviewer",
+                    "warning",
+                    format!("review unavailable - {message}"),
+                )
             },
-            RunProgress::Done { task_count } => Self {
-                role: "orchestrator",
-                status: "done",
-                message: format!("done - {task_count} sub-task(s)"),
-                task_id: None,
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
+            RunProgress::Done { task_count } => TiffanyProgressEvent {
                 count: Some(task_count),
-                duration_ms: None,
-                reason: None,
+                ..progress_event(
+                    "orchestrator",
+                    "done",
+                    format!("done - {task_count} sub-task(s)"),
+                )
             },
-            RunProgress::Failed(message) => Self {
-                role: "orchestrator",
-                status: "failed",
-                message,
-                task_id: None,
-                agent: None,
-                worker_role: None,
-                runtime: None,
-                cc_agent: None,
-                model: None,
-                provider: None,
-                task_prompt: None,
-                content: None,
-                approved: None,
-                issues: None,
-                count: None,
-                duration_ms: None,
-                reason: None,
-            },
+            RunProgress::Failed(message) => progress_event("orchestrator", "failed", message),
         }
     }
+}
+
+fn progress_event(
+    role: &'static str,
+    status: &'static str,
+    message: impl Into<String>,
+) -> TiffanyProgressEvent {
+    TiffanyProgressEvent {
+        role,
+        status,
+        message: message.into(),
+        task_id: None,
+        agent: None,
+        worker_role: None,
+        runtime: None,
+        cc_agent: None,
+        model: None,
+        provider: None,
+        task_prompt: None,
+        content: None,
+        approved: None,
+        issues: None,
+        count: None,
+        duration_ms: None,
+        reason: None,
+        route: None,
+        route_label: None,
+        route_reason_label: None,
+        flow_steps: None,
+    }
+}
+
+fn route_selected_event(route: String, reason: String) -> TiffanyProgressEvent {
+    let metadata = route_metadata(&route, &reason);
+    let mut event = progress_event(
+        "orchestrator",
+        "running",
+        format!("route selected - {route}"),
+    );
+    event.route = Some(route);
+    event.reason = Some(reason);
+    if let Some(metadata) = metadata {
+        event.route_label = Some(metadata.display_label().to_string());
+        event.route_reason_label = Some(metadata.short_reason_label().to_string());
+        event.flow_steps = Some(metadata.flow_steps().to_string());
+    }
+    event
+}
+
+fn route_metadata(route: &str, reason: &str) -> Option<agent_events::OrchestrationRoute> {
+    agent_events::OrchestrationRoute::from_label(route)
+        .or_else(|| agent_events::OrchestrationRoute::from_reason(reason))
 }
 
 #[derive(Default)]
@@ -1095,6 +909,10 @@ mod tests {
         assert_eq!(json["role"], "orchestrator");
         assert_eq!(json["status"], "running");
         assert_eq!(json["message"], "route selected - single-worker");
+        assert_eq!(json["route"], "single-worker");
+        assert_eq!(json["route_label"], "single");
+        assert_eq!(json["route_reason_label"], "atomic worker");
+        assert_eq!(json["flow_steps"], "worker -> answer");
         assert_eq!(
             json["reason"],
             "atomic request; planner, critic, and reviewer are not needed"
