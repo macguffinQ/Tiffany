@@ -17,6 +17,9 @@ All notable changes to this project will be documented in this file.
 - Marked direct-answer runs with a dedicated progress event in terminal, TUI,
   ACP, and persisted orchestration logs instead of showing them as DAG
   execution.
+- Updated the forked `tiffany-loop` run header to label direct-answer runs as
+  `flow direct` and show `direct -> worker -> answer`, while implementation
+  work still shows the full planner/critic/worker/reviewer flow.
 - Treated pure URL/link-inspection prompts as direct worker answers while
   keeping creation, code, and implementation requests on the full orchestration
   pipeline.

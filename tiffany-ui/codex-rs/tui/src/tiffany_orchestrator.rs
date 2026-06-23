@@ -1775,7 +1775,7 @@ fn emit_intro(app_event_tx: &AppEventSender, launch: &TiffanyOrchestratorLaunch)
         vec![
             brand_line("orchestration run"),
             run_status_line(launch),
-            workflow_line(),
+            run_workflow_line(launch),
         ],
     );
 }
@@ -1844,10 +1844,17 @@ fn run_status_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
     } else {
         format!("{} turn(s)", launch.context_turn_count)
     };
+    let flow = if launch_looks_direct(launch) {
+        "direct"
+    } else {
+        "full"
+    };
     Line::from(vec![
         status_chip("status", "running", TIFFANY_BLUE),
         Span::raw("  "),
         status_chip("route", route_label(&launch.extra_args), TIFFANY_BLUE),
+        Span::raw("  "),
+        status_chip("flow", flow, TIFFANY_SOFT),
         Span::raw("  "),
         status_chip("context", context, TIFFANY_SOFT),
         Span::raw("  "),
@@ -1856,6 +1863,18 @@ fn run_status_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
 }
 
 fn workflow_line() -> Line<'static> {
+    full_workflow_line()
+}
+
+fn run_workflow_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
+    if launch_looks_direct(launch) {
+        direct_workflow_line()
+    } else {
+        full_workflow_line()
+    }
+}
+
+fn full_workflow_line() -> Line<'static> {
     Line::from(vec![
         Span::styled(
             "flow",
@@ -1877,6 +1896,165 @@ fn workflow_line() -> Line<'static> {
         Span::styled(" → ", Style::default().fg(TIFFANY_DARK)),
         Span::styled("reviewer", Style::default().fg(TIFFANY_SOFT)),
     ])
+}
+
+fn direct_workflow_line() -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            "flow",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled("direct", Style::default().fg(TIFFANY_SOFT)),
+        Span::styled(" → ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(
+            "worker",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" → ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled("answer", Style::default().fg(TIFFANY_SOFT)),
+    ])
+}
+
+fn launch_looks_direct(launch: &TiffanyOrchestratorLaunch) -> bool {
+    request_looks_direct_answer(&launch.user_prompt)
+}
+
+fn request_looks_direct_answer(text: &str) -> bool {
+    looks_like_direct_request(text) && !contains_engineering_action(text)
+}
+
+fn contains_engineering_action(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    [
+        "修改",
+        "改一下",
+        "改成",
+        "修复",
+        "优化",
+        "重构",
+        "实现",
+        "新增",
+        "删除",
+        "创建",
+        "新建",
+        "生成",
+        "搭建",
+        "脚手架",
+        "写参赛",
+        "写 agent",
+        "写个 agent",
+        "提交",
+        "推送",
+        "执行",
+        "完成",
+        "继续做",
+        "开始做",
+        "来做",
+        "去做",
+        "做一下",
+        "做吧",
+        "做啊",
+        "搞定",
+        "开发",
+        "编译",
+        "构建",
+        "测试",
+        "报错",
+        "日志",
+        "权限",
+        "配置",
+        "安装",
+        "发布",
+        "接入",
+        "完善",
+        "整合",
+        "fix",
+        "implement",
+        "create",
+        "generate",
+        "scaffold",
+        "write code",
+        "change",
+        "edit",
+        "refactor",
+        "test",
+        "build",
+        "debug",
+        "error",
+        "commit",
+        "push",
+        "release",
+        "install",
+        "configure",
+        "workflow",
+        "ci",
+        "tui",
+        "provider",
+        "worker",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn looks_like_direct_request(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    [
+        "你好",
+        "你叫",
+        "你能",
+        "干啥",
+        "能干啥",
+        "是谁",
+        "是什么",
+        "介绍",
+        "解释",
+        "说明",
+        "如何",
+        "怎么",
+        "为什么",
+        "建议",
+        "计划",
+        "坏处",
+        "看看",
+        "看下",
+        "了解",
+        "分析",
+        "调研",
+        "对不",
+        "可以吗",
+        "行不行",
+        "?",
+        "？",
+        "hello",
+        "hi",
+        "answer",
+        "respond",
+        "greeting",
+        "what",
+        "how",
+        "why",
+        "explain",
+        "suggest",
+        "plan",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+        || looks_like_link_reference(text)
+}
+
+fn looks_like_link_reference(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return true;
+    }
+    trimmed
+        .split_whitespace()
+        .any(|part| part.starts_with("http://") || part.starts_with("https://"))
 }
 
 fn command_hint_line() -> Line<'static> {
@@ -2754,6 +2932,57 @@ mod tests {
         assert_eq!(lines[0].spans[3].style.fg, Some(TIFFANY_SOFT));
         assert_eq!(lines[2].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[3].spans[2].style.fg, Some(TIFFANY_SOFT));
+    }
+
+    #[test]
+    fn run_intro_uses_direct_flow_for_chat_requests() {
+        let launch = TiffanyOrchestratorLaunch {
+            bin: "orchestrator".into(),
+            user_prompt: "你好".into(),
+            prompt: "你好".into(),
+            extra_args: vec![],
+            config_path: None,
+            context_turn_count: 0,
+        };
+        let lines = [run_status_line(&launch), run_workflow_line(&launch)];
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("flow direct"));
+        assert!(text.contains("flow  direct → worker → answer"));
+        assert!(!text.contains("planner → critic"));
+    }
+
+    #[test]
+    fn run_intro_uses_direct_flow_for_link_inspection() {
+        let launch = TiffanyOrchestratorLaunch {
+            bin: "orchestrator".into(),
+            user_prompt: "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle".into(),
+            prompt: "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle".into(),
+            extra_args: vec![],
+            config_path: None,
+            context_turn_count: 0,
+        };
+        let line = run_workflow_line(&launch);
+
+        assert_eq!(line_text(&line), "flow  direct → worker → answer");
+    }
+
+    #[test]
+    fn run_intro_uses_full_flow_for_engineering_requests() {
+        let launch = TiffanyOrchestratorLaunch {
+            bin: "orchestrator".into(),
+            user_prompt: "优化 TUI 显示".into(),
+            prompt: "优化 TUI 显示".into(),
+            extra_args: vec![],
+            config_path: None,
+            context_turn_count: 2,
+        };
+        let lines = [run_status_line(&launch), run_workflow_line(&launch)];
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("flow full"));
+        assert!(text.contains("context 2 turn(s)"));
+        assert!(text.contains("flow  planner → critic → worker → reviewer"));
     }
 
     #[test]
