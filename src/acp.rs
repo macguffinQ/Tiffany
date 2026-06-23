@@ -1985,7 +1985,10 @@ async fn send_tool_call_update_status(
 fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<String> {
     match event {
         RunProgress::RouteSelected { route, reason } => {
-            Some(format_acp_route_progress(route, reason))
+            Some(format_acp_route_progress("selected", route, reason))
+        }
+        RunProgress::RouteUpdated { route, reason } => {
+            Some(format_acp_route_progress("updated", route, reason))
         }
         RunProgress::Planning => Some("Planning task.".into()),
         RunProgress::Planned { sub_task_count } => {
@@ -2058,11 +2061,16 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
     }
 }
 
-fn format_acp_route_progress(route: &str, reason: &str) -> String {
+fn format_acp_route_progress(action: &str, route: &str, reason: &str) -> String {
     let parsed_route = agent_events::OrchestrationRoute::from_label_or_reason(route, reason);
+    let verb = if action == "updated" {
+        "updated"
+    } else {
+        "selected"
+    };
     match parsed_route {
         Some(route) => format!(
-            "Route selected: {} · {} · {}.",
+            "Route {verb}: {} · {} · {}.",
             route.display_label(),
             route.short_reason_label(),
             route.flow_steps()
@@ -2071,9 +2079,9 @@ fn format_acp_route_progress(route: &str, reason: &str) -> String {
             let reason = agent_events::humanize_jsonish(reason, 1600);
             let reason = reason.trim();
             if reason.is_empty() {
-                format!("Route selected: {route}.")
+                format!("Route {verb}: {route}.")
             } else {
-                format!("Route selected: {route} · {reason}.")
+                format!("Route {verb}: {route} · {reason}.")
             }
         }
     }

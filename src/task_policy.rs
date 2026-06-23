@@ -61,14 +61,14 @@ pub fn is_conversational_task(task: &Task) -> bool {
 }
 
 pub fn classify_task_route(task: &Task) -> TaskRoute {
-    if has_any_tag(&task.tags, ENGINEERING_TAGS) {
-        return TaskRoute::FullPipeline;
-    }
     if has_any_tag(&task.tags, DIRECT_TAGS) {
         return TaskRoute::DirectAnswer;
     }
     if has_any_tag(&task.tags, SINGLE_WORKER_TAGS) {
         return TaskRoute::SingleWorker;
+    }
+    if has_any_tag(&task.tags, ENGINEERING_TAGS) {
+        return TaskRoute::FullPipeline;
     }
 
     crate::agent_events::classify_orchestration_route(&task.prompt)
@@ -251,6 +251,17 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             review_skip_reason(&Task::new("优化当前工程"), &Task::new("改代码")),
             None
         );
+    }
+
+    #[test]
+    fn explicit_route_tags_override_broad_engineering_tags() {
+        let mut single = Task::new("ship one worker task");
+        single.tags = vec!["implementation".to_string(), "single_worker".to_string()];
+        assert_eq!(classify_task_route(&single), TaskRoute::SingleWorker);
+
+        let mut chat = Task::new("answer directly");
+        chat.tags = vec!["implementation".to_string(), "chat".to_string()];
+        assert_eq!(classify_task_route(&chat), TaskRoute::DirectAnswer);
     }
 
     #[test]

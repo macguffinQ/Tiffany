@@ -1542,6 +1542,15 @@ mod tests {
             "route  single-worker · atomic request; planner, critic, and reviewer are not needed"
         );
 
+        let route_update = format_run_event(&RunProgress::RouteUpdated {
+            route: "single-worker".into(),
+            reason: "planner unavailable; downgraded to single worker".into(),
+        });
+        assert_eq!(
+            route_update,
+            "route  updated · single-worker · planner unavailable; downgraded to single worker"
+        );
+
         let started = format_run_event(&RunProgress::WorkerStarted {
             task_id,
             agent: "claude-code".into(),

@@ -219,7 +219,8 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
     }
 
     match event {
-        RunProgress::RouteSelected { route, reason } => {
+        RunProgress::RouteSelected { route, reason }
+        | RunProgress::RouteUpdated { route, reason } => {
             let parsed_route =
                 crate::agent_events::OrchestrationRoute::from_label_or_reason(&route, &reason);
             input.run_route_label = parsed_route.map(|route| route.display_label().to_string());
@@ -884,6 +885,35 @@ mod tests {
             Some("planner -> critic -> worker -> reviewer -> answer")
         );
         assert_eq!(input.current_stage, "route: full");
+    }
+
+    #[test]
+    fn route_update_downgrades_active_flow_state() {
+        let mut input = InputState::default();
+        apply_route_preview(&mut input, "优化当前工程");
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: initial_run_status(&input, "优化当前工程"),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        handle_run_event(
+            RunProgress::RouteUpdated {
+                route: "single-worker".into(),
+                reason: "planner unavailable; downgraded to single worker".into(),
+            },
+            &mut input,
+        );
+
+        assert_eq!(input.run_route.as_deref(), Some("single-worker"));
+        assert_eq!(input.run_route_label.as_deref(), Some("single"));
+        assert_eq!(
+            input.run_route_reason_label.as_deref(),
+            Some("atomic worker")
+        );
+        assert_eq!(input.run_flow_steps.as_deref(), Some("worker -> answer"));
+        assert_eq!(input.current_stage, "route: single");
     }
 
     #[test]

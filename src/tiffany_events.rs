@@ -53,7 +53,12 @@ pub struct TiffanyProgressEvent {
 impl From<RunProgress> for TiffanyProgressEvent {
     fn from(event: RunProgress) -> Self {
         match event {
-            RunProgress::RouteSelected { route, reason } => route_selected_event(route, reason),
+            RunProgress::RouteSelected { route, reason } => {
+                route_event(route, reason, "running", "selected")
+            }
+            RunProgress::RouteUpdated { route, reason } => {
+                route_event(route, reason, "warning", "updated")
+            }
             RunProgress::Planning => progress_event("planner", "running", "planning"),
             RunProgress::Planned { sub_task_count } => TiffanyProgressEvent {
                 count: Some(sub_task_count),
@@ -254,13 +259,14 @@ fn progress_event(
     }
 }
 
-fn route_selected_event(route: String, reason: String) -> TiffanyProgressEvent {
+fn route_event(
+    route: String,
+    reason: String,
+    status: &'static str,
+    action: &'static str,
+) -> TiffanyProgressEvent {
     let metadata = route_metadata(&route, &reason);
-    let mut event = progress_event(
-        "orchestrator",
-        "running",
-        format!("route selected - {route}"),
-    );
+    let mut event = progress_event("orchestrator", status, format!("route {action} - {route}"));
     event.route = Some(route);
     event.reason = Some(reason);
     if let Some(metadata) = metadata {
@@ -332,6 +338,9 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
     match event {
         RunProgress::RouteSelected { route, reason } => {
             Some(format!("● route    {route} · {reason}"))
+        }
+        RunProgress::RouteUpdated { route, reason } => {
+            Some(format!("⚠ route    {route} · {reason}"))
         }
         RunProgress::Planning => Some("● planner  planning".into()),
         RunProgress::Planned { sub_task_count } => Some(format!(
@@ -464,6 +473,9 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
 pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
     match event {
         RunProgress::RouteSelected { route, reason } => Some(format!("route  {route} · {reason}")),
+        RunProgress::RouteUpdated { route, reason } => {
+            Some(format!("route  updated · {route} · {reason}"))
+        }
         RunProgress::Planning => Some("plan  planning work".into()),
         RunProgress::Planned { sub_task_count } => {
             Some(format!("plan  plan ready · {sub_task_count} worker run(s)"))
@@ -934,6 +946,40 @@ mod tests {
         assert_eq!(
             json["reason"],
             "atomic request; planner, critic, and reviewer are not needed"
+        );
+    }
+
+    #[test]
+    fn route_updated_event_is_visible_and_structured() {
+        let event = RunProgress::RouteUpdated {
+            route: "single-worker".into(),
+            reason: "planner unavailable; downgraded to single worker".into(),
+        };
+
+        let line = format_text_progress_event(&event).expect("route update text line");
+        assert_eq!(
+            line,
+            "⚠ route    single-worker · planner unavailable; downgraded to single worker"
+        );
+
+        let compact = format_compact_progress_event(&event).expect("route update compact");
+        assert_eq!(
+            compact,
+            "route  updated · single-worker · planner unavailable; downgraded to single worker"
+        );
+
+        let json =
+            serde_json::to_value(TiffanyProgressEvent::from(event)).expect("serializes route");
+        assert_eq!(json["role"], "orchestrator");
+        assert_eq!(json["status"], "warning");
+        assert_eq!(json["message"], "route updated - single-worker");
+        assert_eq!(json["route"], "single-worker");
+        assert_eq!(json["route_label"], "single");
+        assert_eq!(json["route_reason_label"], "atomic worker");
+        assert_eq!(json["flow_steps"], "worker -> answer");
+        assert_eq!(
+            json["reason"],
+            "planner unavailable; downgraded to single worker"
         );
     }
 }

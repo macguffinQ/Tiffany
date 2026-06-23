@@ -30,6 +30,10 @@ pub enum RunProgress {
         route: String,
         reason: String,
     },
+    RouteUpdated {
+        route: String,
+        reason: String,
+    },
     Planning,
     Planned {
         sub_task_count: usize,
@@ -242,6 +246,7 @@ impl Orchestrator {
             }
             TaskRoute::FullPipeline => {}
         }
+        let mut effective_route = route;
 
         // 1. Plan
         let _ = tx.send(RunProgress::Planning);
@@ -266,6 +271,11 @@ impl Orchestrator {
                     message: "planning unavailable; using original task".to_string(),
                     reason: first_error_line(&message),
                 });
+                let _ = tx.send(RunProgress::RouteUpdated {
+                    route: TaskRoute::SingleWorker.label().to_string(),
+                    reason: "planner unavailable; downgraded to single worker".to_string(),
+                });
+                effective_route = TaskRoute::SingleWorker;
                 fallback_single_task_plan(top_task, "planner unavailable; using original task")
             }
         };
@@ -400,7 +410,7 @@ impl Orchestrator {
         tracing::info!("→ DAG execution done in {:?}", exec_start.elapsed());
 
         // 4. Review
-        if self.enable_reviewer {
+        if self.enable_reviewer && effective_route.review_skip_reason().is_none() {
             for t in &completed {
                 if t.status != TaskStatus::Completed {
                     continue;
@@ -486,6 +496,14 @@ impl Orchestrator {
                 } else {
                     tracing::info!("reviewer approved task {}", t.id);
                 }
+            }
+        } else if self.enable_reviewer {
+            if let Some(reason) = effective_route.review_skip_reason() {
+                tracing::info!(
+                    "→ Review skipped for route {}: {}",
+                    effective_route.label(),
+                    reason
+                );
             }
         }
 
@@ -750,15 +768,7 @@ fn fallback_single_task_plan(
     top_task: &Task,
     rationale: impl Into<String>,
 ) -> crate::core::types::PlanOutput {
-    let mut task = Task::new(top_task.prompt.clone());
-    task.tags = top_task.tags.clone();
-    task.files_of_interest = top_task.files_of_interest.clone();
-    task.worktree = top_task.worktree.clone();
-    task.agent_hint = top_task.agent_hint.clone();
-    task.cc_agent_hint = top_task.cc_agent_hint.clone();
-    task.model_hint = top_task.model_hint.clone();
-    task.model_provider_hint = top_task.model_provider_hint.clone();
-    task.timeout = top_task.timeout;
+    let task = single_worker_task(top_task);
     crate::core::types::PlanOutput {
         sub_tasks: vec![task],
         rationale: rationale.into(),
@@ -794,6 +804,11 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
             "orchestrator",
             top_task_id,
             route_selected_payload(route, reason),
+        ),
+        RunProgress::RouteUpdated { route, reason } => (
+            "orchestrator",
+            top_task_id,
+            route_updated_payload(route, reason),
         ),
         RunProgress::Planning => (
             "planner",
@@ -1039,6 +1054,13 @@ fn route_selected_payload(route: &str, reason: &str) -> serde_json::Value {
         payload["flow_steps"] = metadata.flow_steps().into();
     }
 
+    payload
+}
+
+fn route_updated_payload(route: &str, reason: &str) -> serde_json::Value {
+    let mut payload = route_selected_payload(route, reason);
+    payload["message"] = format!("route updated - {route}").into();
+    payload["status"] = "warning".into();
     payload
 }
 
@@ -1423,13 +1445,13 @@ mod tests {
         let orch = Orchestrator::new(
             Arc::new(FailingPlanner),
             Arc::new(ApprovingCritic),
-            Arc::new(ApprovingReviewer),
+            Arc::new(FailingReviewer),
             Arc::new(CapabilityRouter::new(&roles, &[])),
             adapters,
             store,
             1,
             true,
-            false,
+            true,
         );
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut top_task = Task::new("ship the smallest useful fix");
@@ -1443,10 +1465,17 @@ mod tests {
 
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].prompt, "ship the smallest useful fix");
-        assert_eq!(completed[0].tags, vec!["implementation".to_string()]);
+        assert_eq!(
+            completed[0].tags,
+            vec!["implementation".to_string(), "single_worker".to_string()]
+        );
         assert_eq!(completed[0].agent_hint.as_deref(), Some("worker-cc"));
         let mut saw_planner_warning = false;
         let mut saw_critic = false;
+        let mut saw_review = false;
+        let mut saw_route_update = false;
+        let mut saw_worker_start = false;
+        let mut route_update_before_worker = false;
         let mut saw_done = false;
         let mut saw_failed = false;
         while let Ok(event) = rx.try_recv() {
@@ -1463,6 +1492,16 @@ mod tests {
                 RunProgress::Critiquing { .. }
                 | RunProgress::CritiqueResult { .. }
                 | RunProgress::Replanning { .. } => saw_critic = true,
+                RunProgress::Reviewing { .. }
+                | RunProgress::ReviewResult { .. }
+                | RunProgress::ReviewSkipped { .. }
+                | RunProgress::ReviewUnavailable { .. } => saw_review = true,
+                RunProgress::RouteUpdated { route, reason } => {
+                    saw_route_update = route == "single-worker"
+                        && reason == "planner unavailable; downgraded to single worker";
+                    route_update_before_worker = !saw_worker_start;
+                }
+                RunProgress::WorkerStarted { .. } => saw_worker_start = true,
                 RunProgress::Done { task_count } => saw_done = task_count == 1,
                 RunProgress::Failed(_) => saw_failed = true,
                 _ => {}
@@ -1475,6 +1514,18 @@ mod tests {
         assert!(
             !saw_critic,
             "planner fallback should go straight to worker instead of critiquing a degraded plan"
+        );
+        assert!(
+            !saw_review,
+            "planner fallback route should skip reviewer like any other single worker route"
+        );
+        assert!(
+            saw_route_update,
+            "planner fallback should surface the single worker route downgrade"
+        );
+        assert!(
+            route_update_before_worker,
+            "route downgrade should be visible before worker execution starts"
         );
         assert!(saw_done, "pipeline should still finish");
         assert!(!saw_failed, "planner failure should not be terminal");

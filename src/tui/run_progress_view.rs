@@ -32,6 +32,11 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
             reason,
             RouteLineStyle::History,
         ))),
+        RunProgress::RouteUpdated { route, reason } => Some(warning(format_route_line(
+            route,
+            reason,
+            RouteLineStyle::History,
+        ))),
         RunProgress::Planning => Some(running("planning")),
         RunProgress::Planned { sub_task_count } => Some(success(format!(
             "plan ready — {sub_task_count} worker run(s)"
@@ -136,6 +141,14 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
 pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
     match event {
         RunProgress::RouteSelected { route, reason } => {
+            let summary = route_summary(route, reason);
+            Some(status(
+                format!("route: {}", summary.label),
+                summary.reason,
+                Some(format_route_line(route, reason, RouteLineStyle::Assistant)),
+            ))
+        }
+        RunProgress::RouteUpdated { route, reason } => {
             let summary = route_summary(route, reason);
             Some(status(
                 format!("route: {}", summary.label),

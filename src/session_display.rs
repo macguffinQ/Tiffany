@@ -482,6 +482,7 @@ impl SessionFlowRouteSummary {
         }
     }
 
+    #[cfg(test)]
     fn from_legacy_route_event(route: &str, reason: Option<&str>) -> Self {
         Self::from_route_event(SessionFlowRoutePayload {
             route,
