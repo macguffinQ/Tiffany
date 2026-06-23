@@ -69,7 +69,7 @@ fn progress_history_view_for_input(
                 return Some(ProgressHistoryView {
                     icon: "✓",
                     tone: ProgressTone::Success,
-                    line: format!("worker  ready · {sub_task_count} run(s)"),
+                    line: format!("worker  ready · {sub_task_count} run(s) · single-worker"),
                 });
             }
             Some("direct-answer") => {
@@ -752,7 +752,7 @@ mod tests {
 
         let single = progress_line(&RunProgress::Planned { sub_task_count: 1 }, 0, &input)
             .expect("single worker planned line");
-        assert_eq!(single.2, "worker  ready · 1 run(s)");
+        assert_eq!(single.2, "worker  ready · 1 run(s) · single-worker");
         assert!(!single.2.contains("plan ready"));
 
         input.run_route = Some("direct-answer".into());

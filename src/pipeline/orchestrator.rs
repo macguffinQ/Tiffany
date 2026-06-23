@@ -600,6 +600,10 @@ impl Orchestrator {
         let mut task = single_worker_task(top_task);
         attach_parent_session(orchestration_session_id, std::slice::from_mut(&mut task));
         let tasks = vec![task];
+        let _ = tx.send(RunProgress::WorkerReady {
+            run_count: tasks.len(),
+            route: TaskRoute::SingleWorker.label().to_string(),
+        });
         let _ = tx.send(RunProgress::Executing {
             sub_task_count: tasks.len(),
         });
@@ -2204,6 +2208,8 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         let mut saw_critic = false;
         let mut saw_review = false;
         let mut saw_executing = false;
+        let mut saw_worker_ready = false;
+        let mut ready_before_running = false;
         let mut saw_done = false;
         let mut saw_route = false;
         while let Ok(event) = rx.try_recv() {
@@ -2219,6 +2225,10 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                 RunProgress::Reviewing { .. }
                 | RunProgress::ReviewResult { .. }
                 | RunProgress::ReviewUnavailable { .. } => saw_review = true,
+                RunProgress::WorkerReady { run_count, route } => {
+                    saw_worker_ready = run_count == 1 && route == "single-worker";
+                    ready_before_running = !saw_executing;
+                }
                 RunProgress::Executing { sub_task_count } => {
                     saw_executing = sub_task_count == 1;
                 }
@@ -2227,6 +2237,14 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             }
         }
         assert!(saw_route, "single worker route should be explicit");
+        assert!(
+            saw_worker_ready,
+            "single worker route should show worker readiness before execution"
+        );
+        assert!(
+            ready_before_running,
+            "worker readiness should be visible before running starts"
+        );
         assert!(saw_executing, "single worker route should show execution");
         assert!(saw_done, "single worker route should complete");
         assert!(!saw_planning, "single worker route should skip planner");

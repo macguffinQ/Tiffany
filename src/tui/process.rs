@@ -690,7 +690,9 @@ fn format_run_event_for_recording_with_input(
     if let RunProgress::Planned { sub_task_count } = event {
         match input.run_route.as_deref() {
             Some("single-worker") => {
-                return Some(format!("worker  ready · {sub_task_count} run(s)"));
+                return Some(format!(
+                    "worker  ready · {sub_task_count} run(s) · single-worker"
+                ));
             }
             Some("direct-answer") => {
                 return Some("worker  direct answer ready".into());
@@ -1658,7 +1660,7 @@ mod tests {
         record_run_progress(&mut input, &RunProgress::Planned { sub_task_count: 1 });
 
         assert_eq!(input.run_events.len(), 1);
-        assert!(input.run_events[0].contains("worker  ready · 1 run(s)"));
+        assert!(input.run_events[0].contains("worker  ready · 1 run(s) · single-worker"));
         assert!(!input.run_events[0].contains("plan ready"));
 
         let formatted = format_process_capture(&input, 20);
@@ -1666,7 +1668,7 @@ mod tests {
         assert!(!formatted.contains("plan ready"));
         let summary = format_process_summary(&input);
         assert!(summary.contains("workers: 1 ready"));
-        assert!(summary.contains("worker  ready · 1 run(s)"));
+        assert!(summary.contains("worker  ready · 1 run(s) · single-worker"));
 
         let mut input = InputState {
             run_route: Some("direct-answer".into()),
@@ -1767,7 +1769,7 @@ mod tests {
         let mut input = InputState::default();
         input.run_events = vec![
             "10:00:00  worker  output · abcdef12 claude-code: incremental log line".into(),
-            "10:00:00  worker  ready · 1 run(s)".into(),
+            "10:00:00  worker  ready · 1 run(s) · single-worker".into(),
             "10:00:01  worker  tool call · abcdef12 claude-code: tool Bash: cargo test".into(),
             "10:00:02  worker  stderr · abcdef12 worker-codex: API Error: model not found".into(),
             "10:00:03  worker  worker-cc done · abcdef12 · 1.2s".into(),
@@ -1776,7 +1778,7 @@ mod tests {
         let formatted = format_process_summary(&input);
 
         assert!(formatted.contains("workers: 1 ready, 1 done, 1 tool call(s), 1 stderr"));
-        assert!(formatted.contains("worker  ready · 1 run(s)"));
+        assert!(formatted.contains("worker  ready · 1 run(s) · single-worker"));
         assert!(formatted.contains("tool call · abcdef12 claude-code"));
         assert!(formatted.contains("stderr · abcdef12 worker-codex"));
         assert!(formatted.contains("worker  worker-cc done"));

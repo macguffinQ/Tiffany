@@ -2003,7 +2003,7 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
         )),
         RunProgress::WorkerReady { run_count, route } => {
             capture.route = Some(route.clone());
-            Some(format!("Worker ready with {run_count} run(s)."))
+            Some(format_acp_worker_ready_progress(route, *run_count))
         }
         RunProgress::Critiquing { round } => Some(format!("Critiquing plan, round {round}.")),
         RunProgress::CritiqueResult { approved, issues } => {
@@ -2104,10 +2104,22 @@ fn format_acp_route_progress(action: &str, route: &str, reason: &str) -> String 
 fn format_acp_planned_progress(route: Option<&str>, sub_task_count: usize) -> String {
     match route {
         Some("single-worker") | Some("single") => {
-            format!("Worker ready with {sub_task_count} run(s).")
+            format_acp_worker_ready_progress("single-worker", sub_task_count)
         }
         Some("direct-answer") | Some("direct") => "Direct answer ready.".into(),
         _ => format!("Plan ready with {sub_task_count} worker run(s)."),
+    }
+}
+
+fn format_acp_worker_ready_progress(route: &str, run_count: usize) -> String {
+    match agent_events::OrchestrationRoute::from_label(route) {
+        Some(route) => format!(
+            "Worker ready: {run_count} run(s) · {} · {} · {}.",
+            route.display_label(),
+            route.short_reason_label(),
+            route.flow_steps()
+        ),
+        None => format!("Worker ready with {run_count} run(s)."),
     }
 }
 
@@ -2923,13 +2935,29 @@ mod tests {
 
         let planned = progress_text(&RunProgress::Planned { sub_task_count: 1 }, &mut capture)
             .expect("single worker planned progress text");
-        assert_eq!(planned, "Worker ready with 1 run(s).");
+        assert_eq!(
+            planned,
+            "Worker ready: 1 run(s) · single · atomic worker · worker -> answer."
+        );
         assert!(!planned.contains("Plan ready"));
 
         let mut capture = AcpRunCapture::default();
         let planned = progress_text(&RunProgress::Planned { sub_task_count: 2 }, &mut capture)
             .expect("full pipeline planned progress text");
         assert_eq!(planned, "Plan ready with 2 worker run(s).");
+
+        let ready = progress_text(
+            &RunProgress::WorkerReady {
+                run_count: 1,
+                route: "single-worker".into(),
+            },
+            &mut capture,
+        )
+        .expect("worker ready progress text");
+        assert_eq!(
+            ready,
+            "Worker ready: 1 run(s) · single · atomic worker · worker -> answer."
+        );
     }
 
     #[test]

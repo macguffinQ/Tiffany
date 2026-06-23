@@ -41,9 +41,11 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
         RunProgress::Planned { sub_task_count } => Some(success(format!(
             "plan ready — {sub_task_count} worker run(s)"
         ))),
-        RunProgress::WorkerReady { run_count, .. } => {
-            Some(success(format!("worker ready — {run_count} run(s)")))
-        }
+        RunProgress::WorkerReady { run_count, route } => Some(success(format_worker_ready_line(
+            *run_count,
+            route,
+            RouteLineStyle::History,
+        ))),
         RunProgress::Critiquing { round } => {
             Some(running(format!("checking plan — round {round}")))
         }
@@ -171,13 +173,18 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
                 "▸ Plan ready · {sub_task_count} worker run(s). Moving to critique…"
             )),
         )),
-        RunProgress::WorkerReady { run_count, .. } => Some(status(
-            format!("Worker ready ({run_count} run(s))"),
-            "single-worker flow",
-            Some(format!(
-                "▸ Worker ready · {run_count} run(s). Starting worker…"
-            )),
-        )),
+        RunProgress::WorkerReady { run_count, route } => {
+            let summary = route_summary(route, "");
+            Some(status(
+                format!("Worker ready ({run_count} run(s))"),
+                format!("{} · {}", summary.label, summary.reason),
+                Some(format_worker_ready_line(
+                    *run_count,
+                    route,
+                    RouteLineStyle::Assistant,
+                )),
+            ))
+        }
         RunProgress::Critiquing { round } => Some(status(
             format!("Critiquing (round {round})"),
             "adversarial review",
@@ -462,6 +469,26 @@ fn format_route_line(route: &str, reason: &str, style: RouteLineStyle) -> String
     line
 }
 
+fn format_worker_ready_line(run_count: usize, route: &str, style: RouteLineStyle) -> String {
+    let summary = route_summary(route, "");
+    let mut parts = vec![format!("{run_count} run(s)")];
+    if !summary.label.trim().is_empty() {
+        parts.push(summary.label);
+    }
+    if !summary.reason.trim().is_empty() {
+        parts.push(summary.reason);
+    }
+    if let Some(steps) = summary.steps {
+        parts.push(steps.to_string());
+    }
+    match style {
+        RouteLineStyle::History => format!("worker ready · {}", parts.join(" · ")),
+        RouteLineStyle::Assistant => {
+            format!("▸ Worker ready · {}. Starting worker…", parts.join(" · "))
+        }
+    }
+}
+
 fn provider_model_label(provider: Option<&str>, model: &str) -> String {
     match provider.map(str::trim).filter(|value| !value.is_empty()) {
         Some(provider) => format!("{provider}/{model}"),
@@ -620,6 +647,31 @@ mod tests {
         assert_eq!(
             route_status.assistant_update.as_deref(),
             Some("▸ route single · atomic worker · worker -> answer")
+        );
+
+        let worker_ready = progress_history_view(&RunProgress::WorkerReady {
+            run_count: 1,
+            route: "single-worker".into(),
+        })
+        .expect("worker ready view");
+        assert_eq!(worker_ready.icon, "✓");
+        assert_eq!(
+            worker_ready.line,
+            "worker ready · 1 run(s) · single · atomic worker · worker -> answer"
+        );
+
+        let worker_ready_status = run_status_view(&RunProgress::WorkerReady {
+            run_count: 1,
+            route: "single-worker".into(),
+        })
+        .expect("worker ready status");
+        assert_eq!(worker_ready_status.stage, "Worker ready (1 run(s))");
+        assert_eq!(worker_ready_status.detail, "single · atomic worker");
+        assert_eq!(
+            worker_ready_status.assistant_update.as_deref(),
+            Some(
+                "▸ Worker ready · 1 run(s) · single · atomic worker · worker -> answer. Starting worker…"
+            )
         );
 
         let fallback = progress_history_view(&RunProgress::ControlFallback {
