@@ -20,6 +20,9 @@ All notable changes to this project will be documented in this file.
 - Updated the forked `tiffany-loop` run header to label direct-answer runs as
   `flow direct` and show `direct -> worker -> answer`, while implementation
   work still shows the full planner/critic/worker/reviewer flow.
+- Moved direct-answer request classification into the shared event-format crate
+  so the backend orchestrator and forked TUI use the same direct/full flow
+  decision.
 - Treated pure URL/link-inspection prompts as direct worker answers while
   keeping creation, code, and implementation requests on the full orchestration
   pipeline.

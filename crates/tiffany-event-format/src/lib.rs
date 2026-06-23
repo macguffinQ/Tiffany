@@ -95,6 +95,114 @@ pub struct AgentFailureHint {
     pub evidence: String,
 }
 
+const DIRECT_REQUEST_MARKERS: &[&str] = &[
+    "你好",
+    "你叫",
+    "你能",
+    "干啥",
+    "能干啥",
+    "是谁",
+    "是什么",
+    "介绍",
+    "解释",
+    "说明",
+    "如何",
+    "怎么",
+    "为什么",
+    "建议",
+    "计划",
+    "坏处",
+    "看看",
+    "看下",
+    "了解",
+    "分析",
+    "调研",
+    "对不",
+    "可以吗",
+    "行不行",
+    "?",
+    "？",
+    "hello",
+    "hi",
+    "answer",
+    "respond",
+    "greeting",
+    "what",
+    "how",
+    "why",
+    "explain",
+    "suggest",
+    "plan",
+];
+
+const ENGINEERING_ACTION_MARKERS: &[&str] = &[
+    "修改",
+    "改一下",
+    "改成",
+    "修复",
+    "优化",
+    "重构",
+    "实现",
+    "新增",
+    "删除",
+    "创建",
+    "新建",
+    "生成",
+    "搭建",
+    "脚手架",
+    "写参赛",
+    "写 agent",
+    "写个 agent",
+    "提交",
+    "推送",
+    "执行",
+    "完成",
+    "继续做",
+    "开始做",
+    "来做",
+    "去做",
+    "做一下",
+    "做吧",
+    "做啊",
+    "搞定",
+    "开发",
+    "编译",
+    "构建",
+    "测试",
+    "报错",
+    "日志",
+    "权限",
+    "配置",
+    "安装",
+    "发布",
+    "接入",
+    "完善",
+    "整合",
+    "fix",
+    "implement",
+    "create",
+    "generate",
+    "scaffold",
+    "write code",
+    "change",
+    "edit",
+    "refactor",
+    "test",
+    "build",
+    "debug",
+    "error",
+    "commit",
+    "push",
+    "release",
+    "install",
+    "configure",
+    "workflow",
+    "ci",
+    "tui",
+    "provider",
+    "worker",
+];
+
 impl AgentFailureHint {
     pub fn title(&self) -> &'static str {
         self.category.title()
@@ -103,6 +211,35 @@ impl AgentFailureHint {
     pub fn action(&self) -> &'static str {
         self.category.action()
     }
+}
+
+pub fn request_looks_direct_answer(text: &str) -> bool {
+    looks_like_direct_request(text) && !contains_engineering_action(text)
+}
+
+pub fn contains_engineering_action(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    ENGINEERING_ACTION_MARKERS
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+pub fn looks_like_direct_request(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    DIRECT_REQUEST_MARKERS
+        .iter()
+        .any(|needle| lower.contains(needle))
+        || looks_like_link_reference(text)
+}
+
+pub fn looks_like_link_reference(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return true;
+    }
+    trimmed
+        .split_whitespace()
+        .any(|part| part.starts_with("http://") || part.starts_with("https://"))
 }
 
 pub fn agent_failure_hint(content: &str, max: usize) -> Option<AgentFailureHint> {
@@ -2022,6 +2159,26 @@ mod tests {
         .expect("parse hint");
         assert_eq!(parse.category, AgentFailureCategory::Parse);
         assert!(parse.action().contains("/process full"));
+    }
+
+    #[test]
+    fn classifies_direct_answer_requests_for_orchestration_surfaces() {
+        assert!(request_looks_direct_answer("你好"));
+        assert!(request_looks_direct_answer("你叫啥\n你能干啥"));
+        assert!(request_looks_direct_answer(
+            "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle"
+        ));
+        assert!(request_looks_direct_answer(
+            "看看这个链接 https://example.com"
+        ));
+        assert!(looks_like_direct_request("分析一下这个比赛"));
+
+        assert!(!request_looks_direct_answer("优化 TUI 显示"));
+        assert!(!request_looks_direct_answer("fix the build error"));
+        assert!(!request_looks_direct_answer("按照这个计划来做"));
+        assert!(!request_looks_direct_answer("写参赛 agent"));
+        assert!(!request_looks_direct_answer("创建一个 worker"));
+        assert!(contains_engineering_action("写参赛 agent"));
     }
 
     #[test]

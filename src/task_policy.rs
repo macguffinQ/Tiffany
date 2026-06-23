@@ -1,5 +1,6 @@
 //! Lightweight task classification used to keep chat, planning, and review behavior aligned.
 
+use crate::agent_events;
 use crate::core::types::{PlanOutput, Task};
 
 pub fn apply_conversation_policy(top_task: &Task, plan: &mut PlanOutput) {
@@ -36,179 +37,45 @@ pub fn conversation_worker_prompt(user_message: &str) -> String {
 }
 
 pub fn is_conversational_task(task: &Task) -> bool {
-    if has_any_tag(
-        &task.tags,
-        &[
-            "implementation",
-            "implement",
-            "coding",
-            "code",
-            "refactor",
-            "bug",
-            "fix",
-            "test",
-            "build",
-            "release",
-            "deploy",
-        ],
-    ) {
+    if has_any_tag(&task.tags, ENGINEERING_TAGS) {
         return false;
     }
-    if has_any_tag(
-        &task.tags,
-        &[
-            "chat",
-            "conversation",
-            "conversational",
-            "greeting",
-            "qa",
-            "question",
-            "explanation",
-            "diagnostic",
-            "advice",
-        ],
-    ) {
-        return !contains_engineering_action(&task.prompt);
+    if has_any_tag(&task.tags, DIRECT_TAGS) {
+        return !agent_events::contains_engineering_action(&task.prompt);
     }
-    looks_like_conversation(&task.prompt) && !contains_engineering_action(&task.prompt)
+    agent_events::request_looks_direct_answer(&task.prompt)
 }
+
+const ENGINEERING_TAGS: &[&str] = &[
+    "implementation",
+    "implement",
+    "coding",
+    "code",
+    "refactor",
+    "bug",
+    "fix",
+    "test",
+    "build",
+    "release",
+    "deploy",
+];
+
+const DIRECT_TAGS: &[&str] = &[
+    "chat",
+    "conversation",
+    "conversational",
+    "greeting",
+    "qa",
+    "question",
+    "explanation",
+    "diagnostic",
+    "advice",
+];
 
 fn has_any_tag(tags: &[String], candidates: &[&str]) -> bool {
     tags.iter()
         .map(|tag| tag.trim().to_ascii_lowercase())
         .any(|tag| candidates.iter().any(|candidate| tag == *candidate))
-}
-
-fn contains_engineering_action(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    [
-        "修改",
-        "改一下",
-        "改成",
-        "修复",
-        "优化",
-        "重构",
-        "实现",
-        "新增",
-        "删除",
-        "创建",
-        "新建",
-        "生成",
-        "搭建",
-        "脚手架",
-        "写参赛",
-        "写 agent",
-        "写个 agent",
-        "提交",
-        "推送",
-        "执行",
-        "完成",
-        "继续做",
-        "开始做",
-        "来做",
-        "去做",
-        "做一下",
-        "做吧",
-        "做啊",
-        "搞定",
-        "开发",
-        "编译",
-        "构建",
-        "测试",
-        "报错",
-        "日志",
-        "权限",
-        "配置",
-        "安装",
-        "发布",
-        "接入",
-        "完善",
-        "整合",
-        "fix",
-        "implement",
-        "create",
-        "generate",
-        "scaffold",
-        "write code",
-        "change",
-        "edit",
-        "refactor",
-        "test",
-        "build",
-        "debug",
-        "error",
-        "commit",
-        "push",
-        "release",
-        "install",
-        "configure",
-        "workflow",
-        "ci",
-        "tui",
-        "provider",
-        "worker",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
-fn looks_like_conversation(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    [
-        "你好",
-        "你叫",
-        "你能",
-        "干啥",
-        "能干啥",
-        "是谁",
-        "是什么",
-        "介绍",
-        "解释",
-        "说明",
-        "如何",
-        "怎么",
-        "为什么",
-        "建议",
-        "计划",
-        "坏处",
-        "看看",
-        "看下",
-        "了解",
-        "分析",
-        "调研",
-        "对不",
-        "可以吗",
-        "行不行",
-        "?",
-        "？",
-        "hello",
-        "hi",
-        "answer",
-        "respond",
-        "greeting",
-        "what",
-        "how",
-        "why",
-        "explain",
-        "suggest",
-        "plan",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-        || looks_like_link_reference(text)
-}
-
-fn looks_like_link_reference(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        return true;
-    }
-    trimmed
-        .split_whitespace()
-        .any(|part| part.starts_with("http://") || part.starts_with("https://"))
 }
 
 #[cfg(test)]
