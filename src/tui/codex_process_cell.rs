@@ -5,7 +5,7 @@
 // for orchestrator progress: execution events become stable history lines here,
 // while the terminal loop only inserts those lines into scrollback.
 
-use super::run_progress_view::{progress_history_view, ProgressTone};
+use super::run_progress_view::{progress_history_view, ProgressHistoryView, ProgressTone};
 use super::state::InputState;
 use super::util::{normalize_execution_output_summary, truncate_chars};
 use crate::agent_events;
@@ -54,9 +54,36 @@ pub(super) fn progress_line(
             let _ = review_issue_count;
             None
         }
-        _ => progress_history_view(event)
+        _ => progress_history_view_for_input(event, input)
             .map(|view| (view.icon, progress_tone_color(view.tone), view.line)),
     }
+}
+
+fn progress_history_view_for_input(
+    event: &RunProgress,
+    input: &InputState,
+) -> Option<ProgressHistoryView> {
+    if let RunProgress::Planned { sub_task_count } = event {
+        match input.run_route.as_deref() {
+            Some("single-worker") => {
+                return Some(ProgressHistoryView {
+                    icon: "✓",
+                    tone: ProgressTone::Success,
+                    line: format!("worker  ready · {sub_task_count} run(s)"),
+                });
+            }
+            Some("direct-answer") => {
+                return Some(ProgressHistoryView {
+                    icon: "✓",
+                    tone: ProgressTone::Success,
+                    line: "worker  direct answer ready".into(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    progress_history_view(event)
 }
 
 fn progress_tone_color(tone: ProgressTone) -> &'static str {
@@ -714,6 +741,29 @@ mod tests {
         )
         .expect("review needs fixes line");
         assert_eq!(needs_fixes.2, "review  needs fixes · 00000000 · 3 issue(s)");
+    }
+
+    #[test]
+    fn planned_history_line_respects_effective_route() {
+        let mut input = InputState {
+            run_route: Some("single-worker".into()),
+            ..InputState::default()
+        };
+
+        let single = progress_line(&RunProgress::Planned { sub_task_count: 1 }, 0, &input)
+            .expect("single worker planned line");
+        assert_eq!(single.2, "worker  ready · 1 run(s)");
+        assert!(!single.2.contains("plan ready"));
+
+        input.run_route = Some("direct-answer".into());
+        let direct = progress_line(&RunProgress::Planned { sub_task_count: 1 }, 0, &input)
+            .expect("direct planned line");
+        assert_eq!(direct.2, "worker  direct answer ready");
+
+        input.run_route = Some("full-pipeline".into());
+        let full = progress_line(&RunProgress::Planned { sub_task_count: 2 }, 0, &input)
+            .expect("full pipeline planned line");
+        assert_eq!(full.2, "plan ready — 2 worker run(s)");
     }
 
     #[test]

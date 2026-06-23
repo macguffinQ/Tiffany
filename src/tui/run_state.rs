@@ -214,7 +214,7 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
     input.last_event_at = Some(Instant::now());
     let terminal_event = matches!(&event, RunProgress::Done { .. } | RunProgress::Failed(_));
     record_run_progress(input, &event);
-    if let Some(view) = run_status_view(&event) {
+    if let Some(view) = run_status_view_for_input(&event, input) {
         apply_run_status_view(input, view);
     }
 
@@ -374,6 +374,32 @@ fn apply_run_status_view(input: &mut InputState, view: RunStatusView) {
     if let Some(update) = view.assistant_update {
         update_last_assistant(input, update, "thinking");
     }
+}
+
+fn run_status_view_for_input(event: &RunProgress, input: &InputState) -> Option<RunStatusView> {
+    if let RunProgress::Planned { sub_task_count } = event {
+        match input.run_route.as_deref() {
+            Some("single-worker") => {
+                return Some(RunStatusView {
+                    stage: format!("Worker ready ({sub_task_count} run(s))"),
+                    detail: "single-worker flow".into(),
+                    assistant_update: Some(format!(
+                        "▸ Worker ready · {sub_task_count} run(s). Starting worker…"
+                    )),
+                });
+            }
+            Some("direct-answer") => {
+                return Some(RunStatusView {
+                    stage: "Direct answer ready".into(),
+                    detail: "worker flow".into(),
+                    assistant_update: Some("▸ Direct answer ready. Starting worker…".into()),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    run_status_view(event)
 }
 
 fn update_last_assistant(input: &mut InputState, content: String, status: &str) {
@@ -914,6 +940,36 @@ mod tests {
         );
         assert_eq!(input.run_flow_steps.as_deref(), Some("worker -> answer"));
         assert_eq!(input.current_stage, "route: single");
+    }
+
+    #[test]
+    fn planned_status_respects_single_worker_route_downgrade() {
+        let mut input = InputState::default();
+        apply_route_preview(&mut input, "优化当前工程");
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: initial_run_status(&input, "优化当前工程"),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        handle_run_event(
+            RunProgress::RouteUpdated {
+                route: "single-worker".into(),
+                reason: "planner fallback; downgraded to single worker".into(),
+            },
+            &mut input,
+        );
+        handle_run_event(RunProgress::Planned { sub_task_count: 1 }, &mut input);
+
+        assert_eq!(input.current_stage, "Worker ready (1 run(s))");
+        assert_eq!(input.current_stage_detail, "single-worker flow");
+        let assistant = input
+            .transcript
+            .last()
+            .expect("assistant status message after planned");
+        assert!(assistant.content.contains("Worker ready · 1 run(s)"));
+        assert!(!assistant.content.contains("Moving to critique"));
     }
 
     #[test]
