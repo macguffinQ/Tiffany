@@ -26,6 +26,9 @@ All notable changes to this project will be documented in this file.
 - Classified multi-turn contextual prompts by the `Current user request` block,
   preventing older turns containing words like optimize, fix, or commit from
   forcing a simple follow-up question into the full orchestration pipeline.
+- Made current-request extraction tolerate CRLF input, inline
+  `Current user request: ...` markers, and indented markers for external ACP
+  and terminal clients.
 - Treated pure URL/link-inspection prompts as direct worker answers while
   keeping creation, code, and implementation requests on the full orchestration
   pipeline.

@@ -244,10 +244,15 @@ pub fn looks_like_link_reference(text: &str) -> bool {
 }
 
 pub fn current_user_request(text: &str) -> &str {
-    let Some((_, tail)) = text.rsplit_once("Current user request:\n") else {
+    let Some(idx) = text.rfind("Current user request:") else {
         return text.trim();
     };
-    tail.trim()
+    let request = text[idx + "Current user request:".len()..].trim();
+    if request.is_empty() {
+        text.trim()
+    } else {
+        request
+    }
 }
 
 pub fn agent_failure_hint(content: &str, max: usize) -> Option<AgentFailureHint> {
@@ -2200,6 +2205,18 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         let engineering_followup = "Previous turns:\nuser:\n你好\n\nassistant result:\n你好。\n\n---\nCurrent user request:\n继续优化 TUI";
         assert_eq!(current_user_request(engineering_followup), "继续优化 TUI");
         assert!(!request_looks_direct_answer(engineering_followup));
+
+        let crlf = "Previous turns:\r\nuser:\r\nfix the build\r\n\r\n---\r\nCurrent user request:\r\n你能干啥\r\n";
+        assert_eq!(current_user_request(crlf), "你能干啥");
+        assert!(request_looks_direct_answer(crlf));
+
+        let inline = "Previous turns:\nuser:\ncommit it\n---\nCurrent user request: 你好";
+        assert_eq!(current_user_request(inline), "你好");
+        assert!(request_looks_direct_answer(inline));
+
+        let indented = "Previous turns:\nuser:\n优化\n---\n  Current user request:\n你是谁";
+        assert_eq!(current_user_request(indented), "你是谁");
+        assert!(request_looks_direct_answer(indented));
     }
 
     #[test]
