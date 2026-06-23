@@ -149,8 +149,8 @@ fn route_reason_label(reason: &str) -> String {
     if reason.is_empty() {
         return String::new();
     }
-    crate::agent_events::OrchestrationRoute::from_reason(reason)
-        .map(|route| route.short_reason_label().to_string())
+    crate::agent_events::OrchestrationRoute::reason_display_label(reason)
+        .map(str::to_string)
         .unwrap_or_else(|| truncate_chars(reason, 32))
 }
 

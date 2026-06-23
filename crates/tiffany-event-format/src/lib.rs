@@ -148,6 +148,10 @@ impl OrchestrationRoute {
         Self::from_label(label).or_else(|| Self::from_reason(reason))
     }
 
+    pub fn reason_display_label(reason: &str) -> Option<&'static str> {
+        Self::from_reason(reason).map(Self::short_reason_label)
+    }
+
     pub fn short_reason_label(self) -> &'static str {
         match self {
             Self::DirectAnswer => "chat/explain",
@@ -2502,6 +2506,14 @@ mod tests {
         assert_eq!(
             OrchestrationRoute::FullPipeline.short_reason_label(),
             "implementation"
+        );
+        assert_eq!(
+            OrchestrationRoute::reason_display_label(OrchestrationRoute::FullPipeline.reason()),
+            Some("implementation")
+        );
+        assert_eq!(
+            OrchestrationRoute::reason_display_label("custom reason"),
+            None
         );
 
         assert!(request_looks_direct_answer("你好"));

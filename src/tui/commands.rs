@@ -2185,8 +2185,14 @@ fn selected_flow_reason(input: &InputState) -> String {
     input
         .run_route_reason
         .as_deref()
-        .map(|reason| truncate_chars(reason, 120))
+        .map(selected_flow_reason_label)
         .unwrap_or_else(|| "Tiffany selects the flow after reading the prompt.".into())
+}
+
+fn selected_flow_reason_label(reason: &str) -> String {
+    agent_events::OrchestrationRoute::reason_display_label(reason)
+        .map(str::to_string)
+        .unwrap_or_else(|| truncate_chars(reason, 120))
 }
 
 fn selected_flow_steps(input: &InputState) -> String {
@@ -4704,6 +4710,31 @@ behavior:
         assert!(workflow.content.contains("execute"));
         assert!(workflow.content.contains("worker-cc"));
         assert!(workflow.content.contains("1 pending"));
+    }
+
+    #[test]
+    fn workflow_command_shortens_standard_route_reason_without_cached_label() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap(),
+        );
+        let cfg = Arc::new(test_config());
+        let mut input = InputState {
+            run_route: Some("full-pipeline".into()),
+            run_route_reason: Some(
+                "project or implementation work; planner, critic, worker, and reviewer will run"
+                    .into(),
+            ),
+            ..InputState::default()
+        };
+
+        handle_slash_command("/workflow", &store, &cfg, &mut input);
+
+        let workflow = input.transcript.last().expect("workflow response");
+        assert!(workflow.content.contains("flow reason: implementation"));
+        assert!(!workflow
+            .content
+            .contains("flow reason: project or implementation work; planner, critic, worker, and reviewer will run"));
     }
 
     #[test]

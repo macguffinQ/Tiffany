@@ -881,15 +881,21 @@ fn process_route_reason_summary(input: &InputState, events: &[&String]) -> Strin
         return truncate_chars(reason.trim(), 120);
     }
     if let Some(reason) = input.run_route_reason.as_deref() {
-        return truncate_chars(reason.trim(), 120);
+        return route_reason_display(reason, 120);
     }
     if let Some(reason) = process_route_reason_from_events(events) {
-        return truncate_chars(reason.trim(), 120);
+        return route_reason_display(&reason, 120);
     }
     if let Some(route) = process_route_from_input_or_events(input, events) {
         return route.reason().into();
     }
     "pending first route event".into()
+}
+
+fn route_reason_display(reason: &str, max: usize) -> String {
+    agent_events::OrchestrationRoute::reason_display_label(reason)
+        .map(str::to_string)
+        .unwrap_or_else(|| truncate_chars(reason.trim(), max))
 }
 
 fn process_route_from_input_or_events(
@@ -1664,6 +1670,30 @@ mod tests {
             "fix: /roles save worker-codex --provider openai --model-name <api-model> --runtime codex"
         ));
         assert!(!formatted.contains("output ·"));
+    }
+
+    #[test]
+    fn process_summary_shortens_standard_route_reason_without_cached_label() {
+        let mut input = InputState {
+            run_route: Some("single-worker".into()),
+            run_route_reason: Some(
+                "atomic request; planner, critic, and reviewer are not needed".into(),
+            ),
+            ..InputState::default()
+        };
+        input.run_events = vec![format!(
+            "10:00:00  {}",
+            format_run_event(&RunProgress::RouteSelected {
+                route: "single-worker".into(),
+                reason: "atomic request; planner, critic, and reviewer are not needed".into(),
+            })
+        )];
+
+        let formatted = format_process_summary(&input);
+
+        assert!(formatted.contains("flow reason: atomic worker"));
+        assert!(!formatted
+            .contains("flow reason: atomic request; planner, critic, and reviewer are not needed"));
     }
 
     #[test]
