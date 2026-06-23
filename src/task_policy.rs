@@ -10,6 +10,36 @@ pub enum TaskRoute {
     FullPipeline,
 }
 
+impl TaskRoute {
+    pub fn label(self) -> &'static str {
+        match self {
+            TaskRoute::DirectAnswer => "direct-answer",
+            TaskRoute::SingleWorker => "single-worker",
+            TaskRoute::FullPipeline => "full-pipeline",
+        }
+    }
+
+    pub fn reason(self) -> &'static str {
+        match self {
+            TaskRoute::DirectAnswer => "simple conversational or explanatory request",
+            TaskRoute::SingleWorker => {
+                "atomic request; planner, critic, and reviewer are not needed"
+            }
+            TaskRoute::FullPipeline => {
+                "project or implementation work; planner, critic, worker, and reviewer will run"
+            }
+        }
+    }
+
+    pub fn review_skip_reason(self) -> Option<&'static str> {
+        match self {
+            TaskRoute::DirectAnswer => Some("conversational answer"),
+            TaskRoute::SingleWorker => Some("single worker route"),
+            TaskRoute::FullPipeline => None,
+        }
+    }
+}
+
 pub fn apply_conversation_policy(top_task: &Task, plan: &mut PlanOutput) {
     if !is_conversational_task(top_task) {
         return;
@@ -46,16 +76,10 @@ pub fn single_worker_task(top_task: &Task) -> Task {
 }
 
 pub fn review_skip_reason(top_task: &Task, task: &Task) -> Option<&'static str> {
-    match classify_task_route(top_task) {
-        TaskRoute::DirectAnswer => return Some("conversational answer"),
-        TaskRoute::SingleWorker => return Some("single worker route"),
-        TaskRoute::FullPipeline => {}
+    if let Some(reason) = classify_task_route(top_task).review_skip_reason() {
+        return Some(reason);
     }
-    match classify_task_route(task) {
-        TaskRoute::DirectAnswer => Some("conversational answer"),
-        TaskRoute::SingleWorker => Some("single worker route"),
-        TaskRoute::FullPipeline => None,
-    }
+    classify_task_route(task).review_skip_reason()
 }
 
 pub fn conversation_worker_prompt(user_message: &str) -> String {
@@ -472,5 +496,32 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             review_skip_reason(&Task::new("优化当前工程"), &Task::new("改代码")),
             None
         );
+    }
+
+    #[test]
+    fn route_metadata_is_user_visible_and_consistent() {
+        assert_eq!(TaskRoute::DirectAnswer.label(), "direct-answer");
+        assert_eq!(TaskRoute::SingleWorker.label(), "single-worker");
+        assert_eq!(TaskRoute::FullPipeline.label(), "full-pipeline");
+
+        assert!(TaskRoute::DirectAnswer
+            .reason()
+            .contains("conversational or explanatory"));
+        assert!(TaskRoute::SingleWorker
+            .reason()
+            .contains("planner, critic, and reviewer are not needed"));
+        assert!(TaskRoute::FullPipeline
+            .reason()
+            .contains("planner, critic, worker, and reviewer will run"));
+
+        assert_eq!(
+            TaskRoute::DirectAnswer.review_skip_reason(),
+            Some("conversational answer")
+        );
+        assert_eq!(
+            TaskRoute::SingleWorker.review_skip_reason(),
+            Some("single worker route")
+        );
+        assert_eq!(TaskRoute::FullPipeline.review_skip_reason(), None);
     }
 }

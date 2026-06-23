@@ -223,22 +223,19 @@ impl Orchestrator {
         tx: UnboundedSender<RunProgress>,
         orchestration_session_id: Option<Uuid>,
     ) -> Result<Vec<Task>> {
-        match classify_task_route(top_task) {
+        let route = classify_task_route(top_task);
+        let _ = tx.send(RunProgress::RouteSelected {
+            route: route.label().to_string(),
+            reason: route.reason().to_string(),
+        });
+
+        match route {
             TaskRoute::DirectAnswer => {
-                let _ = tx.send(RunProgress::RouteSelected {
-                    route: "direct-answer".to_string(),
-                    reason: "simple conversational or explanatory request".to_string(),
-                });
                 return self
                     .run_direct_conversation(top_task, tx, orchestration_session_id)
                     .await;
             }
             TaskRoute::SingleWorker => {
-                let _ = tx.send(RunProgress::RouteSelected {
-                    route: "single-worker".to_string(),
-                    reason: "atomic request; planner, critic, and reviewer are not needed"
-                        .to_string(),
-                });
                 return self
                     .run_single_worker(top_task, tx, orchestration_session_id)
                     .await;
@@ -1777,11 +1774,16 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             .expect("reviewer failure should not abort completed worker output");
 
         assert_eq!(completed.len(), 1);
+        let mut saw_route = false;
         let mut saw_review_unavailable = false;
         let mut saw_done = false;
         let mut saw_failed = false;
         while let Ok(event) = rx.try_recv() {
             match event {
+                RunProgress::RouteSelected { route, reason } => {
+                    saw_route = route == "full-pipeline"
+                        && reason.contains("planner, critic, worker, and reviewer will run");
+                }
                 RunProgress::ReviewUnavailable { message, .. } => {
                     saw_review_unavailable = message.contains("reviewer unavailable");
                 }
@@ -1790,6 +1792,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                 _ => {}
             }
         }
+        assert!(saw_route, "full pipeline route should be explicit");
         assert!(
             saw_review_unavailable,
             "expected visible review unavailable event"

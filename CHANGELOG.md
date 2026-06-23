@@ -52,6 +52,9 @@ All notable changes to this project will be documented in this file.
 - Added an explicit route-selected progress event so direct answers, atomic
   single-worker runs, and full orchestration runs show why Tiffany chose that
   path before execution starts.
+- Centralized route labels, reasons, and review-skip reasons in the task
+  policy layer so terminal chat, TUI, ACP, and persisted logs describe routing
+  decisions consistently.
 
 ## [0.1.25] - 2026-06-22
 
