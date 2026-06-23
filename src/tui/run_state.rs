@@ -84,6 +84,8 @@ impl RunController {
         input.run_last_worker_output = None;
         input.run_review_issue_count = 0;
         input.run_worker_failure_count = 0;
+        input.run_route = None;
+        input.run_route_reason = None;
         input.run_visible_output_keys.clear();
         input.run_visible_status_keys.clear();
         input.run_recorded_output_keys.clear();
@@ -180,8 +182,11 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
     }
 
     match event {
-        RunProgress::RouteSelected { .. }
-        | RunProgress::Planning
+        RunProgress::RouteSelected { route, reason } => {
+            input.run_route = Some(route);
+            input.run_route_reason = Some(reason);
+        }
+        RunProgress::Planning
         | RunProgress::Planned { .. }
         | RunProgress::Critiquing { .. }
         | RunProgress::CritiqueResult { .. }
@@ -693,6 +698,32 @@ mod tests {
         assert_eq!(input.transcript.len(), 1);
         assert_eq!(input.transcript[0].role, "tool");
         assert_eq!(input.transcript[0].content, "Bash(cargo test)");
+    }
+
+    #[test]
+    fn route_event_updates_run_route_state() {
+        let mut input = InputState::default();
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: "starting".into(),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        handle_run_event(
+            RunProgress::RouteSelected {
+                route: "full-pipeline".into(),
+                reason: "project or implementation work".into(),
+            },
+            &mut input,
+        );
+
+        assert_eq!(input.run_route.as_deref(), Some("full-pipeline"));
+        assert_eq!(
+            input.run_route_reason.as_deref(),
+            Some("project or implementation work")
+        );
+        assert_eq!(input.current_stage, "Route: full-pipeline");
     }
 
     #[test]

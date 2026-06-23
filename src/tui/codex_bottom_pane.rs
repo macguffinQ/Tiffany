@@ -74,13 +74,21 @@ fn stage_label(input: &InputState) -> String {
 }
 
 fn status_context_segments(input: &InputState, active: bool) -> Vec<String> {
-    let mut segments = vec![
-        format!(
-            "route {}",
-            runtime::agent_label(input.agent_hint.as_deref())
-        ),
-        context_segment(input),
-    ];
+    let mut segments = Vec::new();
+
+    if active {
+        if let Some(flow) = input.run_route.as_deref() {
+            segments.push(format!("flow {}", flow_label(flow)));
+        }
+    } else if let Some(flow) = input.run_route.as_deref() {
+        segments.push(format!("last flow {}", flow_label(flow)));
+    }
+
+    segments.push(format!(
+        "worker {}",
+        runtime::agent_label(input.agent_hint.as_deref())
+    ));
+    segments.push(context_segment(input));
 
     if !input.queued_prompts.is_empty() {
         let queue = QueueSnapshot::from_input(input, TERMINAL_QUEUE_PREVIEW_LIMIT);
@@ -108,6 +116,15 @@ fn status_context_segments(input: &InputState, active: bool) -> Vec<String> {
     }
 
     segments
+}
+
+fn flow_label(route: &str) -> String {
+    match route {
+        "direct-answer" => "direct".into(),
+        "single-worker" => "single".into(),
+        "full-pipeline" => "full".into(),
+        other => truncate_chars(other, 18),
+    }
 }
 
 fn context_segment(input: &InputState) -> String {

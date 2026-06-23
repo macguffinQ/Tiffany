@@ -55,6 +55,9 @@ All notable changes to this project will be documented in this file.
 - Centralized route labels, reasons, and review-skip reasons in the task
   policy layer so terminal chat, TUI, ACP, and persisted logs describe routing
   decisions consistently.
+- Updated the terminal run HUD to show the selected orchestration flow
+  (`direct`, `single`, or `full`) separately from the selected worker route,
+  avoiding confusion between workflow shape and Claude/Codex worker choice.
 
 ## [0.1.25] - 2026-06-22
 

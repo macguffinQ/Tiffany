@@ -105,6 +105,10 @@ pub(super) struct InputState {
     pub(super) last_context_messages: usize,
     /// Character count injected into the most recent task prompt.
     pub(super) last_context_chars: usize,
+    /// Last orchestration route selected for the active or most recent run.
+    pub(super) run_route: Option<String>,
+    /// Human-readable reason for the last orchestration route selection.
+    pub(super) run_route_reason: Option<String>,
     /// Prompt history for interactive reuse.
     pub(super) input_history: Vec<String>,
     /// Cursor into prompt history when browsing with Up/Down.
