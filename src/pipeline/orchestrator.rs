@@ -39,6 +39,11 @@ pub enum RunProgress {
     Replanning {
         attempt: u32,
     },
+    ControlFallback {
+        role: String,
+        message: String,
+        reason: String,
+    },
     DirectAnswer,
     Executing {
         sub_task_count: usize,
@@ -235,12 +240,10 @@ impl Orchestrator {
                     "planner failed; continuing with original task as a single worker task: {}",
                     message
                 );
-                let _ = tx.send(RunProgress::RoleOutput {
+                let _ = tx.send(RunProgress::ControlFallback {
                     role: "planner".to_string(),
-                    content: format!(
-                        "planning unavailable; continuing with original task: {}",
-                        first_error_line(&message)
-                    ),
+                    message: "planning unavailable; using original task".to_string(),
+                    reason: first_error_line(&message),
                 });
                 fallback_single_task_plan(top_task, "planner unavailable; using original task")
             }
@@ -276,12 +279,11 @@ impl Orchestrator {
                             i + 1,
                             message
                         );
-                        let _ = tx.send(RunProgress::RoleOutput {
+                        let _ = tx.send(RunProgress::ControlFallback {
                             role: "critic".to_string(),
-                            content: format!(
-                                "critique unavailable; continuing with current plan: {}",
-                                first_error_line(&message)
-                            ),
+                            message: "critique unavailable; continuing with current plan"
+                                .to_string(),
+                            reason: first_error_line(&message),
                         });
                         break;
                     }
@@ -320,15 +322,11 @@ impl Orchestrator {
                             i + 1,
                             err
                         );
-                        let _ = tx.send(RunProgress::RoleOutput {
+                        let _ = tx.send(RunProgress::ControlFallback {
                             role: "planner".to_string(),
-                            content: format!(
-                                "replan failed; continuing with previous plan: {}",
-                                format!("{:#}", err)
-                                    .lines()
-                                    .next()
-                                    .unwrap_or("unknown replan error")
-                            ),
+                            message: "replan unavailable; continuing with previous plan"
+                                .to_string(),
+                            reason: first_error_line(&format!("{:#}", err)),
                         });
                         break;
                     }
@@ -774,6 +772,19 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "status": "running",
                 "message": format!("replanning - attempt {attempt}"),
                 "attempt": attempt,
+            }),
+        ),
+        RunProgress::ControlFallback {
+            role,
+            message,
+            reason,
+        } => (
+            role.as_str(),
+            top_task_id,
+            serde_json::json!({
+                "status": "warning",
+                "message": message,
+                "reason": reason,
             }),
         ),
         RunProgress::DirectAnswer => (
@@ -1258,10 +1269,14 @@ mod tests {
         let mut saw_failed = false;
         while let Ok(event) = rx.try_recv() {
             match event {
-                RunProgress::RoleOutput { role, content } => {
+                RunProgress::ControlFallback {
+                    role,
+                    message,
+                    reason,
+                } => {
                     saw_critic_warning = role == "critic"
-                        && content.contains("critique unavailable; continuing with current plan")
-                        && content.contains("critic unavailable");
+                        && message == "critique unavailable; continuing with current plan"
+                        && reason.contains("critic unavailable");
                 }
                 RunProgress::Done { task_count } => saw_done = task_count == 1,
                 RunProgress::Failed(_) => saw_failed = true,
@@ -1322,10 +1337,14 @@ mod tests {
         let mut saw_failed = false;
         while let Ok(event) = rx.try_recv() {
             match event {
-                RunProgress::RoleOutput { role, content } => {
+                RunProgress::ControlFallback {
+                    role,
+                    message,
+                    reason,
+                } => {
                     saw_planner_warning = role == "planner"
-                        && content.contains("planning unavailable; continuing with original task")
-                        && content.contains("planner unavailable");
+                        && message == "planning unavailable; using original task"
+                        && reason.contains("planner unavailable");
                 }
                 RunProgress::Done { task_count } => saw_done = task_count == 1,
                 RunProgress::Failed(_) => saw_failed = true,
@@ -1381,9 +1400,15 @@ mod tests {
         assert_eq!(completed[0].prompt, "original sub-task");
         let mut saw_replan_warning = false;
         while let Ok(event) = rx.try_recv() {
-            if let RunProgress::RoleOutput { role, content } = event {
+            if let RunProgress::ControlFallback {
+                role,
+                message,
+                reason,
+            } = event
+            {
                 saw_replan_warning = role == "planner"
-                    && content.contains("replan failed; continuing with previous plan");
+                    && message == "replan unavailable; continuing with previous plan"
+                    && reason.contains("planner returned no sub_tasks");
             }
         }
         assert!(saw_replan_warning, "expected visible replan fallback event");

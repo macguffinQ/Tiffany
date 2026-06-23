@@ -1997,6 +1997,14 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
             }
         }
         RunProgress::Replanning { attempt } => Some(format!("Replanning, attempt {attempt}.")),
+        RunProgress::ControlFallback {
+            role,
+            message,
+            reason,
+        } => Some(format!(
+            "{role} fallback: {message}: {}.",
+            agent_events::humanize_jsonish(reason, 1600)
+        )),
         RunProgress::DirectAnswer => Some("Answering directly.".into()),
         RunProgress::Executing { sub_task_count } => {
             Some(format!("Executing {sub_task_count} sub-task(s)."))
@@ -2764,6 +2772,25 @@ mod tests {
 
         assert_eq!(text, "critic: needs changes: 1 issue(s)\n  - missing test");
         assert!(!text.contains('{'));
+    }
+
+    #[test]
+    fn acp_progress_text_shows_control_fallback_as_status() {
+        let mut capture = AcpRunCapture::default();
+        let text = progress_text(
+            &RunProgress::ControlFallback {
+                role: "critic".into(),
+                message: "critique unavailable; continuing with current plan".into(),
+                reason: "codex exec --cd unsupported".into(),
+            },
+            &mut capture,
+        )
+        .expect("fallback progress text");
+
+        assert_eq!(
+            text,
+            "critic fallback: critique unavailable; continuing with current plan: codex exec --cd unsupported."
+        );
     }
 
     #[test]

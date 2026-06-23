@@ -43,6 +43,11 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
         RunProgress::Replanning { attempt } => {
             Some(running(format!("replanning — attempt {attempt}")))
         }
+        RunProgress::ControlFallback {
+            role,
+            message,
+            reason,
+        } => Some(warning(format_control_fallback_line(role, message, reason))),
         RunProgress::DirectAnswer => Some(running("answering directly")),
         RunProgress::Executing { sub_task_count } => {
             Some(running(format!("running {sub_task_count} sub-task(s)")))
@@ -165,6 +170,20 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
                 "▸ Replanning (attempt {attempt}) — incorporating feedback…"
             )),
         )),
+        RunProgress::ControlFallback {
+            role,
+            message,
+            reason,
+        } => Some(status(
+            format!("{}: fallback", role_display_name(role)),
+            reason.clone(),
+            Some(format!(
+                "⚠ {}  {} · {}",
+                role_display_name(role),
+                message,
+                reason
+            )),
+        )),
         RunProgress::DirectAnswer => Some(status(
             "Direct answer",
             "running worker",
@@ -279,6 +298,14 @@ fn running(line: impl Into<String>) -> ProgressHistoryView {
     }
 }
 
+fn warning(line: impl Into<String>) -> ProgressHistoryView {
+    ProgressHistoryView {
+        icon: "⚠",
+        tone: ProgressTone::Running,
+        line: line.into(),
+    }
+}
+
 fn error(line: impl Into<String>) -> ProgressHistoryView {
     ProgressHistoryView {
         icon: "✗",
@@ -346,6 +373,24 @@ fn format_review_lifecycle_line(
         parts.push(suffix);
     }
     format!("review  {}", parts.join(" · "))
+}
+
+fn format_control_fallback_line(role: &str, message: &str, reason: &str) -> String {
+    format!(
+        "{}  {} · {}",
+        role_display_name(role),
+        message.trim(),
+        reason.trim()
+    )
+}
+
+fn role_display_name(role: &str) -> &'static str {
+    match role {
+        "planner" => "planner",
+        "critic" => "critic",
+        "reviewer" => "reviewer",
+        _ => "control",
+    }
 }
 
 fn provider_model_label(provider: Option<&str>, model: &str) -> String {
@@ -441,6 +486,32 @@ mod tests {
         assert_eq!(
             direct_status.assistant_update.as_deref(),
             Some("▸ Answering directly…")
+        );
+
+        let fallback = progress_history_view(&RunProgress::ControlFallback {
+            role: "critic".into(),
+            message: "critique unavailable; continuing with current plan".into(),
+            reason: "critic unavailable".into(),
+        })
+        .expect("fallback history view");
+        assert_eq!(fallback.icon, "⚠");
+        assert_eq!(fallback.tone, ProgressTone::Running);
+        assert_eq!(
+            fallback.line,
+            "critic  critique unavailable; continuing with current plan · critic unavailable"
+        );
+
+        let fallback_status = run_status_view(&RunProgress::ControlFallback {
+            role: "planner".into(),
+            message: "planning unavailable; using original task".into(),
+            reason: "planner unavailable".into(),
+        })
+        .expect("fallback status");
+        assert_eq!(fallback_status.stage, "planner: fallback");
+        assert_eq!(fallback_status.detail, "planner unavailable");
+        assert_eq!(
+            fallback_status.assistant_update.as_deref(),
+            Some("⚠ planner  planning unavailable; using original task · planner unavailable")
         );
     }
 }

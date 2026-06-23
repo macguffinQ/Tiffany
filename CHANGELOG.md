@@ -37,6 +37,9 @@ All notable changes to this project will be documented in this file.
 - Made planner and critic subprocess failures non-fatal: Tiffany now shows a
   visible warning, falls back to the original/current plan, and still runs the
   worker instead of discarding useful worker output.
+- Promoted planner/critic fallback paths to structured progress events so
+  terminal chat, `/process`, ACP clients, and persisted logs render them as
+  workflow warnings instead of noisy role output.
 
 ## [0.1.25] - 2026-06-22
 

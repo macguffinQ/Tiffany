@@ -144,6 +144,32 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 duration_ms: None,
                 reason: None,
             },
+            RunProgress::ControlFallback {
+                role,
+                message,
+                reason,
+            } => {
+                let role = progress_role_label(&role);
+                Self {
+                    role,
+                    status: "warning",
+                    message,
+                    task_id: None,
+                    agent: None,
+                    worker_role: None,
+                    runtime: None,
+                    cc_agent: None,
+                    model: None,
+                    provider: None,
+                    task_prompt: None,
+                    content: None,
+                    approved: None,
+                    issues: None,
+                    count: None,
+                    duration_ms: None,
+                    reason: Some(reason),
+                }
+            }
             RunProgress::DirectAnswer => Self {
                 role: "worker",
                 status: "running",
@@ -489,6 +515,16 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::Replanning { attempt } => {
             Some(format!("● planner  replanning · attempt {attempt}"))
         }
+        RunProgress::ControlFallback {
+            role,
+            message,
+            reason,
+        } => Some(format!(
+            "⚠ {:<8}{} · {}",
+            role_label(role),
+            message,
+            agent_events::humanize_jsonish(reason, TEXT_OUTPUT_SUMMARY_MAX_CHARS)
+        )),
         RunProgress::DirectAnswer => Some("● worker   answering directly".into()),
         RunProgress::Executing { sub_task_count } => {
             Some(format!("● worker   running {sub_task_count} sub-task(s)"))
@@ -607,6 +643,16 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::Replanning { attempt } => {
             Some(format!("plan  updating plan · attempt {attempt}"))
         }
+        RunProgress::ControlFallback {
+            role,
+            message,
+            reason,
+        } => Some(format!(
+            "{}  {} · {}",
+            compact_role_label(role),
+            message,
+            agent_events::humanize_jsonish(reason, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)
+        )),
         RunProgress::DirectAnswer => Some("run  answering directly".into()),
         RunProgress::Executing { sub_task_count } => {
             Some(format!("run  running {sub_task_count} sub-task(s)"))
@@ -734,6 +780,10 @@ fn provider_model_label(provider: Option<&str>, model: &str) -> String {
 }
 
 fn role_label(role: &str) -> &'static str {
+    progress_role_label(role)
+}
+
+fn progress_role_label(role: &str) -> &'static str {
     match role {
         "planner" => "planner",
         "critic" => "critic",
@@ -931,6 +981,36 @@ mod tests {
             skipped,
             "review  skipped · 12345678 · conversational answer"
         );
+    }
+
+    #[test]
+    fn control_fallback_formats_as_warning_not_role_output() {
+        let event = RunProgress::ControlFallback {
+            role: "planner".into(),
+            message: "planning unavailable; using original task".into(),
+            reason: "planner unavailable".into(),
+        };
+
+        let line = format_text_progress_event(&event).expect("fallback line");
+        assert_eq!(
+            line,
+            "⚠ planner planning unavailable; using original task · planner unavailable"
+        );
+        assert!(!line.contains("output"));
+
+        let compact = format_compact_progress_event(&event).expect("compact fallback");
+        assert_eq!(
+            compact,
+            "plan  planning unavailable; using original task · planner unavailable"
+        );
+
+        let json =
+            serde_json::to_value(TiffanyProgressEvent::from(event)).expect("serializes fallback");
+        assert_eq!(json["role"], "planner");
+        assert_eq!(json["status"], "warning");
+        assert_eq!(json["reason"], "planner unavailable");
+        assert_eq!(json["message"], "planning unavailable; using original task");
+        assert!(json.get("content").is_none());
     }
 
     #[test]

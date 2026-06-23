@@ -1414,6 +1414,16 @@ mod tests {
         });
         assert_eq!(review, "review  needs fixes · 00000000 · 2 issue(s)");
 
+        let fallback = format_run_event(&RunProgress::ControlFallback {
+            role: "planner".into(),
+            message: "planning unavailable; using original task".into(),
+            reason: "planner unavailable".into(),
+        });
+        assert_eq!(
+            fallback,
+            "plan  planning unavailable; using original task · planner unavailable"
+        );
+
         assert!(!started.contains("Worker started:"));
         assert!(!review.contains("Review rejected:"));
     }
