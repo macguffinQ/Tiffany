@@ -129,6 +129,13 @@ impl OrchestrationRoute {
         }
     }
 
+    pub fn flow_steps(self) -> &'static str {
+        match self {
+            Self::DirectAnswer | Self::SingleWorker => "worker -> answer",
+            Self::FullPipeline => "planner -> critic -> worker -> reviewer -> answer",
+        }
+    }
+
     pub fn review_skip_reason(self) -> Option<&'static str> {
         match self {
             Self::DirectAnswer => Some("conversational answer"),

@@ -9,6 +9,7 @@ use super::state::{ChatMsg, InputState, TuiRuntimeConfig};
 use super::util::{
     copy_to_clipboard, humanize_jsonish, is_low_value_execution_output, truncate_chars,
 };
+use crate::agent_events;
 use crate::config::{Config, ModelConfig, RoleConfig};
 use crate::core::session_store::SessionStore;
 use crate::core::types::Session;
@@ -2184,11 +2185,20 @@ fn selected_flow_reason(input: &InputState) -> String {
 }
 
 fn selected_flow_steps(input: &InputState) -> &'static str {
-    match input.run_route.as_deref() {
-        Some("direct-answer") => "worker -> answer",
-        Some("single-worker") => "worker -> answer",
-        Some("full-pipeline") => "planner -> critic -> worker -> reviewer -> answer",
-        _ => "direct/single/full decided at run start",
+    input
+        .run_route
+        .as_deref()
+        .and_then(selected_route_from_label)
+        .map(|route| route.flow_steps())
+        .unwrap_or("direct/single/full decided at run start")
+}
+
+fn selected_route_from_label(route: &str) -> Option<agent_events::OrchestrationRoute> {
+    match route {
+        "direct-answer" | "direct" => Some(agent_events::OrchestrationRoute::DirectAnswer),
+        "single-worker" | "single" => Some(agent_events::OrchestrationRoute::SingleWorker),
+        "full-pipeline" | "full" => Some(agent_events::OrchestrationRoute::FullPipeline),
+        _ => None,
     }
 }
 

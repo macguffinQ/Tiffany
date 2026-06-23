@@ -259,6 +259,13 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             .reason()
             .contains("planner, critic, worker, and reviewer will run"));
 
+        assert_eq!(TaskRoute::DirectAnswer.flow_steps(), "worker -> answer");
+        assert_eq!(TaskRoute::SingleWorker.flow_steps(), "worker -> answer");
+        assert_eq!(
+            TaskRoute::FullPipeline.flow_steps(),
+            "planner -> critic -> worker -> reviewer -> answer"
+        );
+
         assert_eq!(
             TaskRoute::DirectAnswer.review_skip_reason(),
             Some("conversational answer")
