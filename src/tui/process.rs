@@ -933,20 +933,41 @@ fn process_route_from_input_or_events(
 }
 
 fn process_route_label_from_event(line: &str) -> Option<String> {
-    let body = normalized_process_body(line);
-    let route = body.strip_prefix("route  ")?;
-    let route = route.split('·').next().unwrap_or(route).trim();
-    (!route.is_empty()).then(|| route.to_string())
+    route_event_parts(line).and_then(|parts| parts.route)
 }
 
 fn process_route_reason_from_events(events: &[&String]) -> Option<String> {
-    events.iter().find_map(|line| {
-        let body = normalized_process_body(line);
-        let route = body.strip_prefix("route  ")?;
-        let (_, reason) = route.split_once('·')?;
-        let reason = reason.trim();
-        (!reason.is_empty()).then(|| reason.to_string())
-    })
+    events
+        .iter()
+        .find_map(|line| route_event_parts(line).and_then(|parts| parts.reason))
+}
+
+struct RouteEventParts {
+    route: Option<String>,
+    reason: Option<String>,
+}
+
+fn route_event_parts(line: &str) -> Option<RouteEventParts> {
+    let body = normalized_process_body(line);
+    let route = body.strip_prefix("route  ")?;
+    let parts: Vec<&str> = route
+        .split('·')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    if parts[0] == "preview" {
+        let route = parts.get(1).copied().map(str::to_string);
+        let reason = parts.get(2).copied().map(str::to_string);
+        return Some(RouteEventParts { route, reason });
+    }
+
+    let route = parts.first().copied().map(str::to_string);
+    let reason = parts.get(1).copied().map(str::to_string);
+    Some(RouteEventParts { route, reason })
 }
 
 fn process_route_label(route: &str) -> String {
@@ -1743,6 +1764,22 @@ mod tests {
         assert!(formatted.contains("flow route: single"));
         assert!(formatted.contains("flow reason: atomic worker"));
         assert!(formatted.contains("route - preview · single · atomic worker · worker -> answer"));
+    }
+
+    #[test]
+    fn process_summary_recovers_route_from_preview_event_without_cached_state() {
+        let mut input = InputState::default();
+        input.run_events = vec![
+            "10:00:00  start  task accepted · https://example.com".into(),
+            "10:00:00  route  preview · single · atomic worker · worker -> answer".into(),
+        ];
+
+        let formatted = format_process_summary(&input);
+
+        assert!(formatted.contains("flow: worker -> answer"));
+        assert!(formatted.contains("flow route: single"));
+        assert!(formatted.contains("flow reason: atomic worker"));
+        assert!(!formatted.contains("flow route: preview"));
     }
 
     #[test]
