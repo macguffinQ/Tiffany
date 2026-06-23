@@ -38,7 +38,7 @@ pub(super) fn record_run_progress(input: &mut InputState, event: &RunProgress) {
     if recorded_output_was_seen(input, event) {
         return;
     }
-    let Some(event_text) = format_run_event_for_recording(event) else {
+    let Some(event_text) = format_run_event_for_recording_with_input(event, input) else {
         return;
     };
     remember_recorded_output(input, event);
@@ -681,6 +681,25 @@ fn live_trace_block_state(input: &InputState) -> &'static str {
 #[cfg(test)]
 pub(super) fn format_run_event(event: &RunProgress) -> String {
     format_run_event_for_recording(event).unwrap_or_else(|| "low-value output suppressed".into())
+}
+
+fn format_run_event_for_recording_with_input(
+    event: &RunProgress,
+    input: &InputState,
+) -> Option<String> {
+    if let RunProgress::Planned { sub_task_count } = event {
+        match input.run_route.as_deref() {
+            Some("single-worker") => {
+                return Some(format!("worker  ready · {sub_task_count} run(s)"));
+            }
+            Some("direct-answer") => {
+                return Some("worker  direct answer ready".into());
+            }
+            _ => {}
+        }
+    }
+
+    format_run_event_for_recording(event)
 }
 
 fn format_run_event_for_recording(event: &RunProgress) -> Option<String> {
@@ -1604,6 +1623,33 @@ mod tests {
 
         assert!(!started.contains("Worker started:"));
         assert!(!review.contains("Review rejected:"));
+    }
+
+    #[test]
+    fn record_run_progress_respects_effective_route_for_planned_event() {
+        let mut input = InputState {
+            run_route: Some("single-worker".into()),
+            ..InputState::default()
+        };
+
+        record_run_progress(&mut input, &RunProgress::Planned { sub_task_count: 1 });
+
+        assert_eq!(input.run_events.len(), 1);
+        assert!(input.run_events[0].contains("worker  ready · 1 run(s)"));
+        assert!(!input.run_events[0].contains("plan ready"));
+
+        let formatted = format_process_capture(&input, 20);
+        assert!(formatted.contains("ready"));
+        assert!(!formatted.contains("plan ready"));
+
+        let mut input = InputState {
+            run_route: Some("direct-answer".into()),
+            ..InputState::default()
+        };
+
+        record_run_progress(&mut input, &RunProgress::Planned { sub_task_count: 1 });
+
+        assert!(input.run_events[0].contains("worker  direct answer ready"));
     }
 
     #[test]
