@@ -2168,10 +2168,9 @@ fn selected_route_label(input: &InputState) -> String {
 
 fn selected_flow_label(input: &InputState) -> String {
     match input.run_route.as_deref() {
-        Some("direct-answer") => "direct".into(),
-        Some("single-worker") => "single".into(),
-        Some("full-pipeline") => "full".into(),
-        Some(route) => truncate_chars(route, 32),
+        Some(route) => agent_events::OrchestrationRoute::from_label(route)
+            .map(|route| route.display_label().to_string())
+            .unwrap_or_else(|| truncate_chars(route, 32)),
         None => "auto (pending first route event)".into(),
     }
 }
@@ -2188,18 +2187,9 @@ fn selected_flow_steps(input: &InputState) -> &'static str {
     input
         .run_route
         .as_deref()
-        .and_then(selected_route_from_label)
+        .and_then(agent_events::OrchestrationRoute::from_label)
         .map(|route| route.flow_steps())
         .unwrap_or("direct/single/full decided at run start")
-}
-
-fn selected_route_from_label(route: &str) -> Option<agent_events::OrchestrationRoute> {
-    match route {
-        "direct-answer" | "direct" => Some(agent_events::OrchestrationRoute::DirectAnswer),
-        "single-worker" | "single" => Some(agent_events::OrchestrationRoute::SingleWorker),
-        "full-pipeline" | "full" => Some(agent_events::OrchestrationRoute::FullPipeline),
-        _ => None,
-    }
 }
 
 fn format_usage(store: &SessionStore, config: &Config, raw_window: &str) -> String {

@@ -436,7 +436,7 @@ fn session_flow_route_summary(root: &Session, log_dir: &Path) -> SessionFlowRout
 
 impl SessionFlowRouteSummary {
     fn from_route_event(route: &str, reason: Option<&str>) -> Self {
-        let parsed_route = session_flow_route_from_label(route);
+        let parsed_route = agent_events::OrchestrationRoute::from_label(route);
         let label = parsed_route
             .map(|route| route.display_label().to_string())
             .unwrap_or_else(|| session_flow_route_label(route));
@@ -473,22 +473,10 @@ impl SessionFlowRouteSummary {
     }
 }
 
-fn session_flow_route_from_label(route: &str) -> Option<agent_events::OrchestrationRoute> {
-    match route {
-        "direct-answer" | "direct" => Some(agent_events::OrchestrationRoute::DirectAnswer),
-        "single-worker" | "single" => Some(agent_events::OrchestrationRoute::SingleWorker),
-        "full-pipeline" | "full" => Some(agent_events::OrchestrationRoute::FullPipeline),
-        _ => None,
-    }
-}
-
 fn session_flow_route_label(route: &str) -> String {
-    match route {
-        "direct-answer" => "direct".into(),
-        "single-worker" => "single".into(),
-        "full-pipeline" => "full".into(),
-        other => truncate_chars(other, 32),
-    }
+    agent_events::OrchestrationRoute::from_label(route)
+        .map(|route| route.display_label().to_string())
+        .unwrap_or_else(|| truncate_chars(route, 32))
 }
 
 fn flow_root_session<'a>(selected: &'a Session, all_sessions: &'a [Session]) -> &'a Session {

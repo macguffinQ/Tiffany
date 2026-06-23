@@ -103,6 +103,15 @@ pub enum OrchestrationRoute {
 }
 
 impl OrchestrationRoute {
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "direct-answer" | "direct" => Some(Self::DirectAnswer),
+            "single-worker" | "single" => Some(Self::SingleWorker),
+            "full-pipeline" | "full" => Some(Self::FullPipeline),
+            _ => None,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::DirectAnswer => "direct-answer",
@@ -2408,6 +2417,32 @@ mod tests {
 
     #[test]
     fn classifies_direct_answer_requests_for_orchestration_surfaces() {
+        assert_eq!(
+            OrchestrationRoute::from_label("direct-answer"),
+            Some(OrchestrationRoute::DirectAnswer)
+        );
+        assert_eq!(
+            OrchestrationRoute::from_label("direct"),
+            Some(OrchestrationRoute::DirectAnswer)
+        );
+        assert_eq!(
+            OrchestrationRoute::from_label("single-worker"),
+            Some(OrchestrationRoute::SingleWorker)
+        );
+        assert_eq!(
+            OrchestrationRoute::from_label("single"),
+            Some(OrchestrationRoute::SingleWorker)
+        );
+        assert_eq!(
+            OrchestrationRoute::from_label("full-pipeline"),
+            Some(OrchestrationRoute::FullPipeline)
+        );
+        assert_eq!(
+            OrchestrationRoute::from_label("full"),
+            Some(OrchestrationRoute::FullPipeline)
+        );
+        assert_eq!(OrchestrationRoute::from_label("custom"), None);
+
         assert!(request_looks_direct_answer("你好"));
         assert!(request_looks_direct_answer("你叫啥\n你能干啥"));
         assert!(request_looks_direct_answer(

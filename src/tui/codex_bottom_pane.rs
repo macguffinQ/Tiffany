@@ -125,12 +125,9 @@ fn status_context_segments(input: &InputState, active: bool) -> Vec<String> {
 }
 
 fn flow_label(route: &str) -> String {
-    match route {
-        "direct-answer" => "direct".into(),
-        "single-worker" => "single".into(),
-        "full-pipeline" => "full".into(),
-        other => truncate_chars(other, 18),
-    }
+    crate::agent_events::OrchestrationRoute::from_label(route)
+        .map(|route| route.display_label().to_string())
+        .unwrap_or_else(|| truncate_chars(route, 18))
 }
 
 fn route_reason_label(reason: &str) -> String {

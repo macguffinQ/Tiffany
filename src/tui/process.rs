@@ -888,13 +888,13 @@ fn process_route_from_input_or_events(
     events: &[&String],
 ) -> Option<agent_events::OrchestrationRoute> {
     if let Some(route) = input.run_route.as_deref() {
-        if let Some(route) = process_route_from_label(route) {
+        if let Some(route) = agent_events::OrchestrationRoute::from_label(route) {
             return Some(route);
         }
     }
     for line in events {
-        if let Some(route) =
-            process_route_label_from_event(line).and_then(|label| process_route_from_label(&label))
+        if let Some(route) = process_route_label_from_event(line)
+            .and_then(|label| agent_events::OrchestrationRoute::from_label(&label))
         {
             return Some(route);
         }
@@ -919,22 +919,10 @@ fn process_route_reason_from_events(events: &[&String]) -> Option<String> {
     })
 }
 
-fn process_route_from_label(route: &str) -> Option<agent_events::OrchestrationRoute> {
-    match route {
-        "direct-answer" | "direct" => Some(agent_events::OrchestrationRoute::DirectAnswer),
-        "single-worker" | "single" => Some(agent_events::OrchestrationRoute::SingleWorker),
-        "full-pipeline" | "full" => Some(agent_events::OrchestrationRoute::FullPipeline),
-        _ => None,
-    }
-}
-
 fn process_route_label(route: &str) -> String {
-    match route {
-        "direct-answer" => "direct".into(),
-        "single-worker" => "single".into(),
-        "full-pipeline" => "full".into(),
-        other => truncate_chars(other, 32),
-    }
+    agent_events::OrchestrationRoute::from_label(route)
+        .map(|route| route.display_label().to_string())
+        .unwrap_or_else(|| truncate_chars(route, 32))
 }
 
 fn process_events_include_stage(events: &[&String], stage: &str) -> bool {
