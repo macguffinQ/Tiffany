@@ -848,12 +848,25 @@ fn worker_event_summary(payload: &Value) -> String {
         .or_else(|| payload_str(payload, "agent"))
         .unwrap_or("worker");
     let action = match status {
+        Some("ready") => "ready",
         Some("running") => "started",
         Some("done") => "done",
         Some("failed") => "failed",
         _ => message.as_str(),
     };
-    let mut parts = vec![format!("{role} {action}")];
+    let mut parts = if status == Some("ready") {
+        vec![action.to_string()]
+    } else {
+        vec![format!("{role} {action}")]
+    };
+    if status == Some("ready") {
+        if let Some(count) = payload_usize(payload, "count") {
+            parts.push(format!("{count} run(s)"));
+        }
+        if let Some(route) = payload_str(payload, "route") {
+            parts.push(route.to_string());
+        }
+    }
     if status == Some("running") {
         if let Some(runtime) = payload_str(payload, "runtime").filter(|runtime| *runtime != role) {
             parts.push(runtime.to_string());
@@ -1268,6 +1281,19 @@ mod tests {
         assert!(
             line.contains("worker worker-cc started · claude-code · minimax/MiniMax-M3 · 12345678")
         );
+
+        let worker_ready = Event {
+            payload: serde_json::json!({
+                "status": "ready",
+                "message": "worker ready - 1 run(s)",
+                "count": 1,
+                "route": "single-worker"
+            }),
+            ..worker_started.clone()
+        };
+        let line = format_session_event(&worker_ready);
+        assert!(line.contains("worker ready · 1 run(s) · single-worker"));
+        assert!(!line.contains("worker worker ready"));
 
         let worker_done = Event {
             payload: serde_json::json!({
@@ -1737,6 +1763,18 @@ mod tests {
             kind: "planner".into(),
             payload: serde_json::json!({"message": "plan ready"}),
         };
+        let worker_ready_event = Event {
+            session_id: root.id,
+            task_id: root.task_id,
+            ts: Utc::now(),
+            kind: "worker".into(),
+            payload: serde_json::json!({
+                "status": "ready",
+                "message": "worker ready - 1 run(s)",
+                "count": 1,
+                "route": "single-worker"
+            }),
+        };
         let worker_event = Event {
             session_id: worker.id,
             task_id: worker.task_id,
@@ -1752,9 +1790,10 @@ mod tests {
         std::fs::write(
             session_log_path(tmp.path(), &root),
             format!(
-                "{}\n{}\n",
+                "{}\n{}\n{}\n",
                 serde_json::to_string(&route_event).unwrap(),
-                serde_json::to_string(&root_event).unwrap()
+                serde_json::to_string(&root_event).unwrap(),
+                serde_json::to_string(&worker_ready_event).unwrap()
             ),
         )
         .unwrap();
@@ -1782,6 +1821,8 @@ mod tests {
         assert!(flow.contains("claude-code"));
         assert!(flow.contains("route selected · full-pipeline"));
         assert!(flow.contains("plan ready"));
+        assert!(flow.contains("worker ready · 1 run(s) · single-worker"));
+        assert!(!flow.contains("worker worker ready"));
         assert!(flow.contains("worker finished"));
         assert!(!flow.contains("\"message\""));
     }
