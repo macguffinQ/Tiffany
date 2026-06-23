@@ -2321,6 +2321,7 @@ fn reviewer_lifecycle_title(event: &TiffanyProgressEvent) -> String {
         "done" if event.approved == Some(true) => "passed".to_string(),
         "skipped" => "skipped".to_string(),
         "warning" if event.approved == Some(false) => "needs fixes".to_string(),
+        "warning" if event.message.starts_with("review unavailable") => "unavailable".to_string(),
         _ => normalize_event_message(&event.message),
     };
     let mut parts = vec![action];
@@ -2336,6 +2337,12 @@ fn reviewer_lifecycle_title(event: &TiffanyProgressEvent) -> String {
         && let Some(issues) = event.issues
     {
         parts.push(format!("{issues} issue(s)"));
+    }
+    if event.status == "warning"
+        && event.message.starts_with("review unavailable")
+        && let Some(reason) = event.reason.as_deref().and_then(nonempty_trimmed)
+    {
+        parts.push(reason.to_string());
     }
     parts.join(" · ")
 }
@@ -3293,7 +3300,7 @@ mod tests {
         };
         assert_eq!(
             line_text(&waterfall_status_line(&unavailable)),
-            "⚠ review  review unavailable · no JSON found in CLI response · 12345678"
+            "⚠ review  unavailable · 12345678 · no JSON found in CLI response"
         );
     }
 

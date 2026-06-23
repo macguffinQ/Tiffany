@@ -2045,7 +2045,9 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
             short_uuid(task_id),
             agent_events::humanize_jsonish(message, 1600)
         )),
-        RunProgress::Done { task_count } => Some(format!("Done: {task_count} task(s) completed.")),
+        RunProgress::Done { task_count } => {
+            Some(format!("Done: {task_count} worker run(s) completed."))
+        }
         RunProgress::Failed(msg) => Some(format!(
             "Failed: {}",
             agent_events::humanize_jsonish(msg, 1600)
@@ -2815,6 +2817,16 @@ mod tests {
             text,
             "critic fallback: critique unavailable; continuing with current plan: codex exec --cd unsupported."
         );
+    }
+
+    #[test]
+    fn acp_progress_text_uses_worker_run_completion_language() {
+        let mut capture = AcpRunCapture::default();
+        let text = progress_text(&RunProgress::Done { task_count: 2 }, &mut capture)
+            .expect("done progress text");
+
+        assert_eq!(text, "Done: 2 worker run(s) completed.");
+        assert!(!text.contains("task(s)"));
     }
 
     #[test]
