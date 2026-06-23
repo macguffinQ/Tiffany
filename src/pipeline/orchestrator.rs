@@ -251,6 +251,7 @@ impl Orchestrator {
             .planner
             .plan_with_progress(top_task, Some(tx.clone()))
             .await;
+        let mut plan_from_planner_fallback = false;
         let mut plan = match planned {
             Ok(plan) => plan,
             Err(err) => {
@@ -259,6 +260,7 @@ impl Orchestrator {
                     "planner failed; continuing with original task as a single worker task: {}",
                     message
                 );
+                plan_from_planner_fallback = true;
                 let _ = tx.send(RunProgress::ControlFallback {
                     role: "planner".to_string(),
                     message: "planning unavailable; using original task".to_string(),
@@ -280,7 +282,7 @@ impl Orchestrator {
         });
 
         // 2. Critique loop (before consuming plan.sub_tasks)
-        if self.enable_critic {
+        if self.enable_critic && !plan_from_planner_fallback {
             let mut critic_left_plan_unapproved = false;
             for i in 0..self.max_replan {
                 let _ = tx.send(RunProgress::Critiquing { round: i + 1 });
@@ -1444,6 +1446,7 @@ mod tests {
         assert_eq!(completed[0].tags, vec!["implementation".to_string()]);
         assert_eq!(completed[0].agent_hint.as_deref(), Some("worker-cc"));
         let mut saw_planner_warning = false;
+        let mut saw_critic = false;
         let mut saw_done = false;
         let mut saw_failed = false;
         while let Ok(event) = rx.try_recv() {
@@ -1457,6 +1460,9 @@ mod tests {
                         && message == "planning unavailable; using original task"
                         && reason.contains("planner unavailable");
                 }
+                RunProgress::Critiquing { .. }
+                | RunProgress::CritiqueResult { .. }
+                | RunProgress::Replanning { .. } => saw_critic = true,
                 RunProgress::Done { task_count } => saw_done = task_count == 1,
                 RunProgress::Failed(_) => saw_failed = true,
                 _ => {}
@@ -1465,6 +1471,10 @@ mod tests {
         assert!(
             saw_planner_warning,
             "expected visible planner fallback event"
+        );
+        assert!(
+            !saw_critic,
+            "planner fallback should go straight to worker instead of critiquing a degraded plan"
         );
         assert!(saw_done, "pipeline should still finish");
         assert!(!saw_failed, "planner failure should not be terminal");
