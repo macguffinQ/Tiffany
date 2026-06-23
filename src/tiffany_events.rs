@@ -68,6 +68,15 @@ impl From<RunProgress> for TiffanyProgressEvent {
                     format!("plan ready - {sub_task_count} worker run(s)"),
                 )
             },
+            RunProgress::WorkerReady { run_count, route } => TiffanyProgressEvent {
+                count: Some(run_count),
+                route: Some(route),
+                ..progress_event(
+                    "worker",
+                    "ready",
+                    format!("worker ready - {run_count} run(s)"),
+                )
+            },
             RunProgress::Critiquing { round } => progress_event(
                 "critic",
                 "running",
@@ -346,6 +355,9 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::Planned { sub_task_count } => Some(format!(
             "✓ planner  plan ready · {sub_task_count} worker run(s)"
         )),
+        RunProgress::WorkerReady { run_count, .. } => {
+            Some(format!("✓ worker   ready · {run_count} run(s)"))
+        }
         RunProgress::Critiquing { round } => {
             Some(format!("● critic   checking plan · round {round}"))
         }
@@ -482,6 +494,9 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::Planning => Some("plan  planning work".into()),
         RunProgress::Planned { sub_task_count } => {
             Some(format!("plan  plan ready · {sub_task_count} worker run(s)"))
+        }
+        RunProgress::WorkerReady { run_count, .. } => {
+            Some(format!("worker  ready · {run_count} run(s)"))
         }
         RunProgress::Critiquing { round } => Some(format!("critic  checking plan · round {round}")),
         RunProgress::CritiqueResult { approved, issues } => {
@@ -814,6 +829,13 @@ mod tests {
             format_compact_progress_event(&RunProgress::DirectAnswer).expect("direct answer line");
         assert_eq!(direct, "run  answering directly");
 
+        let ready = format_compact_progress_event(&RunProgress::WorkerReady {
+            run_count: 1,
+            route: "single-worker".into(),
+        })
+        .expect("worker ready line");
+        assert_eq!(ready, "worker  ready · 1 run(s)");
+
         let running = format_compact_progress_event(&RunProgress::Executing { sub_task_count: 1 })
             .expect("executing line");
         assert_eq!(running, "run  running 1 worker run(s)");
@@ -907,6 +929,21 @@ mod tests {
         assert_eq!(json["reason"], "planner unavailable");
         assert_eq!(json["message"], "planning unavailable; using original task");
         assert!(json.get("content").is_none());
+
+        let event = RunProgress::WorkerReady {
+            run_count: 1,
+            route: "single-worker".into(),
+        };
+        assert_eq!(
+            format_text_progress_event(&event).expect("worker ready text"),
+            "✓ worker   ready · 1 run(s)"
+        );
+        let json = serde_json::to_value(TiffanyProgressEvent::from(event))
+            .expect("serializes worker ready");
+        assert_eq!(json["role"], "worker");
+        assert_eq!(json["status"], "ready");
+        assert_eq!(json["route"], "single-worker");
+        assert_eq!(json["message"], "worker ready - 1 run(s)");
     }
 
     #[test]

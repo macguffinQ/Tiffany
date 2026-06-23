@@ -41,6 +41,9 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
         RunProgress::Planned { sub_task_count } => Some(success(format!(
             "plan ready — {sub_task_count} worker run(s)"
         ))),
+        RunProgress::WorkerReady { run_count, .. } => {
+            Some(success(format!("worker ready — {run_count} run(s)")))
+        }
         RunProgress::Critiquing { round } => {
             Some(running(format!("checking plan — round {round}")))
         }
@@ -166,6 +169,13 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
             "moving to critique",
             Some(format!(
                 "▸ Plan ready · {sub_task_count} worker run(s). Moving to critique…"
+            )),
+        )),
+        RunProgress::WorkerReady { run_count, .. } => Some(status(
+            format!("Worker ready ({run_count} run(s))"),
+            "single-worker flow",
+            Some(format!(
+                "▸ Worker ready · {run_count} run(s). Starting worker…"
             )),
         )),
         RunProgress::Critiquing { round } => Some(status(

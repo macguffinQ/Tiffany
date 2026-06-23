@@ -38,6 +38,10 @@ pub enum RunProgress {
     Planned {
         sub_task_count: usize,
     },
+    WorkerReady {
+        run_count: usize,
+        route: String,
+    },
     Critiquing {
         round: u32,
     },
@@ -300,9 +304,16 @@ impl Orchestrator {
             plan.sub_tasks.len(),
             plan_start.elapsed()
         );
-        let _ = tx.send(RunProgress::Planned {
-            sub_task_count: plan.sub_tasks.len(),
-        });
+        if plan_from_planner_fallback {
+            let _ = tx.send(RunProgress::WorkerReady {
+                run_count: plan.sub_tasks.len(),
+                route: TaskRoute::SingleWorker.label().to_string(),
+            });
+        } else {
+            let _ = tx.send(RunProgress::Planned {
+                sub_task_count: plan.sub_tasks.len(),
+            });
+        }
 
         // 2. Critique loop (before consuming plan.sub_tasks)
         if self.enable_critic && !plan_from_planner_fallback {
@@ -899,6 +910,16 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "status": "done",
                 "message": format!("plan ready - {sub_task_count} worker run(s)"),
                 "count": sub_task_count,
+            }),
+        ),
+        RunProgress::WorkerReady { run_count, route } => (
+            "worker",
+            top_task_id,
+            serde_json::json!({
+                "status": "ready",
+                "message": format!("worker ready - {run_count} run(s)"),
+                "count": run_count,
+                "route": route,
             }),
         ),
         RunProgress::Critiquing { round } => (
@@ -1695,6 +1716,8 @@ mod tests {
 
         let mut saw_soft_fallback = false;
         let mut saw_route_update = false;
+        let mut saw_worker_ready = false;
+        let mut saw_planned = false;
         let mut saw_critic = false;
         let mut saw_review = false;
         let mut saw_done = false;
@@ -1713,6 +1736,10 @@ mod tests {
                     saw_route_update |= route == "single-worker"
                         && reason == "planner fallback; downgraded to single worker";
                 }
+                RunProgress::WorkerReady { run_count, route } => {
+                    saw_worker_ready = run_count == 1 && route == "single-worker";
+                }
+                RunProgress::Planned { .. } => saw_planned = true,
                 RunProgress::Critiquing { .. }
                 | RunProgress::CritiqueResult { .. }
                 | RunProgress::Replanning { .. } => saw_critic = true,
@@ -1727,6 +1754,14 @@ mod tests {
 
         assert!(saw_soft_fallback, "expected planner soft fallback warning");
         assert!(saw_route_update, "expected visible route downgrade");
+        assert!(
+            saw_worker_ready,
+            "soft planner fallback should emit worker-ready instead of plan-ready"
+        );
+        assert!(
+            !saw_planned,
+            "soft planner fallback should not emit plan-ready"
+        );
         assert!(!saw_critic, "soft planner fallback should skip critic");
         assert!(!saw_review, "soft planner fallback should skip reviewer");
         assert!(saw_done, "pipeline should still complete");

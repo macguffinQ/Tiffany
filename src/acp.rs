@@ -2001,6 +2001,10 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
             capture.route.as_deref(),
             *sub_task_count,
         )),
+        RunProgress::WorkerReady { run_count, route } => {
+            capture.route = Some(route.clone());
+            Some(format!("Worker ready with {run_count} run(s)."))
+        }
         RunProgress::Critiquing { round } => Some(format!("Critiquing plan, round {round}.")),
         RunProgress::CritiqueResult { approved, issues } => {
             if *approved {

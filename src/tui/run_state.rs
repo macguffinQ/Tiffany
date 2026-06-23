@@ -232,6 +232,7 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
         }
         RunProgress::Planning
         | RunProgress::Planned { .. }
+        | RunProgress::WorkerReady { .. }
         | RunProgress::Critiquing { .. }
         | RunProgress::CritiqueResult { .. }
         | RunProgress::Replanning { .. }
