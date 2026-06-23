@@ -530,9 +530,9 @@ pub fn agent_failure_hint(content: &str, max: usize) -> Option<AgentFailureHint>
     let display = humanize_jsonish(content, max);
     let evidence = normalize_output_summary(&display);
     let evidence = if evidence.trim().is_empty() {
-        sanitize_text(content, max)
+        humanize_user_visible_text(content, max)
     } else {
-        sanitize_text(evidence.trim(), max)
+        humanize_user_visible_text(evidence.trim(), max)
     };
     if evidence.trim().is_empty() {
         return None;
@@ -541,6 +541,15 @@ pub fn agent_failure_hint(content: &str, max: usize) -> Option<AgentFailureHint>
     let lower = format!("{content}\n{evidence}").to_ascii_lowercase();
     let category = classify_failure_category(&lower)?;
     Some(AgentFailureHint { category, evidence })
+}
+
+pub fn humanize_user_visible_text(content: &str, max: usize) -> String {
+    let text = content
+        .replace("sub_task(s)", "worker run(s)")
+        .replace("sub-tasks", "worker runs")
+        .replace("sub-task", "worker run")
+        .replace("sub_tasks", "worker runs");
+    sanitize_text(text.trim(), max)
 }
 
 pub fn classify_json_line(line: &str) -> String {
@@ -851,12 +860,12 @@ pub fn normalized_output_key(content: &str, max: usize) -> Option<String> {
 pub fn normalize_output_summary(display: &str) -> String {
     let trimmed = display.trim();
     let Some((prefix, body)) = trimmed.split_once(": ") else {
-        return trimmed.to_string();
+        return humanize_user_visible_text(trimmed, usize::MAX);
     };
 
     match runtime_output_kind_from_prefix(prefix) {
-        Some(_) => body.trim().to_string(),
-        None => trimmed.to_string(),
+        Some(_) => humanize_user_visible_text(body.trim(), usize::MAX),
+        None => humanize_user_visible_text(trimmed, usize::MAX),
     }
 }
 
@@ -912,33 +921,33 @@ pub fn humanize_jsonish(content: &str, max: usize) -> String {
         return String::new();
     }
     if let Some(summary) = summarize_angle_role_block(trimmed, max) {
-        return sanitize_text(&summary, max);
+        return humanize_user_visible_text(&summary, max);
     }
     if let Some(summary) = summarize_json_code_fence(trimmed) {
-        return sanitize_text(&summary, max);
+        return humanize_user_visible_text(&summary, max);
     }
     if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-        return sanitize_text(&summarize_json_value(&value), max);
+        return humanize_user_visible_text(&summarize_json_value(&value), max);
     }
     if let Some((prefix, raw)) = trimmed.split_once(": ") {
         let raw = raw.trim();
         if looks_like_json(raw) {
             if let Ok(value) = serde_json::from_str::<Value>(raw) {
                 let summary = summarize_json_value(&value);
-                return sanitize_text(&format!("{}: {}", prefix.trim(), summary), max);
+                return humanize_user_visible_text(&format!("{}: {}", prefix.trim(), summary), max);
             }
         }
     }
     if let Some(summary) = summarize_jsonish_lines(trimmed) {
-        return sanitize_text(&summary, max);
+        return humanize_user_visible_text(&summary, max);
     }
     if let Some(summary) = summarize_embedded_json_with_context(trimmed) {
-        return sanitize_text(&summary, max);
+        return humanize_user_visible_text(&summary, max);
     }
     if let Some(summary) = summarize_loose_structured_json(trimmed) {
-        return sanitize_text(&summary, max);
+        return humanize_user_visible_text(&summary, max);
     }
-    sanitize_text(trimmed, max)
+    humanize_user_visible_text(trimmed, max)
 }
 
 pub fn is_low_value_output(text: &str) -> bool {
@@ -1825,6 +1834,9 @@ fn summarize_loose_plan_json(s: &str) -> Option<String> {
     if !s.contains("sub_tasks") {
         return None;
     }
+    if !s.contains('{') && !s.contains('[') {
+        return None;
+    }
     let prompts = extract_loose_repeated_string_field(s, "prompt");
     if prompts.is_empty() {
         return Some("plan ready: worker run(s)".into());
@@ -2442,7 +2454,20 @@ mod tests {
         )
         .expect("parse hint");
         assert_eq!(parse.category, AgentFailureCategory::Parse);
+        assert!(parse.evidence.contains("planner returned no worker runs"));
+        assert!(!parse.evidence.contains("sub_tasks"));
         assert!(parse.action().contains("/process full"));
+    }
+
+    #[test]
+    fn humanizes_internal_plan_field_names_in_visible_text() {
+        let display = humanize_jsonish(
+            "replanning after critique round 1: planner returned no sub_tasks (parse failed)",
+            500,
+        );
+
+        assert!(display.contains("planner returned no worker runs"));
+        assert!(!display.contains("sub_tasks"));
     }
 
     #[test]

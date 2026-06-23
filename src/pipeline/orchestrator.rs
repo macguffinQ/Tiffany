@@ -717,12 +717,13 @@ fn duration_ms(duration: std::time::Duration) -> u64 {
 }
 
 fn first_error_line(message: &str) -> String {
-    message
+    let line = message
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or("reviewer unavailable")
-        .to_string()
+        .to_string();
+    agent_events::humanize_user_visible_text(&line, 240)
 }
 
 fn fallback_single_task_plan(
@@ -1500,7 +1501,8 @@ mod tests {
             {
                 saw_replan_warning = role == "planner"
                     && message == "replan unavailable; continuing with previous plan"
-                    && reason.contains("planner returned no sub_tasks");
+                    && reason.contains("planner returned no worker runs")
+                    && !reason.contains("sub_tasks");
             }
         }
         assert!(saw_replan_warning, "expected visible replan fallback event");

@@ -1092,11 +1092,12 @@ fn normalized_process_body(line: &str) -> String {
         .map(|(_, body)| body)
         .unwrap_or(line)
         .trim();
-    legacy_process_body_to_compact(body).unwrap_or_else(|| body.to_string())
+    legacy_process_body_to_compact(body)
+        .unwrap_or_else(|| agent_events::humanize_user_visible_text(body, usize::MAX))
 }
 
 fn normalize_worker_run_count(text: &str) -> String {
-    text.trim()
+    agent_events::humanize_user_visible_text(text, usize::MAX)
         .replace("sub-task(s)", "worker run(s)")
         .replace("sub-tasks", "worker runs")
         .replace("sub-task", "worker run")
@@ -1317,13 +1318,17 @@ fn humanize_process_event_line(line: &str) -> String {
     if let Some(output) = body.strip_prefix("worker output  ") {
         return format!("{time}  worker output  {}", summarize_worker_output(output));
     }
-    if compact_process_body_view(body).is_some() {
-        return format!("{time}  {body}");
+    if let Some((kind, summary)) = compact_process_body_view(body) {
+        return format!("{time}  {kind}  {summary}");
     }
     if let Some((head, raw)) = body.split_once(": ") {
         return format!("{}  {}: {}", time, head, humanize_jsonish(raw, 220));
     }
-    format!("{}  {}", time, humanize_jsonish(body, 260))
+    format!(
+        "{}  {}",
+        time,
+        agent_events::humanize_user_visible_text(&humanize_jsonish(body, 260), 260)
+    )
 }
 
 fn save_process_capture_to_file(input: &InputState) -> std::io::Result<PathBuf> {
@@ -1884,7 +1889,8 @@ mod tests {
         let formatted = format_failure_context(&input).expect("failure context");
 
         assert!(formatted.contains("agent output could not be parsed"));
-        assert!(formatted.contains("planner returned no sub_tasks"));
+        assert!(formatted.contains("planner returned no worker runs"));
+        assert!(!formatted.contains("sub_tasks"));
         assert!(formatted.contains("Inspect /process full"));
     }
 

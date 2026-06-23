@@ -689,16 +689,19 @@ impl ClaudeCodePlanner {
             }
             Err(err) => return Err(err),
         };
-        parse_plan(&json).or_else(|err| {
-            tracing::warn!(
-                "planner JSON did not contain usable sub_tasks; falling back to one original task: {:#}",
-                err
-            );
-            Ok(single_task_plan(
-                top_task,
-                "planner returned no usable sub_tasks; using original task",
-            ))
-        })
+        match parse_plan(&json) {
+            Ok(plan) => Ok(plan),
+            Err(err) => {
+                tracing::warn!(
+                    "planner JSON did not contain usable worker runs; falling back to one original task: {:#}",
+                    err
+                );
+                Ok(single_task_plan(
+                    top_task,
+                    "planner returned no usable worker runs; using original task",
+                ))
+            }
+        }
     }
 
     async fn replan_impl(
@@ -742,16 +745,19 @@ impl ClaudeCodePlanner {
             }
             Err(err) => return Err(err),
         };
-        parse_plan(&json).or_else(|err| {
-            tracing::warn!(
-                "replanner JSON did not contain usable sub_tasks; falling back to one original task: {:#}",
-                err
-            );
-            Ok(single_task_plan(
-                top_task,
-                "replanner returned no usable sub_tasks; using original task",
-            ))
-        })
+        match parse_plan(&json) {
+            Ok(plan) => Ok(plan),
+            Err(err) => {
+                tracing::warn!(
+                    "replanner JSON did not contain usable worker runs; falling back to one original task: {:#}",
+                    err
+                );
+                Ok(single_task_plan(
+                    top_task,
+                    "replanner returned no usable worker runs; using original task",
+                ))
+            }
+        }
     }
 }
 
@@ -791,7 +797,7 @@ fn parse_plan(json: &serde_json::Value) -> Result<PlanOutput> {
     }
     // Fallback: if no sub-tasks parsed, treat top task as one
     if sub_tasks.is_empty() {
-        return Err(anyhow!("planner returned no sub_tasks (parse failed)"));
+        return Err(anyhow!("planner returned no worker runs (parse failed)"));
     }
     Ok(PlanOutput {
         sub_tasks,

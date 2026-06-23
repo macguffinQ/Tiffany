@@ -1547,7 +1547,7 @@ fn diagnostic_detail_lines(text: &str, max_lines: usize) -> Vec<String> {
         .lines()
         .map(str::trim_end)
         .filter(|line| !line.trim().is_empty())
-        .map(ToString::to_string)
+        .map(|line| event_format::humanize_user_visible_text(line, CONTROL_SUMMARY_MAX_CHARS))
         .collect::<Vec<_>>();
     if lines.len() <= max_lines {
         return lines;
@@ -2410,7 +2410,10 @@ fn provider_model_label(event: &TiffanyProgressEvent) -> Option<String> {
 }
 
 fn normalize_event_message(message: &str) -> String {
-    message.replace(" - ", " · ")
+    event_format::humanize_user_visible_text(
+        &message.replace(" - ", " · "),
+        CONTROL_SUMMARY_MAX_CHARS,
+    )
 }
 
 fn format_duration_ms(duration_ms: u64) -> String {
@@ -4211,7 +4214,8 @@ mod tests {
         );
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-        assert!(text.contains("planner returned no sub_tasks"));
+        assert!(text.contains("planner returned no worker runs"));
+        assert!(!text.contains("sub_tasks"));
         assert!(!text.contains("ignored malformed event"));
     }
 
