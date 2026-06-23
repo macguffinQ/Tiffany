@@ -77,14 +77,28 @@ fn status_context_segments(input: &InputState, active: bool) -> Vec<String> {
     let mut segments = Vec::new();
 
     if active {
-        if let Some(flow) = input.run_route.as_deref() {
-            segments.push(format!("flow {}", flow_label(flow)));
+        if let Some(flow) = input
+            .run_route_label
+            .as_deref()
+            .map(str::to_string)
+            .or_else(|| input.run_route.as_deref().map(flow_label))
+        {
+            segments.push(format!("flow {flow}"));
         }
-    } else if let Some(flow) = input.run_route.as_deref() {
-        segments.push(format!("last flow {}", flow_label(flow)));
+    } else if let Some(flow) = input
+        .run_route_label
+        .as_deref()
+        .map(str::to_string)
+        .or_else(|| input.run_route.as_deref().map(flow_label))
+    {
+        segments.push(format!("last flow {flow}"));
     }
-    if let Some(reason) = input.run_route_reason.as_deref() {
-        let reason = route_reason_label(reason);
+    if let Some(reason) = input
+        .run_route_reason_label
+        .as_deref()
+        .map(str::to_string)
+        .or_else(|| input.run_route_reason.as_deref().map(route_reason_label))
+    {
         if !reason.is_empty() {
             segments.push(format!("reason {reason}"));
         }

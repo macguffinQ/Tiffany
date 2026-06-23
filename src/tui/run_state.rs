@@ -85,7 +85,10 @@ impl RunController {
         input.run_review_issue_count = 0;
         input.run_worker_failure_count = 0;
         input.run_route = None;
+        input.run_route_label = None;
         input.run_route_reason = None;
+        input.run_route_reason_label = None;
+        input.run_flow_steps = None;
         input.run_visible_output_keys.clear();
         input.run_visible_status_keys.clear();
         input.run_recorded_output_keys.clear();
@@ -183,6 +186,12 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
 
     match event {
         RunProgress::RouteSelected { route, reason } => {
+            let parsed_route = crate::agent_events::OrchestrationRoute::from_label(&route)
+                .or_else(|| crate::agent_events::OrchestrationRoute::from_reason(&reason));
+            input.run_route_label = parsed_route.map(|route| route.display_label().to_string());
+            input.run_route_reason_label =
+                parsed_route.map(|route| route.short_reason_label().to_string());
+            input.run_flow_steps = parsed_route.map(|route| route.flow_steps().to_string());
             input.run_route = Some(route);
             input.run_route_reason = Some(reason);
         }
@@ -719,9 +728,18 @@ mod tests {
         );
 
         assert_eq!(input.run_route.as_deref(), Some("full-pipeline"));
+        assert_eq!(input.run_route_label.as_deref(), Some("full"));
         assert_eq!(
             input.run_route_reason.as_deref(),
             Some("project or implementation work")
+        );
+        assert_eq!(
+            input.run_route_reason_label.as_deref(),
+            Some("implementation")
+        );
+        assert_eq!(
+            input.run_flow_steps.as_deref(),
+            Some("planner -> critic -> worker -> reviewer -> answer")
         );
         assert_eq!(input.current_stage, "Route: full-pipeline");
     }

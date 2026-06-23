@@ -2167,6 +2167,9 @@ fn selected_route_label(input: &InputState) -> String {
 }
 
 fn selected_flow_label(input: &InputState) -> String {
+    if let Some(label) = input.run_route_label.as_deref() {
+        return truncate_chars(label, 32);
+    }
     match input.run_route.as_deref() {
         Some(route) => agent_events::OrchestrationRoute::from_label(route)
             .map(|route| route.display_label().to_string())
@@ -2176,6 +2179,9 @@ fn selected_flow_label(input: &InputState) -> String {
 }
 
 fn selected_flow_reason(input: &InputState) -> String {
+    if let Some(reason) = input.run_route_reason_label.as_deref() {
+        return truncate_chars(reason, 120);
+    }
     input
         .run_route_reason
         .as_deref()
@@ -2183,13 +2189,17 @@ fn selected_flow_reason(input: &InputState) -> String {
         .unwrap_or_else(|| "Tiffany selects the flow after reading the prompt.".into())
 }
 
-fn selected_flow_steps(input: &InputState) -> &'static str {
+fn selected_flow_steps(input: &InputState) -> String {
+    if let Some(steps) = input.run_flow_steps.as_deref() {
+        return truncate_chars(steps, 160);
+    }
     input
         .run_route
         .as_deref()
         .and_then(agent_events::OrchestrationRoute::from_label)
         .map(|route| route.flow_steps())
         .unwrap_or("direct/single/full decided at run start")
+        .to_string()
 }
 
 fn format_usage(store: &SessionStore, config: &Config, raw_window: &str) -> String {
@@ -4670,10 +4680,13 @@ behavior:
         let mut input = InputState {
             agent_hint: Some("worker-cc".into()),
             run_route: Some("full-pipeline".into()),
+            run_route_label: Some("full".into()),
             run_route_reason: Some(
                 "project or implementation work; planner, critic, worker, and reviewer will run"
                     .into(),
             ),
+            run_route_reason_label: Some("implementation".into()),
+            run_flow_steps: Some("planner -> critic -> worker -> reviewer -> answer".into()),
             queued_prompts: vec!["follow up".into()],
             ..InputState::default()
         };
@@ -4683,6 +4696,7 @@ behavior:
         let workflow = input.transcript.last().expect("workflow response");
         assert!(workflow.content.contains("Workflow status"));
         assert!(workflow.content.contains("selected flow: full"));
+        assert!(workflow.content.contains("flow reason: implementation"));
         assert!(workflow
             .content
             .contains("flow steps: planner -> critic -> worker -> reviewer -> answer"));

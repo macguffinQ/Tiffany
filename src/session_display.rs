@@ -426,27 +426,53 @@ fn session_flow_route_summary(root: &Session, log_dir: &Path) -> SessionFlowRout
         let Some(route) = payload_str(&event.payload, "route") else {
             continue;
         };
-        return SessionFlowRouteSummary::from_route_event(
+        return SessionFlowRouteSummary::from_route_event(SessionFlowRoutePayload {
             route,
-            payload_str(&event.payload, "reason"),
-        );
+            reason: payload_str(&event.payload, "reason"),
+            route_label: payload_str(&event.payload, "route_label"),
+            route_reason_label: payload_str(&event.payload, "route_reason_label"),
+            flow_steps: payload_str(&event.payload, "flow_steps"),
+        });
     }
     SessionFlowRouteSummary::not_captured()
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct SessionFlowRoutePayload<'a> {
+    route: &'a str,
+    reason: Option<&'a str>,
+    route_label: Option<&'a str>,
+    route_reason_label: Option<&'a str>,
+    flow_steps: Option<&'a str>,
+}
+
 impl SessionFlowRouteSummary {
-    fn from_route_event(route: &str, reason: Option<&str>) -> Self {
-        let parsed_route = agent_events::OrchestrationRoute::from_label(route);
-        let label = parsed_route
-            .map(|route| route.display_label().to_string())
-            .unwrap_or_else(|| session_flow_route_label(route));
-        let steps = parsed_route
-            .map(|route| route.flow_steps().to_string())
+    fn from_route_event(payload: SessionFlowRoutePayload<'_>) -> Self {
+        let parsed_route = agent_events::OrchestrationRoute::from_label(payload.route);
+        let label = payload
+            .route_label
+            .map(|label| truncate_chars(label.trim(), 32))
+            .filter(|label| !label.trim().is_empty())
+            .or_else(|| parsed_route.map(|route| route.display_label().to_string()))
+            .unwrap_or_else(|| session_flow_route_label(payload.route));
+        let steps = payload
+            .flow_steps
+            .map(|steps| truncate_chars(steps.trim(), EVENT_SUMMARY_MAX_CHARS))
+            .filter(|steps| !steps.trim().is_empty())
+            .or_else(|| parsed_route.map(|route| route.flow_steps().to_string()))
             .unwrap_or_else(|| "unknown".into());
-        let reason = reason
+        let reason = payload
+            .route_reason_label
             .map(|reason| agent_events::humanize_jsonish(reason, EVENT_SUMMARY_MAX_CHARS))
             .map(|reason| truncate_chars(reason.trim(), EVENT_SUMMARY_MAX_CHARS))
             .filter(|reason| !reason.trim().is_empty())
+            .or_else(|| {
+                payload
+                    .reason
+                    .map(|reason| agent_events::humanize_jsonish(reason, EVENT_SUMMARY_MAX_CHARS))
+                    .map(|reason| truncate_chars(reason.trim(), EVENT_SUMMARY_MAX_CHARS))
+                    .filter(|reason| !reason.trim().is_empty())
+            })
             .or_else(|| parsed_route.map(|route| route.reason().to_string()))
             .unwrap_or_else(|| "unknown".into());
         Self {
@@ -454,6 +480,14 @@ impl SessionFlowRouteSummary {
             reason,
             steps,
         }
+    }
+
+    fn from_legacy_route_event(route: &str, reason: Option<&str>) -> Self {
+        Self::from_route_event(SessionFlowRoutePayload {
+            route,
+            reason,
+            ..SessionFlowRoutePayload::default()
+        })
     }
 
     fn unknown() -> Self {
@@ -1692,7 +1726,10 @@ mod tests {
                 "status": "running",
                 "message": "route selected - full-pipeline",
                 "route": "full-pipeline",
-                "reason": "project or implementation work; planner, critic, worker, and reviewer will run"
+                "reason": "project or implementation work; planner, critic, worker, and reviewer will run",
+                "route_label": "full",
+                "route_reason_label": "implementation",
+                "flow_steps": "planner -> critic -> worker -> reviewer -> answer"
             }),
         };
         let root_event = Event {
@@ -1741,8 +1778,7 @@ mod tests {
         assert!(flow.contains("Session flow"));
         assert!(flow.contains("selected:"));
         assert!(flow.contains("flow route: full"));
-        assert!(flow
-            .contains("flow reason: project or implementation work; planner, critic, worker, and reviewer will run"));
+        assert!(flow.contains("flow reason: implementation"));
         assert!(flow.contains("flow steps: planner -> critic -> worker -> reviewer -> answer"));
         assert!(flow.contains("orchestrator"));
         assert!(flow.contains("claude-code"));
@@ -1754,7 +1790,7 @@ mod tests {
 
     #[test]
     fn session_flow_route_summary_uses_shared_route_steps() {
-        let single = SessionFlowRouteSummary::from_route_event("single-worker", None);
+        let single = SessionFlowRouteSummary::from_legacy_route_event("single-worker", None);
         assert_eq!(single.label, "single");
         assert_eq!(
             single.reason,
@@ -1762,10 +1798,22 @@ mod tests {
         );
         assert_eq!(single.steps, "worker -> answer");
 
-        let unknown = SessionFlowRouteSummary::from_route_event("custom-route", Some("custom"));
+        let unknown =
+            SessionFlowRouteSummary::from_legacy_route_event("custom-route", Some("custom"));
         assert_eq!(unknown.label, "custom-route");
         assert_eq!(unknown.reason, "custom");
         assert_eq!(unknown.steps, "unknown");
+
+        let structured = SessionFlowRouteSummary::from_route_event(SessionFlowRoutePayload {
+            route: "custom-route",
+            reason: Some("raw custom reason"),
+            route_label: Some("custom"),
+            route_reason_label: Some("custom shortcut"),
+            flow_steps: Some("planner -> worker -> answer"),
+        });
+        assert_eq!(structured.label, "custom");
+        assert_eq!(structured.reason, "custom shortcut");
+        assert_eq!(structured.steps, "planner -> worker -> answer");
     }
 
     #[test]

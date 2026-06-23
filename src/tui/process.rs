@@ -842,6 +842,9 @@ fn process_context_summary(input: &InputState) -> String {
 }
 
 fn process_flow_summary(input: &InputState, events: &[&String]) -> String {
+    if let Some(steps) = input.run_flow_steps.as_deref() {
+        return steps.into();
+    }
     if let Some(route) = process_route_from_input_or_events(input, events) {
         return route.flow_steps().into();
     }
@@ -860,6 +863,9 @@ fn process_flow_summary(input: &InputState, events: &[&String]) -> String {
 }
 
 fn process_route_summary(input: &InputState, events: &[&String]) -> String {
+    if let Some(label) = input.run_route_label.as_deref() {
+        return label.into();
+    }
     if let Some(route) = process_route_from_input_or_events(input, events) {
         return route.display_label().into();
     }
@@ -871,6 +877,9 @@ fn process_route_summary(input: &InputState, events: &[&String]) -> String {
 }
 
 fn process_route_reason_summary(input: &InputState, events: &[&String]) -> String {
+    if let Some(reason) = input.run_route_reason_label.as_deref() {
+        return truncate_chars(reason.trim(), 120);
+    }
     if let Some(reason) = input.run_route_reason.as_deref() {
         return truncate_chars(reason.trim(), 120);
     }
@@ -1617,9 +1626,12 @@ mod tests {
             current_stage_detail: "command exited 1".into(),
             agent_hint: Some("worker-codex".into()),
             run_route: Some("single-worker".into()),
+            run_route_label: Some("single".into()),
             run_route_reason: Some(
                 "atomic request; planner, critic, and reviewer are not needed".into(),
             ),
+            run_route_reason_label: Some("atomic worker".into()),
+            run_flow_steps: Some("worker -> answer".into()),
             last_context_messages: 2,
             last_context_chars: 360,
             ..InputState::default()
@@ -1639,7 +1651,8 @@ mod tests {
         assert!(formatted.contains("status: ✗ failed · Failed · command exited 1"));
         assert!(formatted.contains("flow: worker -> answer"));
         assert!(formatted.contains("flow route: single"));
-        assert!(formatted
+        assert!(formatted.contains("flow reason: atomic worker"));
+        assert!(!formatted
             .contains("flow reason: atomic request; planner, critic, and reviewer are not needed"));
         assert!(formatted.contains("worker route: worker-codex"));
         assert!(formatted.contains("context: compact · 2 message(s), 360 chars"));

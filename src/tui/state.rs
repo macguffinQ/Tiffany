@@ -107,8 +107,14 @@ pub(super) struct InputState {
     pub(super) last_context_chars: usize,
     /// Last orchestration route selected for the active or most recent run.
     pub(super) run_route: Option<String>,
+    /// Compact display label for the last route, if it is known.
+    pub(super) run_route_label: Option<String>,
     /// Human-readable reason for the last orchestration route selection.
     pub(super) run_route_reason: Option<String>,
+    /// Compact reason label for the last route, if it is known.
+    pub(super) run_route_reason_label: Option<String>,
+    /// Displayable flow steps for the last route, if it is known.
+    pub(super) run_flow_steps: Option<String>,
     /// Prompt history for interactive reuse.
     pub(super) input_history: Vec<String>,
     /// Cursor into prompt history when browsing with Up/Down.
