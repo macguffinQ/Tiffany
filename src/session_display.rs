@@ -334,7 +334,7 @@ pub fn format_session_flow(
     let root = flow_root_session(selected, all_sessions);
     let sessions = collect_session_subtree(root, all_sessions);
     let mut out = format!(
-        "Session flow\n{}\n  selected: {}\n  sessions: {}\n  events: {}",
+        "Session flow\n{}\n  selected: {}\n  sessions: {}\n  flow route: {}\n  events: {}",
         format_tree_session_line(root),
         if selected.id == root.id {
             "root".to_string()
@@ -346,6 +346,7 @@ pub fn format_session_flow(
             )
         },
         sessions.len(),
+        session_flow_route_summary(root, log_dir),
         match options.tail_per_session {
             Some(limit) => format!("last {limit} raw line(s) per session; duplicates hidden"),
             None => "all readable events; duplicates hidden".to_string(),
@@ -397,6 +398,44 @@ pub fn format_session_event_line(raw: &str) -> String {
     match serde_json::from_str::<Event>(raw) {
         Ok(event) => format_session_event(&event),
         Err(_) => truncate_chars(raw, RAW_LINE_MAX_CHARS),
+    }
+}
+
+fn session_flow_route_summary(root: &Session, log_dir: &Path) -> String {
+    let path = session_log_path(log_dir, root);
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return "unknown".into();
+    };
+    for line in content.lines() {
+        let Ok(event) = serde_json::from_str::<Event>(line) else {
+            continue;
+        };
+        if event.kind != "orchestrator" {
+            continue;
+        }
+        let Some(route) = payload_str(&event.payload, "route") else {
+            continue;
+        };
+        let label = session_flow_route_label(route);
+        let Some(reason) = payload_str(&event.payload, "reason") else {
+            return label;
+        };
+        let reason = agent_events::humanize_jsonish(reason, EVENT_SUMMARY_MAX_CHARS);
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return label;
+        }
+        return format!("{label} · {reason}");
+    }
+    "not captured".into()
+}
+
+fn session_flow_route_label(route: &str) -> String {
+    match route {
+        "direct-answer" => "direct".into(),
+        "single-worker" => "single".into(),
+        "full-pipeline" => "full".into(),
+        other => truncate_chars(other, 32),
     }
 }
 
@@ -1604,6 +1643,18 @@ mod tests {
         worker.parent_session_ids.push(root.id);
         worker.ended_at = Some(Utc::now());
 
+        let route_event = Event {
+            session_id: root.id,
+            task_id: root.task_id,
+            ts: Utc::now(),
+            kind: "orchestrator".into(),
+            payload: serde_json::json!({
+                "status": "running",
+                "message": "route selected - full-pipeline",
+                "route": "full-pipeline",
+                "reason": "project or implementation work; planner, critic, worker, and reviewer will run"
+            }),
+        };
         let root_event = Event {
             session_id: root.id,
             task_id: root.task_id,
@@ -1625,7 +1676,11 @@ mod tests {
         };
         std::fs::write(
             session_log_path(tmp.path(), &root),
-            format!("{}\n", serde_json::to_string(&root_event).unwrap()),
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&route_event).unwrap(),
+                serde_json::to_string(&root_event).unwrap()
+            ),
         )
         .unwrap();
         std::fs::write(
@@ -1645,8 +1700,11 @@ mod tests {
 
         assert!(flow.contains("Session flow"));
         assert!(flow.contains("selected:"));
+        assert!(flow.contains("flow route: full"));
+        assert!(flow.contains("planner, critic, worker, and reviewer will run"));
         assert!(flow.contains("orchestrator"));
         assert!(flow.contains("claude-code"));
+        assert!(flow.contains("route selected · full-pipeline"));
         assert!(flow.contains("plan ready"));
         assert!(flow.contains("worker finished"));
         assert!(!flow.contains("\"message\""));

@@ -61,6 +61,9 @@ All notable changes to this project will be documented in this file.
 - Updated `/workflow`, `/role route`, and `/process` summaries to use the
   same dynamic flow vocabulary as the live HUD, including selected flow,
   route reason, flow steps, and worker route.
+- Added selected flow-route summaries to `/session flow` history views so
+  restored orchestration waterfalls explain whether a run used direct, single,
+  or full routing before showing per-session events.
 
 ## [0.1.25] - 2026-06-22
 
