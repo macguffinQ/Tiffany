@@ -629,7 +629,8 @@ impl Orchestrator {
     ) -> Result<Vec<Task>> {
         let total = tasks.len();
         let by_id: HashMap<Uuid, Task> = tasks.iter().map(|t| (t.id, t.clone())).collect();
-        let mut completed_ids: HashSet<Uuid> = HashSet::new();
+        let mut successful_ids: HashSet<Uuid> = HashSet::new();
+        let mut terminal_ids: HashSet<Uuid> = HashSet::new();
         let mut results: Vec<Task> = Vec::new();
         let mut joinset: JoinSet<(Uuid, String, String, u64, Result<Session>)> = JoinSet::new();
 
@@ -642,7 +643,7 @@ impl Orchestrator {
             let ready: Vec<Task> = tasks
                 .iter()
                 .filter(|t| t.status == TaskStatus::Pending)
-                .filter(|t| t.deps.iter().all(|d| completed_ids.contains(d)))
+                .filter(|t| t.deps.iter().all(|d| successful_ids.contains(d)))
                 .cloned()
                 .collect();
 
@@ -722,10 +723,26 @@ impl Orchestrator {
             }
 
             if joinset.is_empty() {
-                if completed_ids.len() < total {
+                if terminal_ids.len() < total {
+                    let blocked_by_failed_deps = tasks.iter().any(|t| {
+                        !terminal_ids.contains(&t.id)
+                            && t.deps.iter().any(|dep| {
+                                terminal_ids.contains(dep) && !successful_ids.contains(dep)
+                            })
+                    });
+                    if blocked_by_failed_deps {
+                        let remaining = tasks
+                            .iter()
+                            .filter(|t| !terminal_ids.contains(&t.id))
+                            .count();
+                        anyhow::bail!(
+                            "task DAG blocked: {} task(s) remain behind failed dependencies",
+                            remaining
+                        );
+                    }
                     let remaining = tasks
                         .iter()
-                        .filter(|t| !completed_ids.contains(&t.id))
+                        .filter(|t| !terminal_ids.contains(&t.id))
                         .count();
                     anyhow::bail!(
                         "task DAG stalled: {} task(s) remain with unsatisfied dependencies",
@@ -760,7 +777,8 @@ impl Orchestrator {
                         if let Some(slot) = tasks.iter_mut().find(|t| t.id == task_id) {
                             slot.status = TaskStatus::Completed;
                         }
-                        completed_ids.insert(task_id);
+                        successful_ids.insert(task_id);
+                        terminal_ids.insert(task_id);
                         if let Some(t) = by_id.get(&task_id).cloned() {
                             let mut t = t;
                             t.status = TaskStatus::Completed;
@@ -781,7 +799,7 @@ impl Orchestrator {
                             slot.status = TaskStatus::Failed;
                             slot.error = Some(error_message.clone());
                         }
-                        completed_ids.insert(task_id);
+                        terminal_ids.insert(task_id);
                         let _ = tx.send(RunProgress::WorkerOutput {
                             task_id,
                             agent: agent.clone(),
@@ -1491,6 +1509,51 @@ mod tests {
                         }
                     }),
                 });
+            }
+            let mut session = Session::new(task.id, self.name(), Role::Worker);
+            session.model = task.model_hint.clone().unwrap_or_default();
+            Ok(WorkerHandle {
+                session,
+                kill: Arc::new(|| {}),
+            })
+        }
+
+        fn stream_events(&self, _session: &Session) -> BoxStream<'static, Result<Event>> {
+            Box::pin(stream::empty())
+        }
+
+        async fn cancel(&self, _session: &Session) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_diff(&self, _session: &Session) -> Result<String> {
+            Ok(String::new())
+        }
+
+        async fn build_context(
+            &self,
+            _reader: &dyn crate::core::session_store::SessionReader,
+            _parent_ids: &[Uuid],
+        ) -> Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    struct PromptFailingAdapter;
+
+    #[async_trait::async_trait]
+    impl WorkerAdapter for PromptFailingAdapter {
+        fn name(&self) -> &str {
+            "test-worker"
+        }
+
+        async fn start(
+            &self,
+            task: &Task,
+            _event_tx: Option<tokio::sync::mpsc::UnboundedSender<Event>>,
+        ) -> Result<WorkerHandle> {
+            if task.prompt.contains("fail") {
+                anyhow::bail!("intentional worker failure");
             }
             let mut session = Session::new(task.id, self.name(), Role::Worker);
             session.model = task.model_hint.clone().unwrap_or_default();
@@ -2455,6 +2518,51 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             format!("{:#}", err).contains("task DAG stalled"),
             "unexpected error: {:#}",
             err
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_dag_does_not_release_dependents_after_failure() {
+        let (_tmp, mut orch) = test_orchestrator(Arc::new(ApprovingCritic));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert("test-runtime".to_string(), Arc::new(PromptFailingAdapter));
+        let first = Task::new("fail first");
+        let failed_id = first.id;
+        let mut second = Task::new("dependent should not run");
+        second.deps.push(first.id);
+        let dependent_id = second.id;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let err = orch
+            .execute_dag(vec![first, second], tx)
+            .await
+            .expect_err("failed dependency should block dependent tasks");
+
+        assert!(
+            format!("{:#}", err).contains("task DAG blocked"),
+            "unexpected error: {:#}",
+            err
+        );
+
+        let mut saw_failed_done = false;
+        let mut saw_dependent_started = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::WorkerDone { task_id, ok, .. } if task_id == failed_id => {
+                    saw_failed_done = !ok;
+                }
+                RunProgress::WorkerStarted { task_id, .. } if task_id == dependent_id => {
+                    saw_dependent_started = true;
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_failed_done, "failed dependency should emit failed done");
+        assert!(
+            !saw_dependent_started,
+            "dependent task must not start after a failed dependency"
         );
     }
 
