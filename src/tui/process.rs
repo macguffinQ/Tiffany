@@ -922,29 +922,34 @@ fn process_route_from_input_or_events(
             return Some(route);
         }
     }
-    for line in events {
-        if let Some(route) = process_route_label_from_event(line)
-            .and_then(|label| agent_events::OrchestrationRoute::from_label(&label))
-        {
-            return Some(route);
-        }
-    }
-    None
-}
-
-fn process_route_label_from_event(line: &str) -> Option<String> {
-    route_event_parts(line).and_then(|parts| parts.route)
+    route_event_parts_from_events(events)
+        .and_then(|parts| parts.route)
+        .and_then(|label| agent_events::OrchestrationRoute::from_label(&label))
 }
 
 fn process_route_reason_from_events(events: &[&String]) -> Option<String> {
-    events
-        .iter()
-        .find_map(|line| route_event_parts(line).and_then(|parts| parts.reason))
+    route_event_parts_from_events(events).and_then(|parts| parts.reason)
+}
+
+fn route_event_parts_from_events(events: &[&String]) -> Option<RouteEventParts> {
+    let mut preview = None;
+    for line in events {
+        let Some(parts) = route_event_parts(line) else {
+            continue;
+        };
+        if parts.preview {
+            preview = Some(parts);
+        } else {
+            return Some(parts);
+        }
+    }
+    preview
 }
 
 struct RouteEventParts {
     route: Option<String>,
     reason: Option<String>,
+    preview: bool,
 }
 
 fn route_event_parts(line: &str) -> Option<RouteEventParts> {
@@ -962,12 +967,20 @@ fn route_event_parts(line: &str) -> Option<RouteEventParts> {
     if parts[0] == "preview" {
         let route = parts.get(1).copied().map(str::to_string);
         let reason = parts.get(2).copied().map(str::to_string);
-        return Some(RouteEventParts { route, reason });
+        return Some(RouteEventParts {
+            route,
+            reason,
+            preview: true,
+        });
     }
 
     let route = parts.first().copied().map(str::to_string);
     let reason = parts.get(1).copied().map(str::to_string);
-    Some(RouteEventParts { route, reason })
+    Some(RouteEventParts {
+        route,
+        reason,
+        preview: false,
+    })
 }
 
 fn process_route_label(route: &str) -> String {
@@ -1780,6 +1793,23 @@ mod tests {
         assert!(formatted.contains("flow route: single"));
         assert!(formatted.contains("flow reason: atomic worker"));
         assert!(!formatted.contains("flow route: preview"));
+    }
+
+    #[test]
+    fn process_summary_prefers_backend_route_over_preview_event() {
+        let mut input = InputState::default();
+        input.run_events = vec![
+            "10:00:00  start  task accepted · continue".into(),
+            "10:00:00  route  preview · single · atomic worker · worker -> answer".into(),
+            "10:00:01  route  full-pipeline · project or implementation work; planner, critic, worker, and reviewer will run".into(),
+        ];
+
+        let formatted = format_process_summary(&input);
+
+        assert!(formatted.contains("flow: planner -> critic -> worker -> reviewer -> answer"));
+        assert!(formatted.contains("flow route: full"));
+        assert!(formatted.contains("flow reason: implementation"));
+        assert!(!formatted.contains("flow route: single"));
     }
 
     #[test]
