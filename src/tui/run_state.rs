@@ -741,7 +741,7 @@ mod tests {
             input.run_flow_steps.as_deref(),
             Some("planner -> critic -> worker -> reviewer -> answer")
         );
-        assert_eq!(input.current_stage, "Route: full-pipeline");
+        assert_eq!(input.current_stage, "route: full");
     }
 
     #[test]

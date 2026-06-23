@@ -28,7 +28,7 @@ tiffany-loop orchestration mode
 
 `tiffany-loop` lets you run multiple AI coding agents (Claude Code, Codex CLI runtimes, or any LLM) **in parallel, with shared context, and with adversarial review** - all from a single CLI, terminal chat, or ACP client.
 
-The core idea: each "agent" is just a CLI subprocess (or a direct API call) wrapped in a common adapter. A planner decomposes your high-level task into sub-tasks, a critic red-teams the plan, workers execute in parallel, a reviewer gates implementation results, and every agent's session is logged and shared with future agents. Conversational turns such as greetings, explanations, and simple Q&A still go through the observable run path, but collapse to a direct worker answer and emit `review skipped` with a structured `reason`.
+The core idea: each "agent" is just a CLI subprocess (or a direct API call) wrapped in a common adapter. A planner decomposes your high-level task into sub-tasks, a critic red-teams the plan, workers execute in parallel, a reviewer gates implementation results, and every agent's session is logged and shared with future agents. Tiffany routes each turn before execution: greetings/explanations/simple Q&A collapse to a direct worker answer, external links or atomic research/scaffold tasks run as a single worker, and implementation work uses the full planner → critic → worker → reviewer pipeline.
 
 It's designed for software engineering tasks where:
 - You want **multiple AI agents** to collaborate, not just one
@@ -199,10 +199,10 @@ Providers: **Anthropic**, **OpenAI**, **Google Gemini**, **Ollama** (local), or 
 ```
 
 Conversational or explanatory prompts are intentionally treated as direct-answer
-turns. Atomic execution prompts can run as a single-worker flow. Both paths
-still emit route/worker/run events for transparency; review is recorded as
-`review skipped · <task> · conversational answer` or
-`review skipped · <task> · single worker route` instead of forcing a
+turns. External links, research prompts, diagnostics, and scaffolding can run as
+a single-worker flow. Both paths still emit route/worker/run events for
+transparency; review is recorded as `review skipped · <task> · conversational
+answer` or `review skipped · <task> · single worker route` instead of forcing a
 code-review style rejection.
 
 ### 3-tier role resolution

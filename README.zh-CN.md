@@ -38,7 +38,7 @@ tiffany-loop orchestration mode
   -> 输出最终结果并记录会话
 ```
 
-每次输入会先选择 `direct`、`single` 或 `full` flow：对话/解释类输入走 direct，原子执行类输入走 single，工程实现类输入走 full。direct 和 single 仍会展示 route/worker/run 过程，方便观察和回放；review 阶段会显示为 `review skipped · <task> · conversational answer` 或 `review skipped · <task> · single worker route`，避免把正常聊天或不可拆分任务误判成“没有实际工作”。
+每次输入会先选择 `direct`、`single` 或 `full` flow：对话/解释类输入走 direct，外部链接、调研、诊断和脚手架类原子任务走 single，当前工程实现类输入走 full。direct 和 single 仍会展示 route/worker/run 过程，方便观察和回放；review 阶段会显示为 `review skipped · <task> · conversational answer` 或 `review skipped · <task> · single worker route`，避免把正常聊天或不可拆分任务误判成“没有实际工作”。
 
 它适合这些场景：
 

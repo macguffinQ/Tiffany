@@ -121,10 +121,10 @@ mod tests {
     fn classifies_plain_chat_as_conversation() {
         assert!(is_conversational_task(&Task::new("你好")));
         assert!(is_conversational_task(&Task::new("你叫啥\n你能干啥")));
-        assert!(is_conversational_task(&Task::new(
+        assert!(!is_conversational_task(&Task::new(
             "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle"
         )));
-        assert!(is_conversational_task(&Task::new(
+        assert!(!is_conversational_task(&Task::new(
             "看看这个链接 https://example.com"
         )));
     }
@@ -169,6 +169,16 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
 
     #[test]
     fn classifies_atomic_external_work_as_single_worker() {
+        assert_eq!(
+            classify_task_route(&Task::new(
+                "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle"
+            )),
+            TaskRoute::SingleWorker
+        );
+        assert_eq!(
+            classify_task_route(&Task::new("看看这个链接 https://example.com")),
+            TaskRoute::SingleWorker
+        );
         assert_eq!(
             classify_task_route(&Task::new("写参赛 agent")),
             TaskRoute::SingleWorker

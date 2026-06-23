@@ -436,13 +436,24 @@ pub fn classify_orchestration_route(text: &str) -> OrchestrationRoute {
     let request = current_user_request(text);
     let request_lower = request.to_lowercase();
     let full_prompt = text.to_lowercase();
+    let has_full_context = has_marker(&request_lower, FULL_PIPELINE_CONTEXT_MARKERS);
+    let has_imperative_action = has_marker(&request_lower, IMPERATIVE_ACTION_MARKERS);
     if has_marker(&request_lower, CONTINUATION_ACTION_MARKERS)
         && has_marker(&full_prompt, FULL_PIPELINE_CONTEXT_MARKERS)
     {
         return OrchestrationRoute::FullPipeline;
     }
+    if looks_like_link_reference(request) {
+        if has_imperative_action && has_full_context {
+            return OrchestrationRoute::FullPipeline;
+        }
+        return OrchestrationRoute::SingleWorker;
+    }
     if looks_like_direct_answer_request(request) {
         return OrchestrationRoute::DirectAnswer;
+    }
+    if has_imperative_action && has_full_context {
+        return OrchestrationRoute::FullPipeline;
     }
     if looks_like_single_worker_request(request) {
         return OrchestrationRoute::SingleWorker;
@@ -457,9 +468,6 @@ fn looks_like_direct_answer_request(text: &str) -> bool {
         .iter()
         .any(|needle| lower.contains(needle))
     {
-        return true;
-    }
-    if looks_like_link_reference(request) && !has_marker(&lower, IMPERATIVE_ACTION_MARKERS) {
         return true;
     }
     if request.ends_with('?') || request.ends_with('？') {
@@ -2518,12 +2526,26 @@ mod tests {
 
         assert!(request_looks_direct_answer("你好"));
         assert!(request_looks_direct_answer("你叫啥\n你能干啥"));
-        assert!(request_looks_direct_answer(
+        assert!(!request_looks_direct_answer(
             "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle"
         ));
-        assert!(request_looks_direct_answer(
+        assert!(!request_looks_direct_answer(
             "看看这个链接 https://example.com"
         ));
+        assert_eq!(
+            classify_orchestration_route(
+                "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle"
+            ),
+            OrchestrationRoute::SingleWorker
+        );
+        assert_eq!(
+            classify_orchestration_route("看看这个链接 https://example.com"),
+            OrchestrationRoute::SingleWorker
+        );
+        assert_eq!(
+            classify_orchestration_route("把 https://example.com 接入当前工程"),
+            OrchestrationRoute::FullPipeline
+        );
         assert!(!request_looks_direct_answer("分析一下这个比赛"));
 
         assert!(!request_looks_direct_answer("优化 TUI 显示"));
@@ -2565,6 +2587,12 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         let external_atomic_followup = "Previous turns:\nuser:\n优化 tiffany-loop 编排流程\n\nassistant result:\n已完成。\n\n---\nCurrent user request:\n写参赛 agent";
         assert_eq!(
             classify_orchestration_route(external_atomic_followup),
+            OrchestrationRoute::SingleWorker
+        );
+
+        let link_followup = "Previous turns:\nuser:\n你好\n\nassistant result:\n你好。\n\n---\nCurrent user request:\nhttps://www.kaggle.com/competitions/pokemon-tcg-ai-battle";
+        assert_eq!(
+            classify_orchestration_route(link_followup),
             OrchestrationRoute::SingleWorker
         );
 

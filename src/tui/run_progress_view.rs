@@ -1,6 +1,7 @@
 //! Shared presentation model for orchestrator run progress.
 
 use super::util::format_duration_ms;
+use crate::agent_events::OrchestrationRoute;
 use crate::pipeline::orchestrator::RunProgress;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,9 +27,11 @@ pub(super) struct RunStatusView {
 
 pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHistoryView> {
     match event {
-        RunProgress::RouteSelected { route, reason } => {
-            Some(running(format!("route {route} — {reason}")))
-        }
+        RunProgress::RouteSelected { route, reason } => Some(running(format_route_line(
+            route,
+            reason,
+            RouteLineStyle::History,
+        ))),
         RunProgress::Planning => Some(running("planning")),
         RunProgress::Planned { sub_task_count } => Some(success(format!(
             "plan ready — {sub_task_count} sub-task(s)"
@@ -132,11 +135,14 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
 
 pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
     match event {
-        RunProgress::RouteSelected { route, reason } => Some(status(
-            format!("Route: {route}"),
-            reason.clone(),
-            Some(format!("▸ Route {route} — {reason}")),
-        )),
+        RunProgress::RouteSelected { route, reason } => {
+            let summary = route_summary(route, reason);
+            Some(status(
+                format!("route: {}", summary.label),
+                summary.reason,
+                Some(format_route_line(route, reason, RouteLineStyle::Assistant)),
+            ))
+        }
         RunProgress::Planning => Some(status(
             "Planning",
             "decomposing task",
@@ -392,6 +398,54 @@ fn format_control_fallback_line(role: &str, message: &str, reason: &str) -> Stri
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RouteLineStyle {
+    History,
+    Assistant,
+}
+
+struct RouteSummary {
+    label: String,
+    reason: String,
+    steps: Option<&'static str>,
+}
+
+fn route_summary(route: &str, reason: &str) -> RouteSummary {
+    let metadata = OrchestrationRoute::from_label_or_reason(route, reason);
+    RouteSummary {
+        label: metadata
+            .map(|route| route.display_label().to_string())
+            .unwrap_or_else(|| route.trim().to_string()),
+        reason: metadata
+            .map(|route| route.short_reason_label().to_string())
+            .unwrap_or_else(|| reason.trim().to_string()),
+        steps: metadata.map(OrchestrationRoute::flow_steps),
+    }
+}
+
+fn format_route_line(route: &str, reason: &str, style: RouteLineStyle) -> String {
+    let summary = route_summary(route, reason);
+    let label = if summary.label.trim().is_empty() {
+        route.trim()
+    } else {
+        summary.label.as_str()
+    };
+    let reason = summary.reason.trim();
+    let mut line = match style {
+        RouteLineStyle::History => format!("route {label}"),
+        RouteLineStyle::Assistant => format!("▸ route {label}"),
+    };
+    if !reason.is_empty() {
+        line.push_str(" · ");
+        line.push_str(reason);
+    }
+    if let Some(steps) = summary.steps {
+        line.push_str(" · ");
+        line.push_str(steps);
+    }
+    line
+}
+
 fn role_display_name(role: &str) -> &'static str {
     match role {
         "planner" => "planner",
@@ -496,7 +550,20 @@ mod tests {
         assert_eq!(route.icon, "●");
         assert_eq!(
             route.line,
-            "route single-worker — atomic request; planner, critic, and reviewer are not needed"
+            "route single · atomic worker · worker -> answer"
+        );
+        assert!(!route.line.contains("planner, critic"));
+
+        let full_route = progress_history_view(&RunProgress::RouteSelected {
+            route: "full-pipeline".into(),
+            reason:
+                "project or implementation work; planner, critic, worker, and reviewer will run"
+                    .into(),
+        })
+        .expect("full route view");
+        assert_eq!(
+            full_route.line,
+            "route full · implementation · planner -> critic -> worker -> reviewer -> answer"
         );
 
         let direct_status = run_status_view(&RunProgress::DirectAnswer).expect("direct status");
@@ -512,16 +579,11 @@ mod tests {
             reason: "atomic request; planner, critic, and reviewer are not needed".into(),
         })
         .expect("route status");
-        assert_eq!(route_status.stage, "Route: single-worker");
-        assert_eq!(
-            route_status.detail,
-            "atomic request; planner, critic, and reviewer are not needed"
-        );
+        assert_eq!(route_status.stage, "route: single");
+        assert_eq!(route_status.detail, "atomic worker");
         assert_eq!(
             route_status.assistant_update.as_deref(),
-            Some(
-                "▸ Route single-worker — atomic request; planner, critic, and reviewer are not needed"
-            )
+            Some("▸ route single · atomic worker · worker -> answer")
         );
 
         let fallback = progress_history_view(&RunProgress::ControlFallback {
