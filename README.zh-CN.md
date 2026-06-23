@@ -381,7 +381,7 @@ behavior:
 | `orchestrator run "..."` | 执行一个任务；`--worker` 选择 worker 路线，`--agent` 选择 Claude Code 子 agent，`--ab` 会比较两个已配置 worker 路线 |
 | `orchestrator run "..." --detach` | 后台执行任务，并把可读事件日志写到 `~/.orchestrator/runs/` |
 | `orchestrator attach [id|prefix|last]` | 查看最近或指定后台任务的状态和日志尾部 |
-| `orchestrator events "..."` | 流式输出进度事件；默认 JSONL 给 UI adapter/脚本使用（`review skipped` 会带结构化 `reason` 字段），`--format text` 输出可读的 planner/critic/worker/reviewer 瀑布流 |
+| `orchestrator events "..."` | 流式输出进度事件；默认 JSONL 给 UI adapter/脚本使用（`review skipped` 会带结构化 `reason` 字段），`--format text` 输出可读的 direct/single/full 瀑布流 |
 | `orchestrator config provider setup <provider>` | 按预设配置 provider |
 | `orchestrator config provider list|presets` | 查看 provider 配置或内置预设 |
 | `orchestrator roles list` | 查看已注册角色 |

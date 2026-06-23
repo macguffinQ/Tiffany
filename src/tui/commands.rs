@@ -512,7 +512,7 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
         },
         SlashCommandDef {
             name: "workflow",
-            description: "show active role pipeline",
+            description: "show selected flow and role wiring",
         },
         SlashCommandDef {
             name: "agent",
@@ -847,7 +847,7 @@ fn argument_candidates(
             ctx,
             0,
             &[
-                ("status", "show active role pipeline"),
+                ("status", "show selected flow and role wiring"),
                 ("route", "show configured role route"),
             ],
         ),
@@ -4661,7 +4661,7 @@ behavior:
     }
 
     #[test]
-    fn workflow_command_shows_active_role_pipeline() {
+    fn workflow_command_shows_selected_flow_and_role_wiring() {
         let tmp = tempfile::tempdir().unwrap();
         let store = Arc::new(
             SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap(),

@@ -1775,6 +1775,7 @@ fn emit_intro(app_event_tx: &AppEventSender, launch: &TiffanyOrchestratorLaunch)
         vec![
             brand_line("orchestration run"),
             run_status_line(launch),
+            run_reason_line(launch),
             run_workflow_line(launch),
         ],
     );
@@ -1888,6 +1889,22 @@ fn run_workflow_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
         event_format::OrchestrationRoute::SingleWorker => direct_workflow_line("single"),
         event_format::OrchestrationRoute::FullPipeline => full_workflow_line(),
     }
+}
+
+fn run_reason_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            "reason",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            launch_route(launch).reason(),
+            Style::default().fg(TIFFANY_SOFT),
+        ),
+    ])
 }
 
 fn full_workflow_line() -> Line<'static> {
@@ -2828,10 +2845,15 @@ mod tests {
             config_path: None,
             context_turn_count: 0,
         };
-        let lines = [run_status_line(&launch), run_workflow_line(&launch)];
+        let lines = [
+            run_status_line(&launch),
+            run_reason_line(&launch),
+            run_workflow_line(&launch),
+        ];
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
         assert!(text.contains("flow direct"));
+        assert!(text.contains("reason  simple conversational or explanatory request"));
         assert!(text.contains("flow  direct → worker → answer"));
         assert!(!text.contains("planner → critic"));
     }
@@ -2861,10 +2883,17 @@ mod tests {
             config_path: None,
             context_turn_count: 0,
         };
-        let lines = [run_status_line(&launch), run_workflow_line(&launch)];
+        let lines = [
+            run_status_line(&launch),
+            run_reason_line(&launch),
+            run_workflow_line(&launch),
+        ];
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
         assert!(text.contains("flow single"));
+        assert!(
+            text.contains("reason  atomic request; planner, critic, and reviewer are not needed")
+        );
         assert!(text.contains("flow  single → worker → answer"));
         assert!(!text.contains("planner → critic"));
     }
@@ -2880,10 +2909,17 @@ mod tests {
             config_path: None,
             context_turn_count: 1,
         };
-        let lines = [run_status_line(&launch), run_workflow_line(&launch)];
+        let lines = [
+            run_status_line(&launch),
+            run_reason_line(&launch),
+            run_workflow_line(&launch),
+        ];
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
         assert!(text.contains("flow single"));
+        assert!(
+            text.contains("reason  atomic request; planner, critic, and reviewer are not needed")
+        );
         assert!(text.contains("context 1 turn(s)"));
         assert!(text.contains("flow  single → worker → answer"));
     }
@@ -2898,10 +2934,17 @@ mod tests {
             config_path: None,
             context_turn_count: 2,
         };
-        let lines = [run_status_line(&launch), run_workflow_line(&launch)];
+        let lines = [
+            run_status_line(&launch),
+            run_reason_line(&launch),
+            run_workflow_line(&launch),
+        ];
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
         assert!(text.contains("flow full"));
+        assert!(text.contains(
+            "reason  project or implementation work; planner, critic, worker, and reviewer will run"
+        ));
         assert!(text.contains("context 2 turn(s)"));
         assert!(text.contains("flow  planner → critic → worker → reviewer"));
     }

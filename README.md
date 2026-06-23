@@ -495,7 +495,7 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--agent`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
 | `orchestrator run "..." --detach` | Run a task in the background and write a readable event log under `~/.orchestrator/runs/` |
 | `orchestrator attach [id|prefix|last]` | Print the latest detached run status and log tail |
-| `orchestrator events "..."` | Stream progress events; default JSONL is stable for UI adapters/scripts (`review skipped` events include a structured `reason`), `--format text` prints a readable planner/critic/worker/reviewer waterfall |
+| `orchestrator events "..."` | Stream progress events; default JSONL is stable for UI adapters/scripts (`review skipped` events include a structured `reason`), `--format text` prints a readable direct/single/full waterfall |
 | `orchestrator config provider` | Open the guided provider selector |
 | `orchestrator config provider setup <provider>` | Configure a provider from built-in presets |
 | `orchestrator config provider delete <provider>` | Delete one configured provider |
