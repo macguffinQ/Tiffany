@@ -957,6 +957,27 @@ mod tests {
     }
 
     #[test]
+    fn worker_ready_text_keeps_direct_route_metadata() {
+        let event = RunProgress::WorkerReady {
+            run_count: 1,
+            route: "direct-answer".into(),
+        };
+
+        assert_eq!(
+            format_compact_progress_event(&event).expect("worker ready compact text"),
+            "worker  ready · 1 run(s) · direct-answer"
+        );
+        let json = serde_json::to_value(TiffanyProgressEvent::from(event))
+            .expect("serializes direct worker ready event");
+        assert_eq!(json["role"], "worker");
+        assert_eq!(json["status"], "ready");
+        assert_eq!(json["route"], "direct-answer");
+        assert_eq!(json["route_label"], "direct");
+        assert_eq!(json["route_reason_label"], "chat/explain");
+        assert_eq!(json["flow_steps"], "worker -> answer");
+    }
+
+    #[test]
     fn json_event_keeps_review_skip_reason_structured() {
         let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
         let event = TiffanyProgressEvent::from(RunProgress::ReviewSkipped {

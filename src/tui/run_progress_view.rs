@@ -674,6 +674,30 @@ mod tests {
             )
         );
 
+        let direct_ready = progress_history_view(&RunProgress::WorkerReady {
+            run_count: 1,
+            route: "direct-answer".into(),
+        })
+        .expect("direct worker ready view");
+        assert_eq!(
+            direct_ready.line,
+            "worker ready · 1 run(s) · direct · chat/explain · worker -> answer"
+        );
+
+        let direct_ready_status = run_status_view(&RunProgress::WorkerReady {
+            run_count: 1,
+            route: "direct-answer".into(),
+        })
+        .expect("direct worker ready status");
+        assert_eq!(direct_ready_status.stage, "Worker ready (1 run(s))");
+        assert_eq!(direct_ready_status.detail, "direct · chat/explain");
+        assert_eq!(
+            direct_ready_status.assistant_update.as_deref(),
+            Some(
+                "▸ Worker ready · 1 run(s) · direct · chat/explain · worker -> answer. Starting worker…"
+            )
+        );
+
         let fallback = progress_history_view(&RunProgress::ControlFallback {
             role: "critic".into(),
             message: "critique unavailable; continuing with current plan".into(),

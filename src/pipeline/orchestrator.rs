@@ -579,6 +579,10 @@ impl Orchestrator {
 
         let tasks = plan.sub_tasks;
         let _ = tx.send(RunProgress::DirectAnswer);
+        let _ = tx.send(RunProgress::WorkerReady {
+            run_count: tasks.len(),
+            route: TaskRoute::DirectAnswer.label().to_string(),
+        });
         let completed = self
             .execute_dag(tasks, tx.clone())
             .await
@@ -2077,6 +2081,9 @@ mod tests {
         let mut saw_critic = false;
         let mut saw_review = false;
         let mut saw_direct = false;
+        let mut saw_worker_ready = false;
+        let mut ready_before_worker = false;
+        let mut saw_worker_start = false;
         let mut saw_executing = false;
         let mut saw_review_result = false;
         while let Ok(event) = rx.try_recv() {
@@ -2089,12 +2096,25 @@ mod tests {
                 | RunProgress::ReviewSkipped { .. }
                 | RunProgress::ReviewUnavailable { .. } => saw_review = true,
                 RunProgress::DirectAnswer => saw_direct = true,
+                RunProgress::WorkerReady { run_count, route } => {
+                    saw_worker_ready = run_count == 1 && route == "direct-answer";
+                    ready_before_worker = !saw_worker_start;
+                }
+                RunProgress::WorkerStarted { .. } => saw_worker_start = true,
                 RunProgress::Executing { .. } => saw_executing = true,
                 RunProgress::ReviewResult { .. } => saw_review_result = true,
                 _ => {}
             }
         }
         assert!(saw_direct, "expected direct answer progress event");
+        assert!(
+            saw_worker_ready,
+            "direct answer route should show worker readiness"
+        );
+        assert!(
+            ready_before_worker,
+            "direct answer readiness should be visible before worker starts"
+        );
         assert!(!saw_executing, "conversation should not show DAG execution");
         assert!(!saw_planning, "conversation should not invoke planner");
         assert!(!saw_critic, "conversation should not invoke critic");
@@ -2149,14 +2169,22 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
 
         let mut saw_planning = false;
         let mut saw_direct = false;
+        let mut saw_worker_ready = false;
         while let Ok(event) = rx.try_recv() {
             match event {
                 RunProgress::Planning | RunProgress::Planned { .. } => saw_planning = true,
                 RunProgress::DirectAnswer => saw_direct = true,
+                RunProgress::WorkerReady { run_count, route } => {
+                    saw_worker_ready = run_count == 1 && route == "direct-answer";
+                }
                 _ => {}
             }
         }
         assert!(saw_direct, "expected direct answer progress event");
+        assert!(
+            saw_worker_ready,
+            "current chat follow-up should show direct worker readiness"
+        );
         assert!(
             !saw_planning,
             "current chat follow-up should not invoke planner"

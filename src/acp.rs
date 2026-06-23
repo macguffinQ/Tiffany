@@ -2958,6 +2958,19 @@ mod tests {
             ready,
             "Worker ready: 1 run(s) · single · atomic worker · worker -> answer."
         );
+
+        let direct_ready = progress_text(
+            &RunProgress::WorkerReady {
+                run_count: 1,
+                route: "direct-answer".into(),
+            },
+            &mut capture,
+        )
+        .expect("direct worker ready progress text");
+        assert_eq!(
+            direct_ready,
+            "Worker ready: 1 run(s) · direct · chat/explain · worker -> answer."
+        );
     }
 
     #[test]
