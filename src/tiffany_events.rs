@@ -855,6 +855,20 @@ mod tests {
             "plan  planning unavailable; using original task · planner unavailable"
         );
 
+        let critic_limit = RunProgress::ControlFallback {
+            role: "critic".into(),
+            message: "critique limit reached; continuing with latest plan".into(),
+            reason: "critic approval was not confirmed after 1 round(s)".into(),
+        };
+        assert_eq!(
+            format_text_progress_event(&critic_limit).expect("critic limit line"),
+            "⚠ critic  critique limit reached; continuing with latest plan · critic approval was not confirmed after 1 round(s)"
+        );
+        assert_eq!(
+            format_compact_progress_event(&critic_limit).expect("critic limit compact"),
+            "critic  critique limit reached; continuing with latest plan · critic approval was not confirmed after 1 round(s)"
+        );
+
         let json =
             serde_json::to_value(TiffanyProgressEvent::from(event)).expect("serializes fallback");
         assert_eq!(json["role"], "planner");

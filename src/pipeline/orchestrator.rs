@@ -281,6 +281,7 @@ impl Orchestrator {
 
         // 2. Critique loop (before consuming plan.sub_tasks)
         if self.enable_critic {
+            let mut critic_left_plan_unapproved = false;
             for i in 0..self.max_replan {
                 let _ = tx.send(RunProgress::Critiquing { round: i + 1 });
                 tracing::info!("→ Critiquing started (round {})", i + 1);
@@ -319,8 +320,10 @@ impl Orchestrator {
                     issues: crit.issues.len(),
                 });
                 if crit.approved {
+                    critic_left_plan_unapproved = false;
                     break;
                 }
+                critic_left_plan_unapproved = true;
                 tracing::info!(
                     "critic rejected (round {}): {} issues",
                     i + 1,
@@ -336,6 +339,7 @@ impl Orchestrator {
                 plan = match replanned {
                     Ok(new_plan) => new_plan,
                     Err(err) => {
+                        critic_left_plan_unapproved = false;
                         tracing::warn!(
                             "replanning after critique round {} failed; continuing with previous plan: {:#}",
                             i + 1,
@@ -359,6 +363,20 @@ impl Orchestrator {
                     plan.sub_tasks.len(),
                     replan_start.elapsed()
                 );
+            }
+            if critic_left_plan_unapproved {
+                tracing::warn!(
+                    "critic did not approve the plan after {} round(s); continuing with latest plan",
+                    self.max_replan
+                );
+                let _ = tx.send(RunProgress::ControlFallback {
+                    role: "critic".to_string(),
+                    message: "critique limit reached; continuing with latest plan".to_string(),
+                    reason: format!(
+                        "critic approval was not confirmed after {} round(s)",
+                        self.max_replan
+                    ),
+                });
             }
         }
 
@@ -1506,6 +1524,48 @@ mod tests {
             }
         }
         assert!(saw_replan_warning, "expected visible replan fallback event");
+    }
+
+    #[tokio::test]
+    async fn run_with_progress_warns_when_critic_limit_is_reached() {
+        let (_tmp, orch) = test_orchestrator(Arc::new(RejectingCritic));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let completed = orch
+            .run_with_progress(Task::new("top task"), tx)
+            .await
+            .expect("critic rejection limit should still execute latest plan");
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].prompt, "sub-task");
+
+        let mut saw_limit_warning = false;
+        let mut saw_worker_start = false;
+        let mut warning_before_worker = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::ControlFallback {
+                    role,
+                    message,
+                    reason,
+                } if role == "critic"
+                    && message == "critique limit reached; continuing with latest plan" =>
+                {
+                    saw_limit_warning = true;
+                    warning_before_worker = !saw_worker_start;
+                    assert!(reason.contains("critic approval was not confirmed after 1 round(s)"));
+                }
+                RunProgress::WorkerStarted { .. } => saw_worker_start = true,
+                _ => {}
+            }
+        }
+
+        assert!(saw_limit_warning, "expected critic limit warning");
+        assert!(
+            warning_before_worker,
+            "critic limit warning should be visible before worker execution"
+        );
+        assert!(saw_worker_start, "pipeline should still execute the worker");
     }
 
     #[tokio::test]
