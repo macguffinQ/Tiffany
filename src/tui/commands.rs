@@ -115,12 +115,14 @@ pub(super) fn handle_slash_command_with_runtime(
             push_system(input, msg.into());
         }
         "copy" | "save" => {
-            if args.first().copied() == Some("result") {
+            if cmd == "copy" && copy_command_targets_result(input, &args) {
                 push_system(input, copy_last_result(input));
                 return SlashAction::None;
             }
             let target = if cmd == "save" {
                 "file"
+            } else if matches!(args.first().copied(), Some("transcript" | "chat")) {
+                args.get(1).copied().unwrap_or("clipboard")
             } else {
                 args.first().copied().unwrap_or("file")
             };
@@ -645,7 +647,7 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
         },
         SlashCommandDef {
             name: "copy",
-            description: "copy result or transcript",
+            description: "copy result or export transcript",
         },
         SlashCommandDef {
             name: "save",
@@ -1047,11 +1049,25 @@ fn argument_candidates(
             )
         }
         "result" | "final" => choice_candidates(ctx, 0, &[("text", "show selectable plain text")]),
+        "copy"
+            if ctx.current_index == 1
+                && matches!(
+                    ctx.args.first().map(String::as_str),
+                    Some("transcript" | "chat")
+                ) =>
+        {
+            choice_candidates(
+                ctx,
+                1,
+                &[("clipboard", "copy to clipboard"), ("file", "save to file")],
+            )
+        }
         "copy" => choice_candidates(
             ctx,
             0,
             &[
                 ("result", "copy last final result"),
+                ("transcript", "copy or save transcript"),
                 ("file", "save transcript to file"),
                 ("clipboard", "copy transcript to clipboard"),
             ],
@@ -1376,8 +1392,9 @@ fn help_text() -> String {
      /clear                        Clear the chat transcript\n\
      /compact [n]                  Keep only the last n messages\n\
      /o                            Fold or expand future process detail\n\
-     /copy [file|clipboard]        Export transcript\n\
+     /copy                         Copy last final result when available\n\
      /copy result                  Copy last final result\n\
+     /copy transcript [target]     Export transcript\n\
      /result [text]                Show last final result\n\
      /save                         Save transcript to a file\n\
      /pwd                          Show current working directory\n\
@@ -3729,6 +3746,14 @@ fn is_session_export_target(value: &str) -> bool {
     )
 }
 
+fn copy_command_targets_result(input: &InputState, args: &[&str]) -> bool {
+    match args.first().copied() {
+        None => input.last_result_output.is_some(),
+        Some("result" | "final") => true,
+        _ => false,
+    }
+}
+
 fn parse_session_export_target(
     value: &str,
 ) -> std::result::Result<SessionExportCommandTarget, String> {
@@ -4483,6 +4508,29 @@ behavior:
 
         let msg = input.transcript.last().expect("result response");
         assert!(msg.content.contains("No final result captured yet"));
+    }
+
+    #[test]
+    fn copy_command_defaults_to_result_when_available() {
+        let input = InputState {
+            last_result_output: Some("Implemented the feature.".into()),
+            ..InputState::default()
+        };
+
+        assert!(copy_command_targets_result(&input, &[]));
+        assert!(copy_command_targets_result(&input, &["result"]));
+        assert!(copy_command_targets_result(&input, &["final"]));
+        assert!(!copy_command_targets_result(&input, &["transcript"]));
+        assert!(!copy_command_targets_result(&input, &["clipboard"]));
+    }
+
+    #[test]
+    fn copy_command_keeps_transcript_default_without_result() {
+        let input = InputState::default();
+
+        assert!(!copy_command_targets_result(&input, &[]));
+        assert!(copy_command_targets_result(&input, &["result"]));
+        assert!(!copy_command_targets_result(&input, &["transcript"]));
     }
 
     #[test]

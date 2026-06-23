@@ -1305,8 +1305,9 @@ fn terminal_help() -> String {
      /rollback [last|check]        Reverse-apply last checkpoint patch\n\
      /editor [draft]               Compose a longer prompt in $VISUAL or $EDITOR\n\
      /result [text]                Show last final result\n\
-     /copy [file|clipboard]        Export transcript\n\
+     /copy                         Copy last final result when available\n\
      /copy result                  Copy last final result\n\
+     /copy transcript [target]     Export transcript\n\
      /save                         Save transcript to a file\n\
      /queue [clear|remove n|promote n|edit n text|pause|resume|run] Manage queued messages\n\
      /retry                        Re-run the last task prompt\n\
