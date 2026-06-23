@@ -1375,6 +1375,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_with_progress_routes_contextual_current_chat_directly() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(StaticPlanner),
+            Arc::new(ApprovingCritic),
+            Arc::new(FailingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            true,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let prompt = "You are continuing a multi-turn terminal chat conversation.\n\
+Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交。\n\n---\nCurrent user request:\n你叫啥";
+
+        let completed = orch
+            .run_with_progress(Task::new(prompt), tx)
+            .await
+            .expect("contextual chat should complete without planner");
+
+        assert_eq!(completed.len(), 1);
+        assert!(completed[0].prompt.contains("User message:\n"));
+        assert!(completed[0]
+            .prompt
+            .contains("Current user request:\n你叫啥"));
+
+        let mut saw_planning = false;
+        let mut saw_direct = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::Planning | RunProgress::Planned { .. } => saw_planning = true,
+                RunProgress::DirectAnswer => saw_direct = true,
+                _ => {}
+            }
+        }
+        assert!(saw_direct, "expected direct answer progress event");
+        assert!(
+            !saw_planning,
+            "current chat follow-up should not invoke planner"
+        );
+    }
+
+    #[tokio::test]
     async fn run_with_progress_continues_when_reviewer_fails() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = Arc::new(

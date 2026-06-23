@@ -41,7 +41,9 @@ pub fn is_conversational_task(task: &Task) -> bool {
         return false;
     }
     if has_any_tag(&task.tags, DIRECT_TAGS) {
-        return !agent_events::contains_engineering_action(&task.prompt);
+        return !agent_events::contains_engineering_action(agent_events::current_user_request(
+            &task.prompt,
+        ));
     }
     agent_events::request_looks_direct_answer(&task.prompt)
 }
@@ -92,6 +94,17 @@ mod tests {
         assert!(is_conversational_task(&Task::new(
             "看看这个链接 https://example.com"
         )));
+    }
+
+    #[test]
+    fn classifies_contextual_prompt_by_current_request() {
+        let prompt = "You are continuing a multi-turn terminal chat conversation.\n\
+Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交。\n\n---\nCurrent user request:\n你叫啥";
+
+        assert!(is_conversational_task(&Task::new(prompt)));
+
+        let prompt = "Previous turns:\nuser:\n你好\n\nassistant result:\n你好。\n\n---\nCurrent user request:\n继续优化 TUI";
+        assert!(!is_conversational_task(&Task::new(prompt)));
     }
 
     #[test]

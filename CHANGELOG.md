@@ -23,6 +23,9 @@ All notable changes to this project will be documented in this file.
 - Moved direct-answer request classification into the shared event-format crate
   so the backend orchestrator and forked TUI use the same direct/full flow
   decision.
+- Classified multi-turn contextual prompts by the `Current user request` block,
+  preventing older turns containing words like optimize, fix, or commit from
+  forcing a simple follow-up question into the full orchestration pipeline.
 - Treated pure URL/link-inspection prompts as direct worker answers while
   keeping creation, code, and implementation requests on the full orchestration
   pipeline.

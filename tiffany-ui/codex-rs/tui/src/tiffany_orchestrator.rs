@@ -2853,6 +2853,14 @@ mod tests {
     }
 
     #[test]
+    fn shared_direct_classifier_ignores_previous_context_noise() {
+        let contextual = "Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已提交。\n\n---\nCurrent user request:\n你叫啥";
+
+        assert!(event_format::request_looks_direct_answer(contextual));
+        assert_eq!(event_format::current_user_request(contextual), "你叫啥");
+    }
+
+    #[test]
     fn doctor_command_args_accepts_read_only_diagnostics() {
         assert_eq!(doctor_command_args("").unwrap(), strings(&["doctor"]));
         assert_eq!(doctor_command_args("run").unwrap(), strings(&["doctor"]));

@@ -214,7 +214,8 @@ impl AgentFailureHint {
 }
 
 pub fn request_looks_direct_answer(text: &str) -> bool {
-    looks_like_direct_request(text) && !contains_engineering_action(text)
+    let request = current_user_request(text);
+    looks_like_direct_request(request) && !contains_engineering_action(request)
 }
 
 pub fn contains_engineering_action(text: &str) -> bool {
@@ -240,6 +241,13 @@ pub fn looks_like_link_reference(text: &str) -> bool {
     trimmed
         .split_whitespace()
         .any(|part| part.starts_with("http://") || part.starts_with("https://"))
+}
+
+pub fn current_user_request(text: &str) -> &str {
+    let Some((_, tail)) = text.rsplit_once("Current user request:\n") else {
+        return text.trim();
+    };
+    tail.trim()
 }
 
 pub fn agent_failure_hint(content: &str, max: usize) -> Option<AgentFailureHint> {
@@ -2179,6 +2187,19 @@ mod tests {
         assert!(!request_looks_direct_answer("写参赛 agent"));
         assert!(!request_looks_direct_answer("创建一个 worker"));
         assert!(contains_engineering_action("写参赛 agent"));
+    }
+
+    #[test]
+    fn classifies_contextual_prompts_by_current_request_only() {
+        let contextual = "You are continuing a multi-turn tiffany-loop orchestrator conversation.\n\
+Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交。\n\n---\nCurrent user request:\n你叫啥";
+
+        assert_eq!(current_user_request(contextual), "你叫啥");
+        assert!(request_looks_direct_answer(contextual));
+
+        let engineering_followup = "Previous turns:\nuser:\n你好\n\nassistant result:\n你好。\n\n---\nCurrent user request:\n继续优化 TUI";
+        assert_eq!(current_user_request(engineering_followup), "继续优化 TUI");
+        assert!(!request_looks_direct_answer(engineering_followup));
     }
 
     #[test]
