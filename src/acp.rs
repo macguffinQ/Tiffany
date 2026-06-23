@@ -1985,7 +1985,7 @@ async fn send_tool_call_update_status(
 fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<String> {
     match event {
         RunProgress::RouteSelected { route, reason } => {
-            Some(format!("Route selected: {route}. {reason}."))
+            Some(format_acp_route_progress(route, reason))
         }
         RunProgress::Planning => Some("Planning task.".into()),
         RunProgress::Planned { sub_task_count } => {
@@ -2053,6 +2053,28 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
         RunProgress::WorkerStarted { .. }
         | RunProgress::WorkerOutput { .. }
         | RunProgress::WorkerDone { .. } => None,
+    }
+}
+
+fn format_acp_route_progress(route: &str, reason: &str) -> String {
+    let parsed_route = agent_events::OrchestrationRoute::from_label(route)
+        .or_else(|| agent_events::OrchestrationRoute::from_reason(reason));
+    match parsed_route {
+        Some(route) => format!(
+            "Route selected: {} · {} · {}.",
+            route.display_label(),
+            route.short_reason_label(),
+            route.flow_steps()
+        ),
+        None => {
+            let reason = agent_events::humanize_jsonish(reason, 1600);
+            let reason = reason.trim();
+            if reason.is_empty() {
+                format!("Route selected: {route}.")
+            } else {
+                format!("Route selected: {route} · {reason}.")
+            }
+        }
     }
 }
 
@@ -2810,8 +2832,19 @@ mod tests {
 
         assert_eq!(
             text,
-            "Route selected: single-worker. atomic request; planner, critic, and reviewer are not needed."
+            "Route selected: single · atomic worker · worker -> answer."
         );
+
+        let text = progress_text(
+            &RunProgress::RouteSelected {
+                route: "custom-route".into(),
+                reason: "custom reason".into(),
+            },
+            &mut capture,
+        )
+        .expect("custom route progress text");
+
+        assert_eq!(text, "Route selected: custom-route · custom reason.");
     }
 
     #[test]
