@@ -407,6 +407,10 @@ impl Orchestrator {
                         "→ Replanning downgraded to single worker in {:?}",
                         replan_start.elapsed()
                     );
+                    let _ = tx.send(RunProgress::WorkerReady {
+                        run_count: plan.sub_tasks.len(),
+                        route: TaskRoute::SingleWorker.label().to_string(),
+                    });
                     break;
                 }
                 apply_conversation_policy(top_task, &mut plan);
@@ -1871,6 +1875,7 @@ mod tests {
         let mut saw_critique = false;
         let mut saw_replan_fallback = false;
         let mut saw_route_update = false;
+        let mut saw_worker_ready = false;
         let mut saw_review = false;
         let mut saw_done = false;
         while let Ok(event) = rx.try_recv() {
@@ -1895,6 +1900,9 @@ mod tests {
                     saw_route_update |= route == "single-worker"
                         && reason == "replan fallback; downgraded to single worker";
                 }
+                RunProgress::WorkerReady { run_count, route } => {
+                    saw_worker_ready = run_count == 1 && route == "single-worker";
+                }
                 RunProgress::Reviewing { .. }
                 | RunProgress::ReviewResult { .. }
                 | RunProgress::ReviewSkipped { .. }
@@ -1908,6 +1916,10 @@ mod tests {
         assert!(saw_critique, "critic rejection should be visible once");
         assert!(saw_replan_fallback, "expected replan soft fallback warning");
         assert!(saw_route_update, "expected visible route downgrade");
+        assert!(
+            saw_worker_ready,
+            "soft replan fallback should show worker-ready before execution"
+        );
         assert!(!saw_review, "soft replan fallback should skip reviewer");
         assert!(saw_done, "pipeline should complete through worker output");
     }
