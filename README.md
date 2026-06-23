@@ -28,7 +28,7 @@ tiffany-loop orchestration mode
 
 `tiffany-loop` lets you run multiple AI coding agents (Claude Code, Codex CLI runtimes, or any LLM) **in parallel, with shared context, and with adversarial review** - all from a single CLI, terminal chat, or ACP client.
 
-The core idea: each "agent" is just a CLI subprocess (or a direct API call) wrapped in a common adapter. A planner decomposes your high-level task into sub-tasks, a critic red-teams the plan, workers execute in parallel, a reviewer gates implementation results, and every agent's session is logged and shared with future agents. Tiffany routes each turn before execution: greetings/explanations/simple Q&A collapse to a direct worker answer, external links or atomic research/scaffold tasks run as a single worker, and implementation work uses the full planner → critic → worker → reviewer pipeline.
+The core idea: each "agent" is just a CLI subprocess (or a direct API call) wrapped in a common adapter. A planner decomposes implementation work into worker runs, a critic red-teams the plan, workers execute in parallel, a reviewer gates implementation results, and every agent's session is logged and shared with future agents. Tiffany routes each turn before execution: greetings/explanations/simple Q&A collapse to a direct worker answer, external links or atomic research/scaffold tasks run as a single worker, and implementation work uses the full planner → critic → worker → reviewer pipeline.
 
 It's designed for software engineering tasks where:
 - You want **multiple AI agents** to collaborate, not just one
@@ -155,8 +155,8 @@ Providers: **Anthropic**, **OpenAI**, **Google Gemini**, **Ollama** (local), or 
 3. Adapter layer        ModelProvider + WorkerRuntime — config-driven
 4. Shared state         SQLite task queue + git worktree pool
 4.5 Session log         JSONL + SQLite index — injected into new agents
-5. Orchestrator core    Plan → Critique → Route → Execute → Review
-                       (conversational turns direct-answer and skip review)
+5. Orchestrator core    Route → direct/single worker, or full Plan → Critique → Execute → Review
+                       (conversational turns never enter planner/critic/reviewer)
 6. Observability        terminal chat + structured JSON logs
 7. Entry layer          CLI / terminal chat / ACP / webhook (axum)
 ```
@@ -168,42 +168,37 @@ Providers: **Anthropic**, **OpenAI**, **Google Gemini**, **Ollama** (local), or 
                   └───────┬───────┘
                           ▼
               ┌─────────────────────┐
-              │ 0a. Plan (LLM)      │  decomposes into sub-tasks
+              │ 0. Route            │  direct / single / full
               └──────────┬──────────┘
                          ▼
-              ┌─────────────────────┐
-              │ 0b. Critique (LLM)  │  red-teams, forces re-plan on reject
-              └──────────┬──────────┘
-                         ▼
-              ┌─────────────────────┐
-              │ 1. Route            │  CLI flag > task tag > config default
-              └──────────┬──────────┘
-                         ▼
-       ┌─────────────────┴─────────────────┐
-       ▼                                   ▼
-   ┌────────┐                          ┌────────┐
-   │2a. CC  │                          │2b. Codex CLI│
-   │Agent   │                          │subproc │
-   │Teams   │                          │        │
-   └────┬───┘                          └───┬────┘
-        └─────────────────┬───────────────┘
+       ┌───────────────┬────────────────────┬────────────────┐
+       ▼               ▼                    ▼                │
+ ┌───────────┐   ┌──────────────┐    ┌──────────────┐       │
+ │ direct    │   │ single       │    │ full         │       │
+ │ worker    │   │ worker       │    │ plan + critic│       │
+ └─────┬─────┘   └──────┬───────┘    └──────┬───────┘       │
+       │                │                   ▼               │
+       │                │            ┌──────────────┐        │
+       │                │            │ workers      │ CC/Codex/direct
+       │                │            └──────┬───────┘        │
+       │                │                   ▼               │
+       │                │            ┌──────────────┐        │
+       │                │            │ review       │ implementation only
+       │                │            └──────┬───────┘        │
+       └────────────────┴───────────────────┴────────────────┘
                           ▼
-              ┌─────────────────────┐
-              │ 0c. Review (LLM)    │  gates implementation results
-              └──────────┬──────────┘
-                         ▼
-                    merged
-                         │
-                         ▼
-       Layer 4.5: Session log (consumed by next agent)
+                    answer/result
+                          │
+                          ▼
+        Layer 4.5: Session log (consumed by next agent)
 ```
 
 Conversational or explanatory prompts are intentionally treated as direct-answer
 turns. External links, research prompts, diagnostics, and scaffolding can run as
-a single-worker flow. Both paths still emit route/worker/run events for
-transparency; review is recorded as `review skipped · <task> · conversational
-answer` or `review skipped · <task> · single worker route` instead of forcing a
-code-review style rejection.
+a single-worker flow. Both paths still emit route/worker/run/done events for
+transparency, but they do not invoke planner, critic, or reviewer. Implementation
+work is the only route that runs the full planner → critic → worker → reviewer
+pipeline.
 
 ### 3-tier role resolution
 
@@ -227,8 +222,8 @@ All injected as system-prompt sections, in priority order: **AGENTS.md > CLAUDE.
 ### Terminal Chat
 
 - The active UI direction is the full tiffany-loop UI under `tiffany-ui/`.
-- `tiffany-loop "..."` streams planner, critic, worker, reviewer, and final-result events into tiffany-loop history cells.
-- Conversational turns are shown as direct worker answers with a visible `review skipped` event; JSONL event streams include `status: "skipped"` and `reason: "conversational answer"` for UI adapters and scripts.
+- `tiffany-loop "..."` streams route, planner/critic when used, worker, reviewer when used, and final-result events into tiffany-loop history cells.
+- Conversational turns are shown as direct worker answers with route/worker/done events only. Older session logs may still contain `review skipped` compatibility events.
 - In orchestrator mode, the tiffany-loop input box submits follow-up prompts to the orchestrator adapter instead of the normal tiffany-loop model turn.
 - The legacy runner keeps a single conversation view with normal terminal scrollback.
 - Native text selection, copy, paste, and mouse scrolling are handled by your terminal.
@@ -495,7 +490,7 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `orchestrator run "..."` | Run a task (with optional `--planner`, `--critic`, `--worker`, `--agent`, `--reviewer`, `--tag`, `--ab`, `--no-critic`, `--no-reviewer`) |
 | `orchestrator run "..." --detach` | Run a task in the background and write a readable event log under `~/.orchestrator/runs/` |
 | `orchestrator attach [id|prefix|last]` | Print the latest detached run status and log tail |
-| `orchestrator events "..."` | Stream progress events; default JSONL is stable for UI adapters/scripts (`review skipped` events include a structured `reason`), `--format text` prints a readable direct/single/full waterfall |
+| `orchestrator events "..."` | Stream progress events; default JSONL is stable for UI adapters/scripts, `--format text` prints a readable direct/single/full waterfall |
 | `orchestrator config provider` | Open the guided provider selector |
 | `orchestrator config provider setup <provider>` | Configure a provider from built-in presets |
 | `orchestrator config provider delete <provider>` | Delete one configured provider |

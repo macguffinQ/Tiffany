@@ -11,17 +11,17 @@ and `tiffany` for compatibility.
 3. **Adapter layer** — `WorkerAdapter` trait + 3 implementations (CC, Codex, direct)
 4. **Shared state** — SQLite task queue + git worktree pool
 4.5. **Session log** — JSONL per session + SQLite index; new agents can read prior sessions
-5. **Orchestrator core** — Plan → Critique → Route → Execute → Review pipeline; conversational turns collapse to direct worker answers and emit a structured review-skipped event
+5. **Orchestrator core** — route every turn to direct worker, single worker, or full Plan → Critique → Execute → Review
 6. **Observability** — terminal chat + structured JSON logs (tracing)
 7. **Entry layer** — CLI (clap) / terminal chat / ACP / webhook (axum)
 
 ## 6 Roles
 
-- **Planner** (default: Codex via direct API or CLI) — decomposes a task into a DAG
+- **Planner** (default: Codex via direct API or CLI) — decomposes full-pipeline implementation work into a DAG
 - **Critic** (default: CC) — red-teams the plan, forces re-plan on rejection
 - **Router** (built-in) — 3-tier resolution: CLI flag > task tag > config default
-- **Worker** (CC / Codex / direct) — executes a sub-task
-- **Reviewer** (default: Codex cheap model) — gates implementation worker output before merge; conversational/explanatory turns skip review with a recorded reason
+- **Worker** (CC / Codex / direct) — executes a routed worker run or one planned DAG task
+- **Reviewer** (default: Codex cheap model) — gates implementation worker output before merge; direct and single-worker routes do not invoke it
 - **A/B Judge** (built-in) — picks a winner from two configured worker-route runs using success status, diff size, and session-log size fallback
 
 ## Pipeline
@@ -29,26 +29,31 @@ and `tiffany` for compatibility.
 ```
 User task
    ↓
-0a. Plan (Planner)
-   ↓
-0b. Critique (Critic)  ← reject → loop to 0a
-   ↓
-1.  Route (Router)
-   ↓
-2.  Workers (CC + Codex, parallel via DAG)
-   ↓
-0c. Review (Reviewer)  ← reject → loop to 2
-   ↓
-   Merge
+0. Route classifier
+   ├─ direct-answer → one worker answer
+   ├─ single-worker → one worker run
+   └─ full-pipeline
+        ↓
+     1a. Plan (Planner)
+        ↓
+     1b. Critique (Critic) ← reject → loop to 1a
+        ↓
+     2.  Workers (CC + Codex + direct, parallel via DAG)
+        ↓
+     3.  Review (Reviewer) ← implementation results only
+        ↓
+     Result
    ↓
 4.5. Session log (consumed by next agent)
 ```
 
 Conversational prompts such as greetings, simple Q&A, or explanations still
-produce run events, but the planner output is collapsed to one direct worker
-task and the reviewer phase emits `ReviewSkipped { reason: "conversational answer" }`.
-The JSONL event bridge serializes that as `status: "skipped"` plus a structured
-`reason` field so UI adapters do not need to parse the message string.
+produce run events, but they route directly to one worker answer and do not
+invoke planner, critic, or reviewer. External links, research, diagnostics, and
+scaffolding can route to a single worker with the same route/worker/done
+visibility. Only implementation work runs the full planner → critic → worker →
+reviewer path. Older session logs may contain `ReviewSkipped` events from the
+previous routing model; UI code keeps those readable for compatibility.
 
 ## Configuration
 

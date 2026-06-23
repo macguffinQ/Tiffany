@@ -24,21 +24,20 @@ tiffany-loop orchestration mode
 
 ## 这是什么？
 
-`tiffany-loop` 用来把多个 AI 编程智能体组织成一条可观察、可审查、可追踪的工作流。你输入一个问题，它可以通过配置好的角色完成规划、批评、执行和复核。问候、解释、普通问答这类对话轮不会被强行按代码审查处理，而是收敛为直接 worker 回答，并记录带结构化原因的 `review skipped` 事件。
+`tiffany-loop` 用来把多个 AI 编程智能体组织成一条可观察、可审查、可追踪的工作流。你输入一个问题，它会先选择 direct、single 或 full flow：问候、解释、普通问答收敛为直接 worker 回答，链接/调研/诊断/脚手架类原子任务走单 worker，当前工程实现类任务才进入完整规划、批评、执行和复核流程。
 
 核心流程是：
 
 ```text
 用户任务
-  -> Planner 规划任务
-  -> Critic 批评/反驳计划
-  -> Router 选择执行角色
-  -> Worker 并行执行
-  -> Reviewer 复核工程结果
+  -> Router 选择 direct / single / full
+  -> direct: 直接 worker 回答
+  -> single: 单 worker 执行原子任务
+  -> full: Planner 规划 -> Critic 批评 -> Worker 执行 -> Reviewer 复核
   -> 输出最终结果并记录会话
 ```
 
-每次输入会先选择 `direct`、`single` 或 `full` flow：对话/解释类输入走 direct，外部链接、调研、诊断和脚手架类原子任务走 single，当前工程实现类输入走 full。direct 和 single 仍会展示 route/worker/run 过程，方便观察和回放；review 阶段会显示为 `review skipped · <task> · conversational answer` 或 `review skipped · <task> · single worker route`，避免把正常聊天或不可拆分任务误判成“没有实际工作”。
+每次输入会先选择 `direct`、`single` 或 `full` flow：对话/解释类输入走 direct，外部链接、调研、诊断和脚手架类原子任务走 single，当前工程实现类输入走 full。direct 和 single 仍会展示 route/worker/run/done 过程，方便观察和回放，但不会调用 planner、critic 或 reviewer；只有 full flow 才执行完整 planner → critic → worker → reviewer。
 
 它适合这些场景：
 
@@ -141,8 +140,8 @@ tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.
 - **多运行时**：Claude Code、Codex CLI、直接 API。
 - **多模型/多提供商**：Anthropic、OpenAI、Google Gemini、Ollama、本地或 OpenAI 兼容端点。
 - **终端 TUI**：主线切到完整 tiffany-loop UI；旧 `orchestrator tui` 仅保留兼容。
-- **tiffany-loop 原生事件流**：`tiffany-loop "..."` 把 planner、critic、worker、reviewer 和最终结果写入 tiffany-loop history cell。
-- **对话直答策略**：问候、解释、普通问答会直接给出 worker 回答，并以 `review skipped` 记录跳过复核原因。
+- **tiffany-loop 原生事件流**：`tiffany-loop "..."` 把 route、实际用到的 planner/critic、worker、实际用到的 reviewer 和最终结果写入 tiffany-loop history cell。
+- **对话直答策略**：问候、解释、普通问答会直接给出 worker 回答，只展示 route/worker/done 过程；旧 session 日志中可能仍有 `review skipped` 兼容事件。
 - **原生多轮编排**：在 orchestrator mode 下，tiffany-loop 输入框提交会被路由到 orchestrator adapter，不再走普通 tiffany-loop 模型回合。
 - **过程透明**：灰色滚动展示运行过程，`/o` 可折叠或展开后续过程详情。
 - **最终结果清晰**：最终输出为纯文本结果块，方便选中复制；`/result` 可重新输出完整结果。
@@ -381,7 +380,7 @@ behavior:
 | `orchestrator run "..."` | 执行一个任务；`--worker` 选择 worker 路线，`--agent` 选择 Claude Code 子 agent，`--ab` 会比较两个已配置 worker 路线 |
 | `orchestrator run "..." --detach` | 后台执行任务，并把可读事件日志写到 `~/.orchestrator/runs/` |
 | `orchestrator attach [id|prefix|last]` | 查看最近或指定后台任务的状态和日志尾部 |
-| `orchestrator events "..."` | 流式输出进度事件；默认 JSONL 给 UI adapter/脚本使用（`review skipped` 会带结构化 `reason` 字段），`--format text` 输出可读的 direct/single/full 瀑布流 |
+| `orchestrator events "..."` | 流式输出进度事件；默认 JSONL 给 UI adapter/脚本使用，`--format text` 输出可读的 direct/single/full 瀑布流 |
 | `orchestrator config provider setup <provider>` | 按预设配置 provider |
 | `orchestrator config provider list|presets` | 查看 provider 配置或内置预设 |
 | `orchestrator roles list` | 查看已注册角色 |
