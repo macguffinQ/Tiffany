@@ -131,6 +131,12 @@ fn status_context_segments(input: &InputState, active: bool) -> Vec<String> {
     if input.run_review_issue_count > 0 {
         segments.push(format!("review {} issue(s)", input.run_review_issue_count));
     }
+    if input.run_review_unavailable_count > 0 {
+        segments.push(format!(
+            "review unavailable {}",
+            input.run_review_unavailable_count
+        ));
+    }
     if input.run_worker_failure_count > 0 {
         segments.push(format!("worker {} failed", input.run_worker_failure_count));
     }

@@ -67,6 +67,8 @@ pub(super) struct InputState {
     pub(super) last_test_status: Option<String>,
     /// Number of reviewer issue reports seen in the active run.
     pub(super) run_review_issue_count: usize,
+    /// Number of reviewer control failures seen in the active run.
+    pub(super) run_review_unavailable_count: usize,
     /// Number of worker failures seen in the active run.
     pub(super) run_worker_failure_count: usize,
     /// Output summaries already shown in the terminal for this run.

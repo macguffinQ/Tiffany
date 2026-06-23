@@ -85,6 +85,7 @@ impl RunController {
         input.run_final_output = None;
         input.run_last_worker_output = None;
         input.run_review_issue_count = 0;
+        input.run_review_unavailable_count = 0;
         input.run_worker_failure_count = 0;
         input.run_visible_output_keys.clear();
         input.run_visible_status_keys.clear();
@@ -264,14 +265,17 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
             }
         }
         RunProgress::ReviewUnavailable { .. } => {
-            input.run_review_issue_count += 1;
+            input.run_review_unavailable_count += 1;
         }
         RunProgress::Done { task_count } => {
             let review_issues = input.run_review_issue_count;
+            let review_unavailable = input.run_review_unavailable_count;
             let worker_failures = input.run_worker_failure_count;
             let completion_detail = completion_detail(input, task_count, worker_failures);
             input.current_stage = if review_issues > 0 {
                 "Review needs fixes".into()
+            } else if review_unavailable > 0 && worker_failures == 0 {
+                "Done; review unavailable".into()
             } else if worker_failures > 0 && task_count == 0 {
                 "Worker failed".into()
             } else if worker_failures > 0 {
@@ -281,6 +285,11 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
             };
             input.current_stage_detail = if review_issues > 0 {
                 format!("{completion_detail}, {} review issue(s)", review_issues)
+            } else if review_unavailable > 0 {
+                format!(
+                    "{completion_detail}, {} review unavailable",
+                    review_unavailable
+                )
             } else if worker_failures > 0 && task_count == 0 {
                 format!("{completion_detail}, {worker_failures} worker failure(s)")
             } else if worker_failures > 0 {
@@ -297,7 +306,8 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
                 .rev()
                 .find(|msg| msg.role == "assistant")
             {
-                last.status = if review_issues > 0 || worker_failures > 0 {
+                last.status = if review_issues > 0 || review_unavailable > 0 || worker_failures > 0
+                {
                     "warning".into()
                 } else {
                     "complete".into()
@@ -309,6 +319,11 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
                     last.content = no_completed_message.clone();
                 } else if review_issues > 0 {
                     last.content = format_done_with_review_issues_message(final_output.as_deref());
+                } else if review_unavailable > 0 {
+                    last.content = format_done_with_review_unavailable_message(
+                        final_output.as_deref(),
+                        review_unavailable,
+                    );
                 } else {
                     last.content = format_done_message(final_output.as_deref());
                 }
@@ -486,6 +501,18 @@ fn format_done_message(final_output: Option<&str>) -> String {
 
 fn format_done_with_review_issues_message(final_output: Option<&str>) -> String {
     format_completion_notice("⚠ completed with review issues", final_output)
+}
+
+fn format_done_with_review_unavailable_message(final_output: Option<&str>, count: usize) -> String {
+    let mut out = format_completion_notice("✓ done · review unavailable", final_output);
+    let review = if count == 1 {
+        "Reviewer control check was unavailable; worker output was kept."
+    } else {
+        "Reviewer control checks were unavailable; worker output was kept."
+    };
+    out.push('\n');
+    out.push_str(review);
+    out
 }
 
 fn completion_detail(input: &InputState, task_count: usize, worker_failures: usize) -> String {
@@ -921,6 +948,59 @@ mod tests {
         handle_run_event(RunProgress::Done { task_count: 1 }, &mut input);
 
         assert_eq!(input.current_stage_detail, "answer complete");
+    }
+
+    #[test]
+    fn review_unavailable_completion_keeps_worker_result() {
+        let mut input = InputState {
+            run_route: Some("full-pipeline".into()),
+            ..InputState::default()
+        };
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: "thinking...".into(),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        let task_id = uuid::Uuid::nil();
+        handle_run_event(
+            RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                content: r#"claude-code result: {"result":"implemented orchestration flow"}"#
+                    .into(),
+            },
+            &mut input,
+        );
+        handle_run_event(
+            RunProgress::ReviewUnavailable {
+                task_id,
+                message: "no JSON found in CLI response".into(),
+            },
+            &mut input,
+        );
+        handle_run_event(RunProgress::Done { task_count: 1 }, &mut input);
+
+        let msg = input.transcript.last().expect("assistant message");
+        assert_eq!(input.current_stage, "Done; review unavailable");
+        assert_eq!(
+            input.current_stage_detail,
+            "1 worker run completed, 1 review unavailable"
+        );
+        assert_eq!(input.run_review_issue_count, 0);
+        assert_eq!(input.run_review_unavailable_count, 1);
+        assert_eq!(msg.status, "warning");
+        assert!(msg.content.contains("✓ done · review unavailable"));
+        assert!(msg.content.contains("Result captured."));
+        assert!(msg.content.contains("worker output was kept"));
+        assert!(!msg.content.contains("completed with review issues"));
+        assert!(!msg.content.contains("needs fixes"));
+        assert_eq!(
+            input.last_result_output.as_deref(),
+            Some("implemented orchestration flow")
+        );
     }
 
     #[test]

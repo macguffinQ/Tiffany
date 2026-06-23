@@ -116,14 +116,14 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
                     "passed", task_id, None,
                 )))
             } else {
-                Some(running(format_review_lifecycle_line(
+                Some(warning(format_review_lifecycle_line(
                     "needs fixes",
                     task_id,
                     Some(format!("{issues} issue(s)")),
                 )))
             }
         }
-        RunProgress::ReviewUnavailable { task_id, message } => Some(running(
+        RunProgress::ReviewUnavailable { task_id, message } => Some(warning(
             format_review_lifecycle_line("unavailable", task_id, Some(message.clone())),
         )),
         RunProgress::Failed(message) => Some(error(format!("error — {message}"))),
@@ -524,6 +524,30 @@ mod tests {
         assert_eq!(review.stage, "review: needs fixes · 00000000 · 2 issue(s)");
         assert_eq!(review.detail, "");
         assert_eq!(review.assistant_update, None);
+
+        let needs_fixes = progress_history_view(&RunProgress::ReviewResult {
+            task_id,
+            approved: false,
+            issues: 2,
+        })
+        .expect("review needs fixes history");
+        assert_eq!(needs_fixes.icon, "⚠");
+        assert_eq!(needs_fixes.tone, ProgressTone::Running);
+        assert_eq!(
+            needs_fixes.line,
+            "review  needs fixes · 00000000 · 2 issue(s)"
+        );
+
+        let unavailable = progress_history_view(&RunProgress::ReviewUnavailable {
+            task_id,
+            message: "no JSON found".into(),
+        })
+        .expect("review unavailable history");
+        assert_eq!(unavailable.icon, "⚠");
+        assert_eq!(
+            unavailable.line,
+            "review  unavailable · 00000000 · no JSON found"
+        );
 
         let skipped = progress_history_view(&RunProgress::ReviewSkipped {
             task_id,
