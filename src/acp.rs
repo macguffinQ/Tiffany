@@ -2057,8 +2057,7 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
 }
 
 fn format_acp_route_progress(route: &str, reason: &str) -> String {
-    let parsed_route = agent_events::OrchestrationRoute::from_label(route)
-        .or_else(|| agent_events::OrchestrationRoute::from_reason(reason));
+    let parsed_route = agent_events::OrchestrationRoute::from_label_or_reason(route, reason);
     match parsed_route {
         Some(route) => format!(
             "Route selected: {} · {} · {}.",

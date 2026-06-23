@@ -272,8 +272,7 @@ fn route_selected_event(route: String, reason: String) -> TiffanyProgressEvent {
 }
 
 fn route_metadata(route: &str, reason: &str) -> Option<agent_events::OrchestrationRoute> {
-    agent_events::OrchestrationRoute::from_label(route)
-        .or_else(|| agent_events::OrchestrationRoute::from_reason(reason))
+    agent_events::OrchestrationRoute::from_label_or_reason(route, reason)
 }
 
 #[derive(Default)]

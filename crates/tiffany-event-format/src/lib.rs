@@ -144,6 +144,10 @@ impl OrchestrationRoute {
             .find(|route| route.reason() == reason)
     }
 
+    pub fn from_label_or_reason(label: &str, reason: &str) -> Option<Self> {
+        Self::from_label(label).or_else(|| Self::from_reason(reason))
+    }
+
     pub fn short_reason_label(self) -> &'static str {
         match self {
             Self::DirectAnswer => "chat/explain",
@@ -2469,6 +2473,24 @@ mod tests {
             Some(OrchestrationRoute::FullPipeline)
         );
         assert_eq!(OrchestrationRoute::from_reason("custom reason"), None);
+        assert_eq!(
+            OrchestrationRoute::from_label_or_reason(
+                "single-worker",
+                OrchestrationRoute::FullPipeline.reason()
+            ),
+            Some(OrchestrationRoute::SingleWorker)
+        );
+        assert_eq!(
+            OrchestrationRoute::from_label_or_reason(
+                "custom",
+                OrchestrationRoute::FullPipeline.reason()
+            ),
+            Some(OrchestrationRoute::FullPipeline)
+        );
+        assert_eq!(
+            OrchestrationRoute::from_label_or_reason("custom", "custom reason"),
+            None
+        );
         assert_eq!(
             OrchestrationRoute::DirectAnswer.short_reason_label(),
             "chat/explain"

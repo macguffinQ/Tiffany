@@ -1012,9 +1012,7 @@ fn route_selected_payload(route: &str, reason: &str) -> serde_json::Value {
         "reason": reason,
     });
 
-    if let Some(metadata) = agent_events::OrchestrationRoute::from_label(route)
-        .or_else(|| agent_events::OrchestrationRoute::from_reason(reason))
-    {
+    if let Some(metadata) = agent_events::OrchestrationRoute::from_label_or_reason(route, reason) {
         payload["route_label"] = metadata.display_label().into();
         payload["route_reason_label"] = metadata.short_reason_label().into();
         payload["flow_steps"] = metadata.flow_steps().into();

@@ -186,8 +186,8 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
 
     match event {
         RunProgress::RouteSelected { route, reason } => {
-            let parsed_route = crate::agent_events::OrchestrationRoute::from_label(&route)
-                .or_else(|| crate::agent_events::OrchestrationRoute::from_reason(&reason));
+            let parsed_route =
+                crate::agent_events::OrchestrationRoute::from_label_or_reason(&route, &reason);
             input.run_route_label = parsed_route.map(|route| route.display_label().to_string());
             input.run_route_reason_label =
                 parsed_route.map(|route| route.short_reason_label().to_string());
