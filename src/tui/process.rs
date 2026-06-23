@@ -933,6 +933,7 @@ fn process_route_reason_from_events(events: &[&String]) -> Option<String> {
 
 fn route_event_parts_from_events(events: &[&String]) -> Option<RouteEventParts> {
     let mut preview = None;
+    let mut backend = None;
     for line in events {
         let Some(parts) = route_event_parts(line) else {
             continue;
@@ -940,10 +941,10 @@ fn route_event_parts_from_events(events: &[&String]) -> Option<RouteEventParts> 
         if parts.preview {
             preview = Some(parts);
         } else {
-            return Some(parts);
+            backend = Some(parts);
         }
     }
-    preview
+    backend.or(preview)
 }
 
 struct RouteEventParts {
@@ -974,8 +975,17 @@ fn route_event_parts(line: &str) -> Option<RouteEventParts> {
         });
     }
 
-    let route = parts.first().copied().map(str::to_string);
-    let reason = parts.get(1).copied().map(str::to_string);
+    let (route, reason) = if matches!(parts.first().copied(), Some("selected" | "updated")) {
+        (
+            parts.get(1).copied().map(str::to_string),
+            parts.get(2).copied().map(str::to_string),
+        )
+    } else {
+        (
+            parts.first().copied().map(str::to_string),
+            parts.get(1).copied().map(str::to_string),
+        )
+    };
     Some(RouteEventParts {
         route,
         reason,
@@ -1824,6 +1834,25 @@ mod tests {
         assert!(formatted.contains("flow route: full"));
         assert!(formatted.contains("flow reason: implementation"));
         assert!(!formatted.contains("flow route: single"));
+    }
+
+    #[test]
+    fn process_summary_prefers_route_update_over_initial_backend_route() {
+        let mut input = InputState::default();
+        input.run_events = vec![
+            "10:00:00  start  task accepted · optimize orchestration".into(),
+            "10:00:00  route  preview · full · implementation · planner -> critic -> worker -> reviewer -> answer".into(),
+            "10:00:01  route  full-pipeline · project or implementation work; planner, critic, worker, and reviewer will run".into(),
+            "10:00:02  route  updated · single-worker · planner unavailable; downgraded to single worker".into(),
+        ];
+
+        let formatted = format_process_summary(&input);
+
+        assert!(formatted.contains("flow: worker -> answer"));
+        assert!(formatted.contains("flow route: single"));
+        assert!(formatted.contains("flow reason: planner unavailable; downgraded to single worker"));
+        assert!(!formatted.contains("flow route: updated"));
+        assert!(!formatted.contains("flow route: full"));
     }
 
     #[test]
