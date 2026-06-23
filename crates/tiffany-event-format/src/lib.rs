@@ -376,6 +376,23 @@ const CONTINUATION_ACTION_MARKERS: &[&str] = &[
     "next step",
 ];
 
+const CONFIRMATION_CONTINUATIONS: &[&str] = &[
+    "好",
+    "好啊",
+    "好的",
+    "可以",
+    "可以啊",
+    "行",
+    "行啊",
+    "做",
+    "做吧",
+    "做啊",
+    "ok",
+    "okay",
+    "go ahead",
+    "do it",
+];
+
 const FULL_PIPELINE_CONTEXT_MARKERS: &[&str] = &[
     "当前工程",
     "这个工程",
@@ -444,12 +461,11 @@ pub fn classify_orchestration_route(text: &str) -> OrchestrationRoute {
     let context_lower = contextual_history(text).to_lowercase();
     let has_full_context = has_marker(&request_lower, FULL_PIPELINE_CONTEXT_MARKERS);
     let has_imperative_action = has_marker(&request_lower, IMPERATIVE_ACTION_MARKERS);
-    if has_marker(&request_lower, CONTINUATION_ACTION_MARKERS)
-        && has_marker(&context_lower, FULL_PIPELINE_CONTEXT_MARKERS)
-    {
+    let is_continuation = looks_like_continuation_request(request);
+    if is_continuation && has_marker(&context_lower, FULL_PIPELINE_CONTEXT_MARKERS) {
         return OrchestrationRoute::FullPipeline;
     }
-    if has_marker(&request_lower, CONTINUATION_ACTION_MARKERS) && !has_imperative_action {
+    if is_continuation && !has_imperative_action {
         return OrchestrationRoute::SingleWorker;
     }
     if looks_like_link_reference(request) {
@@ -501,6 +517,14 @@ fn looks_like_single_worker_request(request: &str) -> bool {
         return false;
     }
     !has_marker(&lower, FULL_PIPELINE_CONTEXT_MARKERS)
+}
+
+fn looks_like_continuation_request(request: &str) -> bool {
+    let lower = request.trim().to_lowercase();
+    has_marker(&lower, CONTINUATION_ACTION_MARKERS)
+        || CONFIRMATION_CONTINUATIONS
+            .iter()
+            .any(|marker| lower == *marker)
 }
 
 fn starts_with_imperative_action(lower: &str) -> bool {
@@ -2746,6 +2770,27 @@ Conversation context:\nuser:\n优化当前工程编排流程\n\nassistant:\nLast
         assert_eq!(
             classify_orchestration_route(continuation_with_project_history),
             OrchestrationRoute::FullPipeline
+        );
+
+        for confirmation in ["好啊", "可以啊", "行啊", "做吧", "ok", "go ahead"] {
+            let prompt = format!(
+                "Previous turns:\nuser:\n优化当前工程编排流程\n\nassistant result:\n下一步可以继续收敛流程。\n\n---\nCurrent user request:\n{confirmation}"
+            );
+            assert_eq!(
+                classify_orchestration_route(&prompt),
+                OrchestrationRoute::FullPipeline,
+                "{confirmation} should continue project work when project context exists"
+            );
+        }
+
+        let confirmation_without_project_history = "Previous turns:\nuser:\nhttps://www.kaggle.com/competitions/pokemon-tcg-ai-battle\n\nassistant result:\n可以继续研究比赛。\n\n---\nCurrent user request:\n好啊";
+        assert_eq!(
+            classify_orchestration_route(confirmation_without_project_history),
+            OrchestrationRoute::SingleWorker
+        );
+        assert_eq!(
+            classify_orchestration_route("你好"),
+            OrchestrationRoute::DirectAnswer
         );
 
         let crlf = "Previous turns:\r\nuser:\r\nfix the build\r\n\r\n---\r\nCurrent user request:\r\n你能干啥\r\n";

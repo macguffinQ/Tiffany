@@ -148,6 +148,17 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             classify_task_route(&Task::new(prompt)),
             TaskRoute::FullPipeline
         );
+
+        for confirmation in ["好啊", "可以啊", "做吧", "go ahead"] {
+            let prompt = format!(
+                "Previous turns:\nuser:\n优化 tiffany-loop 编排流程\n\nassistant result:\n下一步继续做。\n\n---\nCurrent user request:\n{confirmation}"
+            );
+            assert_eq!(
+                classify_task_route(&Task::new(prompt)),
+                TaskRoute::FullPipeline,
+                "{confirmation} should continue project work"
+            );
+        }
     }
 
     #[test]
