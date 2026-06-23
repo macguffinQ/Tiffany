@@ -11,6 +11,11 @@ All notable changes to this project will be documented in this file.
   guidance.
 - Repointed user-visible fork runtime help links for sandbox, config, MCP,
   memories, and Windows sandbox prompts to Tiffany documentation.
+- Routed conversational requests directly to worker execution, skipping
+  planner, critic, and reviewer noise while keeping full orchestration for
+  engineering tasks.
+- Surfaced non-zero planner/critic/reviewer CLI exits with stderr context so
+  runtime, model, and permission failures are explicit in the TUI.
 
 ## [0.1.25] - 2026-06-22
 

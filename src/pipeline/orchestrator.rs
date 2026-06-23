@@ -11,7 +11,9 @@ use crate::roles::critic::Critic;
 use crate::roles::planner::Planner;
 use crate::roles::reviewer::Reviewer;
 use crate::roles::router::CapabilityRouter;
-use crate::task_policy::{apply_conversation_policy, should_skip_review_for_task};
+use crate::task_policy::{
+    apply_conversation_policy, is_conversational_task, should_skip_review_for_task,
+};
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -210,6 +212,12 @@ impl Orchestrator {
         tx: UnboundedSender<RunProgress>,
         orchestration_session_id: Option<Uuid>,
     ) -> Result<Vec<Task>> {
+        if is_conversational_task(top_task) {
+            return self
+                .run_direct_conversation(top_task, tx, orchestration_session_id)
+                .await;
+        }
+
         // 1. Plan
         let _ = tx.send(RunProgress::Planning);
         tracing::info!("planning task: {}", top_task.prompt);
@@ -411,6 +419,37 @@ impl Orchestrator {
             task_count: completed.len(),
         });
         tracing::info!("→ Pipeline done: {} tasks", completed.len());
+        Ok(completed)
+    }
+
+    async fn run_direct_conversation(
+        &self,
+        top_task: &Task,
+        tx: UnboundedSender<RunProgress>,
+        orchestration_session_id: Option<Uuid>,
+    ) -> Result<Vec<Task>> {
+        tracing::info!("→ Direct conversation route: {}", top_task.prompt);
+        let mut plan = crate::core::types::PlanOutput {
+            sub_tasks: Vec::new(),
+            rationale: String::new(),
+            estimated_cost_usd: 0.0,
+        };
+        apply_conversation_policy(top_task, &mut plan);
+        apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
+        attach_parent_session(orchestration_session_id, &mut plan.sub_tasks);
+
+        let tasks = plan.sub_tasks;
+        let _ = tx.send(RunProgress::Executing {
+            sub_task_count: tasks.len(),
+        });
+        let completed = self
+            .execute_dag(tasks, tx.clone())
+            .await
+            .context("executing direct conversation task")?;
+        let _ = tx.send(RunProgress::Done {
+            task_count: completed.len(),
+        });
+        tracing::info!("→ Direct conversation done: {} task(s)", completed.len());
         Ok(completed)
     }
 
@@ -1258,7 +1297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_with_progress_skips_reviewer_for_conversation() {
+    async fn run_with_progress_routes_conversation_directly_to_worker() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = Arc::new(
             SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
@@ -1298,18 +1337,29 @@ mod tests {
         assert_eq!(completed[0].tags, vec!["chat".to_string()]);
         assert!(completed[0].prompt.contains("User message:\n你好"));
 
-        let mut saw_review_skipped = false;
+        let mut saw_planning = false;
+        let mut saw_critic = false;
+        let mut saw_review = false;
+        let mut saw_executing = false;
         let mut saw_review_result = false;
         while let Ok(event) = rx.try_recv() {
             match event {
-                RunProgress::ReviewSkipped { reason, .. } => {
-                    saw_review_skipped = reason == "conversational answer";
-                }
+                RunProgress::Planning | RunProgress::Planned { .. } => saw_planning = true,
+                RunProgress::Critiquing { .. }
+                | RunProgress::CritiqueResult { .. }
+                | RunProgress::Replanning { .. } => saw_critic = true,
+                RunProgress::Reviewing { .. }
+                | RunProgress::ReviewSkipped { .. }
+                | RunProgress::ReviewUnavailable { .. } => saw_review = true,
+                RunProgress::Executing { .. } => saw_executing = true,
                 RunProgress::ReviewResult { .. } => saw_review_result = true,
                 _ => {}
             }
         }
-        assert!(saw_review_skipped, "expected visible review skipped event");
+        assert!(saw_executing, "expected direct worker execution event");
+        assert!(!saw_planning, "conversation should not invoke planner");
+        assert!(!saw_critic, "conversation should not invoke critic");
+        assert!(!saw_review, "conversation should not invoke reviewer");
         assert!(!saw_review_result, "reviewer should not produce a result");
     }
 

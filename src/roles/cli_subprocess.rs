@@ -24,7 +24,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{self, UnboundedSender};
 
 // ── Shared helper ──────────────────────────────────────────
 
@@ -155,10 +155,12 @@ async fn run_cli(
         .take()
         .ok_or_else(|| anyhow!("no stdout from {}", spec.binary))?;
 
+    let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
     if let Some(stderr) = child.stderr.take() {
         let role = role.to_string();
         let progress = progress.clone();
         let runtime = spec.runtime.label().to_string();
+        let stderr_tx = stderr_tx.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
@@ -173,9 +175,11 @@ async fn run_cli(
                     &role,
                     format!("{} stderr: {}", runtime, truncate_cli_text(&line, 220)),
                 );
+                let _ = stderr_tx.send(line);
             }
         });
     }
+    drop(stderr_tx);
 
     let starting = format!("{} starting model={}", spec.runtime.label(), spec.model);
     if !agent_events::is_low_value_output(&starting) {
@@ -189,7 +193,19 @@ async fn run_cli(
 
     match read {
         Ok(Ok(output)) => {
-            let _ = child.wait().await;
+            let status = child
+                .wait()
+                .await
+                .with_context(|| format!("waiting for {}", spec.binary))?;
+            let stderr = collect_stderr_lines(&mut stderr_rx);
+            if !status.success() {
+                return Err(anyhow!(
+                    "{} exited with status {}{}",
+                    spec.binary,
+                    status,
+                    stderr_error_suffix(&stderr)
+                ));
+            }
             let finished = format!("{} finished", spec.runtime.label());
             if !agent_events::is_low_value_output(&finished) {
                 emit_role_output(&progress, role, finished);
@@ -207,6 +223,27 @@ async fn run_cli(
             ))
         }
     }
+}
+
+fn collect_stderr_lines(stderr_rx: &mut mpsc::UnboundedReceiver<String>) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Ok(line) = stderr_rx.try_recv() {
+        lines.push(line);
+    }
+    lines
+}
+
+fn stderr_error_suffix(lines: &[String]) -> String {
+    let joined = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.trim())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if joined.is_empty() {
+        return String::new();
+    }
+    format!("; stderr: {}", truncate_cli_text(&joined, 500))
 }
 
 fn role_cli_command(spec: &RoleCliSpec, system_prompt: &str, user_prompt: &str) -> Command {
@@ -1121,6 +1158,18 @@ mod tests {
         assert!(!looks_like_cli_hard_error(
             "I cannot produce JSON, but the task is simple."
         ));
+    }
+
+    #[test]
+    fn stderr_error_suffix_keeps_actionable_cli_error() {
+        let suffix = stderr_error_suffix(&[
+            "".to_string(),
+            "error: unexpected argument '--cwd' found".to_string(),
+            "Usage: codex exec --cd <DIR> [PROMPT]".to_string(),
+        ]);
+
+        assert!(suffix.contains("stderr: error: unexpected argument '--cwd' found"));
+        assert!(suffix.contains("codex exec --cd"));
     }
 
     #[test]
