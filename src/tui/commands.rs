@@ -119,6 +119,10 @@ pub(super) fn handle_slash_command_with_runtime(
                 push_system(input, copy_last_result(input));
                 return SlashAction::None;
             }
+            if cmd == "copy" && args.is_empty() {
+                push_system(input, copy_command_missing_result_message());
+                return SlashAction::None;
+            }
             let target = if cmd == "save" {
                 "file"
             } else if matches!(args.first().copied(), Some("transcript" | "chat")) {
@@ -3754,6 +3758,10 @@ fn copy_command_targets_result(input: &InputState, args: &[&str]) -> bool {
     }
 }
 
+fn copy_command_missing_result_message() -> String {
+    "No final result captured yet.\nUse /copy transcript clipboard to copy the transcript, or /copy transcript file to save it.".into()
+}
+
 fn parse_session_export_target(
     value: &str,
 ) -> std::result::Result<SessionExportCommandTarget, String> {
@@ -4525,12 +4533,37 @@ behavior:
     }
 
     #[test]
-    fn copy_command_keeps_transcript_default_without_result() {
+    fn copy_command_requires_result_or_explicit_transcript_target() {
         let input = InputState::default();
 
         assert!(!copy_command_targets_result(&input, &[]));
         assert!(copy_command_targets_result(&input, &["result"]));
         assert!(!copy_command_targets_result(&input, &["transcript"]));
+        assert!(copy_command_missing_result_message().contains("/copy transcript clipboard"));
+    }
+
+    #[test]
+    fn copy_command_without_result_shows_guidance_not_transcript_export() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap(),
+        );
+        let cfg = Arc::new(test_config());
+        let mut input = InputState::default();
+        input.transcript.push(ChatMsg {
+            role: "user".into(),
+            content: "hello".into(),
+            ts: std::time::SystemTime::now(),
+            status: "complete".into(),
+        });
+
+        handle_slash_command("/copy", &store, &cfg, &mut input);
+
+        let msg = input.transcript.last().expect("copy response");
+        assert!(msg.content.contains("No final result captured yet"));
+        assert!(msg.content.contains("/copy transcript clipboard"));
+        assert!(!msg.content.contains("Saved"));
+        assert!(!msg.content.contains("Copied"));
     }
 
     #[test]
