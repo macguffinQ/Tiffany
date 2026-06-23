@@ -435,13 +435,16 @@ pub fn looks_like_direct_request(text: &str) -> bool {
 pub fn classify_orchestration_route(text: &str) -> OrchestrationRoute {
     let request = current_user_request(text);
     let request_lower = request.to_lowercase();
-    let full_prompt = text.to_lowercase();
+    let context_lower = contextual_history(text).to_lowercase();
     let has_full_context = has_marker(&request_lower, FULL_PIPELINE_CONTEXT_MARKERS);
     let has_imperative_action = has_marker(&request_lower, IMPERATIVE_ACTION_MARKERS);
     if has_marker(&request_lower, CONTINUATION_ACTION_MARKERS)
-        && has_marker(&full_prompt, FULL_PIPELINE_CONTEXT_MARKERS)
+        && has_marker(&context_lower, FULL_PIPELINE_CONTEXT_MARKERS)
     {
         return OrchestrationRoute::FullPipeline;
+    }
+    if has_marker(&request_lower, CONTINUATION_ACTION_MARKERS) && !has_imperative_action {
+        return OrchestrationRoute::SingleWorker;
     }
     if looks_like_link_reference(request) {
         if has_imperative_action && has_full_context {
@@ -524,6 +527,19 @@ pub fn current_user_request(text: &str) -> &str {
     } else {
         request
     }
+}
+
+fn contextual_history(text: &str) -> &str {
+    let before_request = text
+        .rfind("Current user request:")
+        .map(|idx| &text[..idx])
+        .unwrap_or(text);
+    for marker in ["Conversation context:", "Previous turns:"] {
+        if let Some(idx) = before_request.rfind(marker) {
+            return before_request[idx + marker.len()..].trim();
+        }
+    }
+    before_request.trim()
 }
 
 pub fn agent_failure_hint(content: &str, max: usize) -> Option<AgentFailureHint> {
@@ -2619,6 +2635,25 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         assert_eq!(
             classify_orchestration_route(link_followup),
             OrchestrationRoute::SingleWorker
+        );
+
+        let continuation_without_project_history = "You are continuing a multi-turn tiffany-loop orchestrator conversation.\n\
+Use the previous turns to resolve follow-ups.\n\n\
+Previous turns:\nuser:\nhttps://www.kaggle.com/competitions/pokemon-tcg-ai-battle\n\nassistant result:\n这个比赛信息需要进一步查看。\n\n---\nCurrent user request:\n继续";
+        assert_eq!(
+            current_user_request(continuation_without_project_history),
+            "继续"
+        );
+        assert_eq!(
+            classify_orchestration_route(continuation_without_project_history),
+            OrchestrationRoute::SingleWorker
+        );
+
+        let continuation_with_project_history = "You are continuing a multi-turn tiffany-loop orchestrator conversation.\n\
+Conversation context:\nuser:\n优化当前工程编排流程\n\nassistant:\nLast run result:\n已完成第一步。\n\n---\nCurrent user request:\n继续";
+        assert_eq!(
+            classify_orchestration_route(continuation_with_project_history),
+            OrchestrationRoute::FullPipeline
         );
 
         let crlf = "Previous turns:\r\nuser:\r\nfix the build\r\n\r\n---\r\nCurrent user request:\r\n你能干啥\r\n";

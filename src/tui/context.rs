@@ -341,8 +341,21 @@ fn assistant_context_content(content: &str) -> String {
 }
 
 fn is_result_capture_notice(content: &str) -> bool {
-    (content.starts_with("✓ done") || content.starts_with("⚠ completed with review issues"))
+    is_completion_notice_prefix(content)
         && (content.contains("Result captured.") || content.contains("No final text was emitted"))
+}
+
+fn is_completion_notice_prefix(content: &str) -> bool {
+    [
+        "✓ done",
+        "✓ answer complete",
+        "✓ worker complete",
+        "⚠ completed with review issues",
+        "✗ worker failed",
+        "✗ no worker result completed",
+    ]
+    .iter()
+    .any(|prefix| content.starts_with(prefix))
 }
 
 fn format_entries(entries: &[ContextEntry]) -> String {
@@ -422,6 +435,47 @@ mod tests {
         assert!(built.prompt.contains("assistant:\nLast run result:"));
         assert!(built.prompt.contains("implemented queue fixes"));
         assert!(!built.prompt.contains("Result captured. Use /result"));
+    }
+
+    #[test]
+    fn contextual_prompt_excludes_review_unavailable_completion_notice() {
+        let mut input = InputState {
+            last_result_output: Some("implemented orchestration flow".into()),
+            ..InputState::default()
+        };
+        input
+            .transcript
+            .push(msg("user", "complete", "优化编排流程"));
+        input.transcript.push(msg(
+            "assistant",
+            "warning",
+            "✓ done · review unavailable\n\nResult captured. Use /result to show it or /copy result to copy.\nDetails: /process 200\nReviewer control check was unavailable; worker output was kept.",
+        ));
+
+        let built = build_contextual_prompt(&mut input, "继续");
+
+        assert!(built.prompt.contains("user:\n优化编排流程"));
+        assert!(built.prompt.contains("assistant:\nLast run result:"));
+        assert!(built.prompt.contains("implemented orchestration flow"));
+        assert!(!built.prompt.contains("review unavailable"));
+        assert!(!built.prompt.contains("Result captured. Use /result"));
+    }
+
+    #[test]
+    fn contextual_prompt_excludes_empty_worker_completion_notice() {
+        let mut input = InputState::default();
+        input.transcript.push(msg("user", "complete", "运行一下"));
+        input.transcript.push(msg(
+            "assistant",
+            "complete",
+            "✓ worker complete\n\nNo final text was emitted by the worker.\nDetails: /process 200",
+        ));
+
+        let built = build_contextual_prompt(&mut input, "继续");
+
+        assert!(built.prompt.contains("user:\n运行一下"));
+        assert!(!built.prompt.contains("No final text was emitted"));
+        assert!(!built.prompt.contains("worker complete"));
     }
 
     #[test]
