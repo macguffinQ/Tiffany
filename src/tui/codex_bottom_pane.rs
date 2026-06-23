@@ -135,15 +135,9 @@ fn route_reason_label(reason: &str) -> String {
     if reason.is_empty() {
         return String::new();
     }
-    let label = match reason {
-        "simple conversational or explanatory request" => "chat/explain",
-        "atomic request; planner, critic, and reviewer are not needed" => "atomic worker",
-        "project or implementation work; planner, critic, worker, and reviewer will run" => {
-            "implementation"
-        }
-        other => other,
-    };
-    truncate_chars(label, 32)
+    crate::agent_events::OrchestrationRoute::from_reason(reason)
+        .map(|route| route.short_reason_label().to_string())
+        .unwrap_or_else(|| truncate_chars(reason, 32))
 }
 
 fn context_segment(input: &InputState) -> String {

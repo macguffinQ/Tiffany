@@ -138,6 +138,20 @@ impl OrchestrationRoute {
         }
     }
 
+    pub fn from_reason(reason: &str) -> Option<Self> {
+        [Self::DirectAnswer, Self::SingleWorker, Self::FullPipeline]
+            .into_iter()
+            .find(|route| route.reason() == reason)
+    }
+
+    pub fn short_reason_label(self) -> &'static str {
+        match self {
+            Self::DirectAnswer => "chat/explain",
+            Self::SingleWorker => "atomic worker",
+            Self::FullPipeline => "implementation",
+        }
+    }
+
     pub fn flow_steps(self) -> &'static str {
         match self {
             Self::DirectAnswer | Self::SingleWorker => "worker -> answer",
@@ -2442,6 +2456,31 @@ mod tests {
             Some(OrchestrationRoute::FullPipeline)
         );
         assert_eq!(OrchestrationRoute::from_label("custom"), None);
+        assert_eq!(
+            OrchestrationRoute::from_reason(OrchestrationRoute::DirectAnswer.reason()),
+            Some(OrchestrationRoute::DirectAnswer)
+        );
+        assert_eq!(
+            OrchestrationRoute::from_reason(OrchestrationRoute::SingleWorker.reason()),
+            Some(OrchestrationRoute::SingleWorker)
+        );
+        assert_eq!(
+            OrchestrationRoute::from_reason(OrchestrationRoute::FullPipeline.reason()),
+            Some(OrchestrationRoute::FullPipeline)
+        );
+        assert_eq!(OrchestrationRoute::from_reason("custom reason"), None);
+        assert_eq!(
+            OrchestrationRoute::DirectAnswer.short_reason_label(),
+            "chat/explain"
+        );
+        assert_eq!(
+            OrchestrationRoute::SingleWorker.short_reason_label(),
+            "atomic worker"
+        );
+        assert_eq!(
+            OrchestrationRoute::FullPipeline.short_reason_label(),
+            "implementation"
+        );
 
         assert!(request_looks_direct_answer("你好"));
         assert!(request_looks_direct_answer("你叫啥\n你能干啥"));
