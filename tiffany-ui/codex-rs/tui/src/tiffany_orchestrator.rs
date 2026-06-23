@@ -2859,7 +2859,7 @@ mod tests {
     }
 
     #[test]
-    fn run_intro_uses_direct_flow_for_link_inspection() {
+    fn run_intro_uses_single_flow_for_link_inspection() {
         let launch = TiffanyOrchestratorLaunch {
             bin: "orchestrator".into(),
             user_prompt: "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle".into(),
@@ -2868,9 +2868,19 @@ mod tests {
             config_path: None,
             context_turn_count: 0,
         };
-        let line = run_workflow_line(&launch);
+        let lines = [
+            run_status_line(&launch),
+            run_reason_line(&launch),
+            run_workflow_line(&launch),
+        ];
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-        assert_eq!(line_text(&line), "flow  direct → worker → answer");
+        assert!(text.contains("flow single"));
+        assert!(
+            text.contains("reason  atomic request; planner, critic, and reviewer are not needed")
+        );
+        assert!(text.contains("flow  single → worker → answer"));
+        assert!(!text.contains("planner → critic"));
     }
 
     #[test]
@@ -3967,11 +3977,11 @@ mod tests {
     fn hides_redundant_role_output_summaries() {
         assert!(is_redundant_role_output(
             "planner",
-            "plan ready - 1 sub-task(s)"
+            "plan ready - 1 worker run(s)"
         ));
         assert!(!is_redundant_role_output(
             "planner",
-            "plan ready - 1 sub-task(s)\n  1. answer the user"
+            "plan ready - 1 worker run(s)\n  1. answer the user"
         ));
         assert!(is_redundant_role_output("critic", "approved (0 issue(s))"));
         assert!(is_redundant_role_output(
@@ -4083,7 +4093,7 @@ mod tests {
 
         let visible = visible_content(&planner).expect("visible compact plan");
 
-        assert!(visible.contains("plan ready - 4 sub-task(s)"));
+        assert!(visible.contains("plan ready - 4 worker run(s)"));
         assert!(visible.contains("1. Audit the TUI output path"));
         assert!(visible.contains(" · worker-cc"));
         assert!(visible.contains("2. Update the forked TUI renderer"));
@@ -4155,7 +4165,7 @@ mod tests {
 
         let visible = visible_content(&planner).expect("visible planner output");
 
-        assert!(visible.contains("plan ready - 1 sub-task(s)"));
+        assert!(visible.contains("plan ready - 1 worker run(s)"));
         assert!(visible.contains("Answer in Chinese"));
         assert!(!visible.contains('{'));
         assert!(!visible.contains("\"sub_tasks\""));
