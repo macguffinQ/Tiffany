@@ -5,7 +5,7 @@
 
 use crate::agent_events;
 use crate::core::session_store::SessionStore;
-use crate::core::types::{Event, Role, Session, Task, TaskStatus};
+use crate::core::types::{Event, PlanOutput, Role, Session, Task, TaskStatus};
 use crate::core::worker::WorkerAdapter;
 use crate::roles::critic::Critic;
 use crate::roles::planner::Planner;
@@ -279,6 +279,19 @@ impl Orchestrator {
                 fallback_single_task_plan(top_task, "planner unavailable; using original task")
             }
         };
+        if !plan_from_planner_fallback {
+            if let Some(fallback_plan) = downgrade_planner_fallback_plan(
+                top_task,
+                &plan,
+                &tx,
+                "planning fell back to original task",
+                "planner fallback; downgraded to single worker",
+            ) {
+                plan_from_planner_fallback = true;
+                effective_route = TaskRoute::SingleWorker;
+                plan = fallback_plan;
+            }
+        }
         apply_conversation_policy(top_task, &mut plan);
         apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
         attach_parent_session(orchestration_session_id, &mut plan.sub_tasks);
@@ -366,6 +379,25 @@ impl Orchestrator {
                         break;
                     }
                 };
+                if let Some(fallback_plan) = downgrade_planner_fallback_plan(
+                    top_task,
+                    &plan,
+                    &tx,
+                    "replan fell back to original task",
+                    "replan fallback; downgraded to single worker",
+                ) {
+                    critic_left_plan_unapproved = false;
+                    effective_route = TaskRoute::SingleWorker;
+                    plan = fallback_plan;
+                    apply_conversation_policy(top_task, &mut plan);
+                    apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
+                    attach_parent_session(orchestration_session_id, &mut plan.sub_tasks);
+                    tracing::info!(
+                        "→ Replanning downgraded to single worker in {:?}",
+                        replan_start.elapsed()
+                    );
+                    break;
+                }
                 apply_conversation_policy(top_task, &mut plan);
                 apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
                 attach_parent_session(orchestration_session_id, &mut plan.sub_tasks);
@@ -764,16 +796,58 @@ fn first_error_line(message: &str) -> String {
     agent_events::humanize_user_visible_text(&line, 240)
 }
 
-fn fallback_single_task_plan(
-    top_task: &Task,
-    rationale: impl Into<String>,
-) -> crate::core::types::PlanOutput {
+fn fallback_single_task_plan(top_task: &Task, rationale: impl Into<String>) -> PlanOutput {
     let task = single_worker_task(top_task);
-    crate::core::types::PlanOutput {
+    PlanOutput {
         sub_tasks: vec![task],
         rationale: rationale.into(),
         estimated_cost_usd: 0.0,
     }
+}
+
+fn downgrade_planner_fallback_plan(
+    top_task: &Task,
+    plan: &PlanOutput,
+    tx: &UnboundedSender<RunProgress>,
+    message: &str,
+    route_reason: &str,
+) -> Option<PlanOutput> {
+    let reason = planner_soft_fallback_reason(top_task, plan)?;
+    tracing::warn!("{message}: {reason}");
+    let _ = tx.send(RunProgress::ControlFallback {
+        role: "planner".to_string(),
+        message: message.to_string(),
+        reason: reason.clone(),
+    });
+    let _ = tx.send(RunProgress::RouteUpdated {
+        route: TaskRoute::SingleWorker.label().to_string(),
+        reason: route_reason.to_string(),
+    });
+    Some(fallback_single_task_plan(top_task, reason))
+}
+
+fn planner_soft_fallback_reason(top_task: &Task, plan: &PlanOutput) -> Option<String> {
+    let [task] = plan.sub_tasks.as_slice() else {
+        return None;
+    };
+    if task.prompt.trim() != top_task.prompt.trim() {
+        return None;
+    }
+
+    let rationale = plan.rationale.trim();
+    let lower = rationale.to_ascii_lowercase();
+    let reason = if lower.contains("replanner returned non-json output") {
+        "replanner returned non-JSON output; using original task"
+    } else if lower.contains("replanner returned no usable worker runs") {
+        "replanner returned no usable worker runs; using original task"
+    } else if lower.contains("planner returned non-json output") {
+        "planner returned non-JSON output; using original task"
+    } else if lower.contains("planner returned no usable worker runs") {
+        "planner returned no usable worker runs; using original task"
+    } else {
+        return None;
+    };
+    Some(reason.to_string())
 }
 
 fn spawn_progress_recorder(
@@ -1238,6 +1312,50 @@ mod tests {
         }
     }
 
+    struct SoftFallbackPlanner;
+
+    #[async_trait::async_trait]
+    impl Planner for SoftFallbackPlanner {
+        async fn plan(&self, top_task: &Task) -> Result<PlanOutput> {
+            Ok(PlanOutput {
+                sub_tasks: vec![Task::new(top_task.prompt.clone())],
+                rationale: "planner returned non-JSON output; using original task".to_string(),
+                estimated_cost_usd: 0.0,
+            })
+        }
+
+        async fn replan(&self, top_task: &Task, _critique: &CritiqueOutput) -> Result<PlanOutput> {
+            Ok(PlanOutput {
+                sub_tasks: vec![Task::new(top_task.prompt.clone())],
+                rationale: "replanner returned no usable worker runs; using original task"
+                    .to_string(),
+                estimated_cost_usd: 0.0,
+            })
+        }
+    }
+
+    struct SoftReplanFallbackPlanner;
+
+    #[async_trait::async_trait]
+    impl Planner for SoftReplanFallbackPlanner {
+        async fn plan(&self, _top_task: &Task) -> Result<PlanOutput> {
+            Ok(PlanOutput {
+                sub_tasks: vec![Task::new("original sub-task")],
+                rationale: "initial plan".to_string(),
+                estimated_cost_usd: 0.0,
+            })
+        }
+
+        async fn replan(&self, top_task: &Task, _critique: &CritiqueOutput) -> Result<PlanOutput> {
+            Ok(PlanOutput {
+                sub_tasks: vec![Task::new(top_task.prompt.clone())],
+                rationale: "replanner returned no usable worker runs; using original task"
+                    .to_string(),
+                estimated_cost_usd: 0.0,
+            })
+        }
+    }
+
     struct ApprovingCritic;
 
     #[async_trait::async_trait]
@@ -1532,6 +1650,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_with_progress_downgrades_soft_planner_fallback_to_single_worker() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(SoftFallbackPlanner),
+            Arc::new(FailingCritic),
+            Arc::new(FailingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            true,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut top_task = Task::new("优化编排流程");
+        top_task.tags = vec!["implementation".to_string()];
+        top_task.agent_hint = Some("worker-cc".to_string());
+
+        let completed = orch
+            .run_with_progress(top_task, tx)
+            .await
+            .expect("soft planner fallback should still execute one worker");
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].prompt, "优化编排流程");
+        assert!(completed[0].tags.iter().any(|tag| tag == "single_worker"));
+
+        let mut saw_soft_fallback = false;
+        let mut saw_route_update = false;
+        let mut saw_critic = false;
+        let mut saw_review = false;
+        let mut saw_done = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::ControlFallback {
+                    role,
+                    message,
+                    reason,
+                } => {
+                    saw_soft_fallback |= role == "planner"
+                        && message == "planning fell back to original task"
+                        && reason == "planner returned non-JSON output; using original task";
+                }
+                RunProgress::RouteUpdated { route, reason } => {
+                    saw_route_update |= route == "single-worker"
+                        && reason == "planner fallback; downgraded to single worker";
+                }
+                RunProgress::Critiquing { .. }
+                | RunProgress::CritiqueResult { .. }
+                | RunProgress::Replanning { .. } => saw_critic = true,
+                RunProgress::Reviewing { .. }
+                | RunProgress::ReviewResult { .. }
+                | RunProgress::ReviewSkipped { .. }
+                | RunProgress::ReviewUnavailable { .. } => saw_review = true,
+                RunProgress::Done { task_count } => saw_done = task_count == 1,
+                _ => {}
+            }
+        }
+
+        assert!(saw_soft_fallback, "expected planner soft fallback warning");
+        assert!(saw_route_update, "expected visible route downgrade");
+        assert!(!saw_critic, "soft planner fallback should skip critic");
+        assert!(!saw_review, "soft planner fallback should skip reviewer");
+        assert!(saw_done, "pipeline should still complete");
+    }
+
+    #[tokio::test]
     async fn run_with_progress_continues_when_replan_fails() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = Arc::new(
@@ -1585,6 +1786,95 @@ mod tests {
             }
         }
         assert!(saw_replan_warning, "expected visible replan fallback event");
+    }
+
+    #[tokio::test]
+    async fn run_with_progress_downgrades_soft_replan_fallback_to_single_worker() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(SoftReplanFallbackPlanner),
+            Arc::new(RejectingCritic),
+            Arc::new(FailingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            true,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut top_task = Task::new("优化编排流程");
+        top_task.tags = vec!["implementation".to_string()];
+        top_task.agent_hint = Some("worker-cc".to_string());
+
+        let completed = orch
+            .run_with_progress(top_task, tx)
+            .await
+            .expect("soft replan fallback should still execute one worker");
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].prompt, "优化编排流程");
+        assert!(completed[0].tags.iter().any(|tag| tag == "single_worker"));
+
+        let mut saw_initial_plan = false;
+        let mut saw_critique = false;
+        let mut saw_replan_fallback = false;
+        let mut saw_route_update = false;
+        let mut saw_review = false;
+        let mut saw_done = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::Planned { sub_task_count } => {
+                    saw_initial_plan = sub_task_count == 1;
+                }
+                RunProgress::CritiqueResult { approved, issues } => {
+                    saw_critique = !approved && issues == 1;
+                }
+                RunProgress::ControlFallback {
+                    role,
+                    message,
+                    reason,
+                } => {
+                    saw_replan_fallback |= role == "planner"
+                        && message == "replan fell back to original task"
+                        && reason
+                            == "replanner returned no usable worker runs; using original task";
+                }
+                RunProgress::RouteUpdated { route, reason } => {
+                    saw_route_update |= route == "single-worker"
+                        && reason == "replan fallback; downgraded to single worker";
+                }
+                RunProgress::Reviewing { .. }
+                | RunProgress::ReviewResult { .. }
+                | RunProgress::ReviewSkipped { .. }
+                | RunProgress::ReviewUnavailable { .. } => saw_review = true,
+                RunProgress::Done { task_count } => saw_done = task_count == 1,
+                _ => {}
+            }
+        }
+
+        assert!(saw_initial_plan, "initial plan should still be visible");
+        assert!(saw_critique, "critic rejection should be visible once");
+        assert!(saw_replan_fallback, "expected replan soft fallback warning");
+        assert!(saw_route_update, "expected visible route downgrade");
+        assert!(!saw_review, "soft replan fallback should skip reviewer");
+        assert!(saw_done, "pipeline should complete through worker output");
     }
 
     #[tokio::test]
