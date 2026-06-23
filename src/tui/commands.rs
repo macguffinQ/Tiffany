@@ -1995,7 +1995,10 @@ fn format_role_workflow(config: &Config, input: &InputState) -> String {
     let reviewer = role_or_missing(config, "reviewer");
 
     format!(
-        "Role flow\n  1. plan      {}\n  2. critique  {}\n  3. execute   {}\n  4. review    {}\n  5. answer    final text\n\nCurrent worker: {}\nClaude subagent: {}",
+        "Role flow\n  selected flow: {}\n  reason: {}\n  steps: {}\n\nFull pipeline roles\n  1. plan      {}\n  2. critique  {}\n  3. execute   {}\n  4. review    {}\n  5. answer    final text\n\nCurrent worker: {}\nClaude subagent: {}",
+        selected_flow_label(input),
+        selected_flow_reason(input),
+        selected_flow_steps(input),
         planner,
         critic,
         worker,
@@ -2026,10 +2029,13 @@ fn format_workflow_status(config: &Config, input: &InputState) -> String {
     };
 
     format!(
-        "Workflow status\n  run: {}\n  queue: {}\n  context: {}\n\nPipeline\n  1. plan      {}\n  2. critique  {}\n  3. execute   {}\n  4. review    {}\n  5. answer    final text\n\nWorker\n  selected: {}\n  claude subagent: {}\n  details: {}",
+        "Workflow status\n  run: {}\n  queue: {}\n  context: {}\n  selected flow: {}\n  flow reason: {}\n  flow steps: {}\n\nFull pipeline roles\n  1. plan      {}\n  2. critique  {}\n  3. execute   {}\n  4. review    {}\n  5. answer    final text\n\nWorker\n  selected: {}\n  claude subagent: {}\n  details: {}",
         run,
         queue,
         context_summary(input),
+        selected_flow_label(input),
+        selected_flow_reason(input),
+        selected_flow_steps(input),
         workflow_role_line(config, "planner"),
         workflow_role_line(config, "critic"),
         workflow_role_line(config, &worker),
@@ -2157,6 +2163,33 @@ fn selected_route_label(input: &InputState) -> String {
         .as_deref()
         .map(|role| format!("{} ({})", runtime::agent_label(Some(role)), role))
         .unwrap_or_else(|| "auto".into())
+}
+
+fn selected_flow_label(input: &InputState) -> String {
+    match input.run_route.as_deref() {
+        Some("direct-answer") => "direct".into(),
+        Some("single-worker") => "single".into(),
+        Some("full-pipeline") => "full".into(),
+        Some(route) => truncate_chars(route, 32),
+        None => "auto (pending first route event)".into(),
+    }
+}
+
+fn selected_flow_reason(input: &InputState) -> String {
+    input
+        .run_route_reason
+        .as_deref()
+        .map(|reason| truncate_chars(reason, 120))
+        .unwrap_or_else(|| "Tiffany selects the flow after reading the prompt.".into())
+}
+
+fn selected_flow_steps(input: &InputState) -> &'static str {
+    match input.run_route.as_deref() {
+        Some("direct-answer") => "worker -> answer",
+        Some("single-worker") => "worker -> answer",
+        Some("full-pipeline") => "planner -> critic -> worker -> reviewer -> answer",
+        _ => "direct/single/full decided at run start",
+    }
 }
 
 fn format_usage(store: &SessionStore, config: &Config, raw_window: &str) -> String {
@@ -4636,6 +4669,11 @@ behavior:
         let cfg = Arc::new(test_config());
         let mut input = InputState {
             agent_hint: Some("worker-cc".into()),
+            run_route: Some("full-pipeline".into()),
+            run_route_reason: Some(
+                "project or implementation work; planner, critic, worker, and reviewer will run"
+                    .into(),
+            ),
             queued_prompts: vec!["follow up".into()],
             ..InputState::default()
         };
@@ -4644,7 +4682,11 @@ behavior:
 
         let workflow = input.transcript.last().expect("workflow response");
         assert!(workflow.content.contains("Workflow status"));
-        assert!(workflow.content.contains("Pipeline"));
+        assert!(workflow.content.contains("selected flow: full"));
+        assert!(workflow
+            .content
+            .contains("flow steps: planner -> critic -> worker -> reviewer -> answer"));
+        assert!(workflow.content.contains("Full pipeline roles"));
         assert!(workflow.content.contains("execute"));
         assert!(workflow.content.contains("worker-cc"));
         assert!(workflow.content.contains("1 pending"));

@@ -58,6 +58,9 @@ All notable changes to this project will be documented in this file.
 - Updated the terminal run HUD to show the selected orchestration flow
   (`direct`, `single`, or `full`) separately from the selected worker route,
   avoiding confusion between workflow shape and Claude/Codex worker choice.
+- Updated `/workflow`, `/role route`, and `/process` summaries to use the
+  same dynamic flow vocabulary as the live HUD, including selected flow,
+  route reason, flow steps, and worker route.
 
 ## [0.1.25] - 2026-06-22
 

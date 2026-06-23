@@ -750,7 +750,9 @@ pub(super) fn format_process_summary(input: &InputState) -> String {
     out.push_str(&process_status_summary(input));
     out.push_str("\n  flow: ");
     out.push_str(&process_flow_summary(&source));
-    out.push_str("\n  route: ");
+    out.push_str("\n  flow route: ");
+    out.push_str(&process_route_summary(input, &source));
+    out.push_str("\n  worker route: ");
     out.push_str(input.agent_hint.as_deref().unwrap_or("auto"));
     out.push_str("\n  claude subagent: ");
     out.push_str(input.cc_agent_hint.as_deref().unwrap_or("default"));
@@ -848,6 +850,31 @@ fn process_flow_summary(events: &[&String]) -> String {
         "not started".into()
     } else {
         flow.join(" -> ")
+    }
+}
+
+fn process_route_summary(input: &InputState, events: &[&String]) -> String {
+    if let Some(route) = input.run_route.as_deref() {
+        return process_route_label(route);
+    }
+    for line in events {
+        let body = normalized_process_body(line);
+        if let Some(route) = body.strip_prefix("route  ") {
+            let route = route.split('·').next().unwrap_or(route).trim();
+            if !route.is_empty() {
+                return process_route_label(route);
+            }
+        }
+    }
+    "pending".into()
+}
+
+fn process_route_label(route: &str) -> String {
+    match route {
+        "direct-answer" => "direct".into(),
+        "single-worker" => "single".into(),
+        "full-pipeline" => "full".into(),
+        other => truncate_chars(other, 32),
     }
 }
 
@@ -1491,6 +1518,7 @@ mod tests {
     fn process_summary_keeps_key_events_and_hides_noisy_outputs() {
         let mut input = InputState::default();
         input.run_events = vec![
+            "10:00:00  route  full-pipeline · project work".into(),
             "10:00:00  Planning: decomposing task".into(),
             "10:00:01  Worker output: abcdef12 incremental log line".into(),
             "10:00:02  Worker started: claude-code (abcdef12)".into(),
@@ -1504,7 +1532,8 @@ mod tests {
         assert!(formatted.contains("Process summary"));
         assert!(formatted.contains("status:"));
         assert!(formatted.contains("flow: planner -> worker"));
-        assert!(formatted.contains("route: auto"));
+        assert!(formatted.contains("flow route: full"));
+        assert!(formatted.contains("worker route: auto"));
         assert!(formatted.contains("Recent activity:"));
         assert!(formatted.contains("plan  planning work"));
         assert!(formatted.contains("worker  claude-code (abcdef12)"));
@@ -1539,6 +1568,7 @@ mod tests {
             current_stage: "Failed".into(),
             current_stage_detail: "command exited 1".into(),
             agent_hint: Some("worker-codex".into()),
+            run_route: Some("single-worker".into()),
             last_context_messages: 2,
             last_context_chars: 360,
             ..InputState::default()
@@ -1557,7 +1587,8 @@ mod tests {
 
         assert!(formatted.contains("status: ✗ failed · Failed · command exited 1"));
         assert!(formatted.contains("flow: planner -> critic -> worker"));
-        assert!(formatted.contains("route: worker-codex"));
+        assert!(formatted.contains("flow route: single"));
+        assert!(formatted.contains("worker route: worker-codex"));
         assert!(formatted.contains("context: compact · 2 message(s), 360 chars"));
         assert!(formatted.contains("workers: 1 started, 1 failed, 1 stderr"));
         assert!(formatted.contains("diagnostics: model not found"));
