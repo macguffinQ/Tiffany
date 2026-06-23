@@ -60,7 +60,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 ..progress_event(
                     "planner",
                     "done",
-                    format!("plan ready - {sub_task_count} sub-task(s)"),
+                    format!("plan ready - {sub_task_count} worker run(s)"),
                 )
             },
             RunProgress::Critiquing { round } => progress_event(
@@ -104,7 +104,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 ..progress_event(
                     "worker",
                     "running",
-                    format!("running {sub_task_count} sub-task(s)"),
+                    format!("running {sub_task_count} worker run(s)"),
                 )
             },
             RunProgress::WorkerStarted {
@@ -216,7 +216,7 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 ..progress_event(
                     "orchestrator",
                     "done",
-                    format!("done - {task_count} sub-task(s)"),
+                    format!("done - {task_count} worker run(s)"),
                 )
             },
             RunProgress::Failed(message) => progress_event("orchestrator", "failed", message),
@@ -335,7 +335,7 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
         }
         RunProgress::Planning => Some("● planner  planning".into()),
         RunProgress::Planned { sub_task_count } => Some(format!(
-            "✓ planner  plan ready · {sub_task_count} sub-task(s)"
+            "✓ planner  plan ready · {sub_task_count} worker run(s)"
         )),
         RunProgress::Critiquing { round } => {
             Some(format!("● critic   checking plan · round {round}"))
@@ -362,7 +362,7 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
         )),
         RunProgress::DirectAnswer => Some("● worker   answering directly".into()),
         RunProgress::Executing { sub_task_count } => {
-            Some(format!("● worker   running {sub_task_count} sub-task(s)"))
+            Some(format!("● worker   running {sub_task_count} worker run(s)"))
         }
         RunProgress::WorkerStarted {
             task_id,
@@ -452,7 +452,7 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
             agent_events::humanize_jsonish(message, TEXT_OUTPUT_SUMMARY_MAX_CHARS)
         )),
         RunProgress::Done { task_count } => {
-            Some(format!("✓ done     {task_count} sub-task(s) completed"))
+            Some(format!("✓ done     {task_count} worker run(s) completed"))
         }
         RunProgress::Failed(message) => Some(format!(
             "✗ error    {}",
@@ -466,7 +466,7 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::RouteSelected { route, reason } => Some(format!("route  {route} · {reason}")),
         RunProgress::Planning => Some("plan  planning work".into()),
         RunProgress::Planned { sub_task_count } => {
-            Some(format!("plan  plan ready · {sub_task_count} sub-task(s)"))
+            Some(format!("plan  plan ready · {sub_task_count} worker run(s)"))
         }
         RunProgress::Critiquing { round } => Some(format!("critic  checking plan · round {round}")),
         RunProgress::CritiqueResult { approved, issues } => {
@@ -491,7 +491,7 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
         )),
         RunProgress::DirectAnswer => Some("run  answering directly".into()),
         RunProgress::Executing { sub_task_count } => {
-            Some(format!("run  running {sub_task_count} sub-task(s)"))
+            Some(format!("run  running {sub_task_count} worker run(s)"))
         }
         RunProgress::WorkerStarted {
             task_id,
@@ -580,7 +580,7 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
             agent_events::humanize_jsonish(message, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)
         )),
         RunProgress::Done { task_count } => {
-            Some(format!("done  {task_count} sub-task(s) completed"))
+            Some(format!("done  {task_count} worker run(s) completed"))
         }
         RunProgress::Failed(message) => Some(format!(
             "error  {}",
@@ -782,6 +782,11 @@ mod tests {
         let direct =
             format_compact_progress_event(&RunProgress::DirectAnswer).expect("direct answer line");
         assert_eq!(direct, "run  answering directly");
+
+        let running = format_compact_progress_event(&RunProgress::Executing { sub_task_count: 1 })
+            .expect("executing line");
+        assert_eq!(running, "run  running 1 worker run(s)");
+        assert!(!running.contains("sub-task"));
 
         let route = format_compact_progress_event(&RunProgress::RouteSelected {
             route: "single-worker".into(),

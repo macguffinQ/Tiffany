@@ -104,6 +104,9 @@ impl RunController {
             input,
             &format!("Started run: {}", truncate_chars(&prompt, 180)),
         );
+        if let Some(preview) = route_preview_event(input) {
+            record_run_event(input, &preview);
+        }
         if input.last_context_messages > 0 {
             record_run_event(
                 input,
@@ -180,6 +183,13 @@ fn initial_stage_label(input: &InputState) -> String {
         .as_deref()
         .map(|flow| format!("starting {flow} flow"))
         .unwrap_or_else(|| "starting...".into())
+}
+
+fn route_preview_event(input: &InputState) -> Option<String> {
+    let route = input.run_route_label.as_deref()?;
+    let reason = input.run_route_reason_label.as_deref().unwrap_or("pending");
+    let steps = input.run_flow_steps.as_deref().unwrap_or("pending");
+    Some(format!("route  preview · {route} · {reason} · {steps}"))
 }
 
 /// Run the orchestrator, but check the cancel flag before starting.
@@ -259,6 +269,7 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
         RunProgress::Done { task_count } => {
             let review_issues = input.run_review_issue_count;
             let worker_failures = input.run_worker_failure_count;
+            let completion_detail = completion_detail(input, task_count, worker_failures);
             input.current_stage = if review_issues > 0 {
                 "Review needs fixes".into()
             } else if worker_failures > 0 && task_count == 0 {
@@ -269,25 +280,17 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
                 "Done".into()
             };
             input.current_stage_detail = if review_issues > 0 {
-                format!(
-                    "{} sub-task(s) completed, {} review issue(s)",
-                    task_count, review_issues
-                )
+                format!("{completion_detail}, {} review issue(s)", review_issues)
             } else if worker_failures > 0 && task_count == 0 {
-                format!(
-                    "0 sub-task(s) completed, {} worker failure(s)",
-                    worker_failures
-                )
+                format!("{completion_detail}, {worker_failures} worker failure(s)")
             } else if worker_failures > 0 {
-                format!(
-                    "{} sub-task(s) completed, {} worker failure(s)",
-                    task_count, worker_failures
-                )
+                format!("{completion_detail}, {worker_failures} worker failure(s)")
             } else {
-                format!("{} sub-task(s) completed", task_count)
+                completion_detail
             };
             let final_output = final_output_for_run(input);
             input.last_result_output = final_output.clone();
+            let no_completed_message = format_no_completed_tasks_message(input, worker_failures);
             if let Some(last) = input
                 .transcript
                 .iter_mut()
@@ -301,9 +304,9 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
                 };
                 if task_count == 0 && worker_failures > 0 {
                     last.status = "error".into();
-                    last.content = format_no_completed_tasks_message(worker_failures);
+                    last.content = no_completed_message.clone();
                 } else if task_count == 0 {
-                    last.content = "no sub-tasks were generated\n\nDetails: /process 200".into();
+                    last.content = no_completed_message.clone();
                 } else if review_issues > 0 {
                     last.content = format_done_with_review_issues_message(final_output.as_deref());
                 } else {
@@ -485,6 +488,35 @@ fn format_done_with_review_issues_message(final_output: Option<&str>) -> String 
     format_completion_notice("⚠ completed with review issues", final_output)
 }
 
+fn completion_detail(input: &InputState, task_count: usize, worker_failures: usize) -> String {
+    let route = input.run_route.as_deref();
+    match route {
+        Some("direct-answer") => {
+            if task_count > 0 {
+                "answer complete".into()
+            } else {
+                "no answer completed".into()
+            }
+        }
+        Some("single-worker") => {
+            if task_count > 0 {
+                "worker complete".into()
+            } else if worker_failures > 0 {
+                "worker failed".into()
+            } else {
+                "no worker result completed".into()
+            }
+        }
+        _ => {
+            if task_count == 1 {
+                "1 worker run completed".into()
+            } else {
+                format!("{task_count} worker runs completed")
+            }
+        }
+    }
+}
+
 fn format_completion_notice(status: &str, final_output: Option<&str>) -> String {
     let mut out = status.to_string();
     if final_output
@@ -499,11 +531,13 @@ fn format_completion_notice(status: &str, final_output: Option<&str>) -> String 
     out
 }
 
-fn format_no_completed_tasks_message(worker_failures: usize) -> String {
-    format!(
-        "✗ no sub-tasks completed — {} worker failure(s)\n\nDetails: /process 200",
-        worker_failures
-    )
+fn format_no_completed_tasks_message(input: &InputState, worker_failures: usize) -> String {
+    let detail = completion_detail(input, 0, worker_failures);
+    if worker_failures > 0 {
+        format!("✗ {detail} — {worker_failures} worker failure(s)\n\nDetails: /process 200")
+    } else {
+        format!("✗ {detail}\n\nDetails: /process 200")
+    }
 }
 
 fn format_failed_message(message: &str, context: Option<String>) -> String {
@@ -788,6 +822,10 @@ mod tests {
         );
         assert_eq!(input.run_flow_steps.as_deref(), Some("worker -> answer"));
         assert_eq!(initial_stage_label(&input), "starting single flow");
+        assert_eq!(
+            route_preview_event(&input).as_deref(),
+            Some("route  preview · single · atomic worker · worker -> answer")
+        );
         assert!(status.contains("flow: single · atomic worker"));
         assert!(status.contains("steps: worker -> answer"));
         assert!(!status.contains("planner -> critic"));
@@ -835,7 +873,10 @@ mod tests {
 
     #[test]
     fn worker_failure_done_message_is_not_reported_as_empty_plan() {
-        let mut input = InputState::default();
+        let mut input = InputState {
+            run_route: Some("single-worker".into()),
+            ..InputState::default()
+        };
         input.transcript.push(ChatMsg {
             role: "assistant".into(),
             content: "thinking...".into(),
@@ -858,8 +899,28 @@ mod tests {
 
         let msg = input.transcript.last().expect("assistant message");
         assert_eq!(msg.status, "error");
+        assert!(msg.content.contains("worker failed"));
         assert!(msg.content.contains("worker failure"));
-        assert!(!msg.content.contains("no sub-tasks were generated"));
+        assert!(!msg.content.contains("0 worker runs completed"));
+        assert!(!msg.content.contains("sub-task"));
+    }
+
+    #[test]
+    fn direct_answer_completion_uses_answer_language() {
+        let mut input = InputState {
+            run_route: Some("direct-answer".into()),
+            ..InputState::default()
+        };
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: "thinking...".into(),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        handle_run_event(RunProgress::Done { task_count: 1 }, &mut input);
+
+        assert_eq!(input.current_stage_detail, "answer complete");
     }
 
     #[test]

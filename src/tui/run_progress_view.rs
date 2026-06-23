@@ -34,7 +34,7 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
         ))),
         RunProgress::Planning => Some(running("planning")),
         RunProgress::Planned { sub_task_count } => Some(success(format!(
-            "plan ready — {sub_task_count} sub-task(s)"
+            "plan ready — {sub_task_count} worker run(s)"
         ))),
         RunProgress::Critiquing { round } => {
             Some(running(format!("checking plan — round {round}")))
@@ -56,7 +56,7 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
         } => Some(warning(format_control_fallback_line(role, message, reason))),
         RunProgress::DirectAnswer => Some(running("answering directly")),
         RunProgress::Executing { sub_task_count } => {
-            Some(running(format!("running {sub_task_count} sub-task(s)")))
+            Some(running(format!("running {sub_task_count} worker run(s)")))
         }
         RunProgress::WorkerStarted {
             task_id,
@@ -149,10 +149,10 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
             Some("▸ Planning — decomposing task…"),
         )),
         RunProgress::Planned { sub_task_count } => Some(status(
-            format!("Planned ({sub_task_count} sub-tasks)"),
+            format!("Plan ready ({sub_task_count} worker run(s))"),
             "moving to critique",
             Some(format!(
-                "▸ Planned {sub_task_count} sub-task(s). Moving to critique…"
+                "▸ Plan ready · {sub_task_count} worker run(s). Moving to critique…"
             )),
         )),
         RunProgress::Critiquing { round } => Some(status(
@@ -204,11 +204,9 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
             Some("▸ Answering directly…"),
         )),
         RunProgress::Executing { sub_task_count } => Some(status(
-            format!("Executing {sub_task_count} sub-task(s)"),
-            "running workers",
-            Some(format!(
-                "▸ Executing {sub_task_count} sub-task(s) — running workers…"
-            )),
+            format!("Running {sub_task_count} worker run(s)"),
+            "workers active",
+            Some(format!("▸ Workers running · {sub_task_count} run(s)…")),
         )),
         RunProgress::WorkerStarted {
             task_id,
@@ -541,6 +539,11 @@ mod tests {
         let direct = progress_history_view(&RunProgress::DirectAnswer).expect("direct view");
         assert_eq!(direct.icon, "●");
         assert_eq!(direct.line, "answering directly");
+
+        let executing = progress_history_view(&RunProgress::Executing { sub_task_count: 1 })
+            .expect("executing view");
+        assert_eq!(executing.line, "running 1 worker run(s)");
+        assert!(!executing.line.contains("sub-task"));
 
         let route = progress_history_view(&RunProgress::RouteSelected {
             route: "single-worker".into(),

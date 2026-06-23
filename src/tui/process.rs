@@ -377,7 +377,10 @@ fn summarize_trace_body(body: &str) -> (&'static str, String) {
         return ("plan", "planning work".into());
     }
     if let Some(count) = body.strip_prefix("Planned: ") {
-        return ("plan", format!("plan ready: {}", count));
+        return (
+            "plan",
+            format!("plan ready: {}", normalize_worker_run_count(count)),
+        );
     }
     if let Some(round) = body.strip_prefix("Critiquing: ") {
         return ("critic", format!("checking plan: {}", round));
@@ -392,7 +395,10 @@ fn summarize_trace_body(body: &str) -> (&'static str, String) {
         return ("plan", format!("updating plan: {}", attempt));
     }
     if let Some(count) = body.strip_prefix("Executing: ") {
-        return ("run", format!("running {}", count));
+        return (
+            "run",
+            format!("running {}", normalize_worker_run_count(count)),
+        );
     }
     if let Some(worker) = body.strip_prefix("Worker started: ") {
         return ("worker", format!("started {}", worker));
@@ -416,7 +422,10 @@ fn summarize_trace_body(body: &str) -> (&'static str, String) {
         return ("review", format!("needs fixes: {}", task));
     }
     if let Some(done) = body.strip_prefix("Done: ") {
-        return ("done", format!("completed {}", done));
+        return (
+            "done",
+            format!("completed {}", normalize_worker_run_count(done)),
+        );
     }
     if let Some(error) = body.strip_prefix("Failed: ") {
         return ("error", truncate_chars(error, 140));
@@ -590,7 +599,10 @@ fn legacy_process_body_to_compact(body: &str) -> Option<String> {
         return Some("plan  planning work".into());
     }
     if let Some(count) = body.strip_prefix("Planned: ") {
-        return Some(format!("plan  plan ready · {}", count.trim()));
+        return Some(format!(
+            "plan  plan ready · {}",
+            normalize_worker_run_count(count)
+        ));
     }
     if let Some(round) = body.strip_prefix("Critiquing: ") {
         return Some(format!("critic  checking plan · {}", round.trim()));
@@ -605,7 +617,10 @@ fn legacy_process_body_to_compact(body: &str) -> Option<String> {
         return Some(format!("plan  updating plan · {}", attempt.trim()));
     }
     if let Some(count) = body.strip_prefix("Executing: ") {
-        return Some(format!("run  running {}", count.trim()));
+        return Some(format!(
+            "run  running {}",
+            normalize_worker_run_count(count)
+        ));
     }
     if let Some(worker) = body.strip_prefix("Worker started: ") {
         return Some(format!("worker  {}", worker.trim()));
@@ -634,7 +649,7 @@ fn legacy_process_body_to_compact(body: &str) -> Option<String> {
         return Some(format!("review  needs fixes · {rest}"));
     }
     if let Some(done) = body.strip_prefix("Done: ") {
-        return Some(format!("done  {}", done.trim()));
+        return Some(format!("done  {}", normalize_worker_run_count(done)));
     }
     if let Some(error) = body.strip_prefix("Failed: ") {
         return Some(format!("error  {}", humanize_jsonish(error.trim(), 220)));
@@ -1044,6 +1059,13 @@ fn normalized_process_body(line: &str) -> String {
         .unwrap_or(line)
         .trim();
     legacy_process_body_to_compact(body).unwrap_or_else(|| body.to_string())
+}
+
+fn normalize_worker_run_count(text: &str) -> String {
+    text.trim()
+        .replace("sub-task(s)", "worker run(s)")
+        .replace("sub-tasks", "worker runs")
+        .replace("sub-task", "worker run")
 }
 
 pub(super) fn format_failure_context(input: &InputState) -> Option<String> {
@@ -1600,7 +1622,8 @@ mod tests {
         assert!(formatted.contains("Recent activity:"));
         assert!(formatted.contains("plan  planning work"));
         assert!(formatted.contains("worker  claude-code (abcdef12)"));
-        assert!(formatted.contains("done  1 sub-task(s) completed"));
+        assert!(formatted.contains("done  1 worker run(s) completed"));
+        assert!(!formatted.contains("sub-task"));
         assert!(!formatted.contains("incremental log line"));
         assert!(formatted.contains("/process full"));
         assert!(full.contains("incremental log line"));
@@ -1645,7 +1668,7 @@ mod tests {
         input.run_events = vec![
             "10:00:00  plan  planning work".into(),
             "10:00:01  critic  plan approved".into(),
-            "10:00:02  run  running 1 sub-task(s)".into(),
+            "10:00:02  run  running 1 worker run(s)".into(),
             "10:00:03  worker  worker-codex started · codex · openai/glm-5.1 · abcdef12".into(),
             "10:00:04  worker  stderr · abcdef12 worker-codex: API Error: 400 [1211][模型不存在，请检查模型代码。]".into(),
             "10:00:05  worker  worker-codex failed · abcdef12 · 120ms".into(),
@@ -1694,6 +1717,32 @@ mod tests {
         assert!(formatted.contains("flow reason: atomic worker"));
         assert!(!formatted
             .contains("flow reason: atomic request; planner, critic, and reviewer are not needed"));
+    }
+
+    #[test]
+    fn process_summary_shows_route_preview_before_route_event() {
+        let mut input = InputState {
+            current_stage: "starting single flow".into(),
+            run_route: Some("single-worker".into()),
+            run_route_label: Some("single".into()),
+            run_route_reason: Some(
+                "atomic request; planner, critic, and reviewer are not needed".into(),
+            ),
+            run_route_reason_label: Some("atomic worker".into()),
+            run_flow_steps: Some("worker -> answer".into()),
+            ..InputState::default()
+        };
+        input.run_events = vec![
+            "10:00:00  start  task accepted · https://example.com".into(),
+            "10:00:00  route  preview · single · atomic worker · worker -> answer".into(),
+        ];
+
+        let formatted = format_process_summary(&input);
+
+        assert!(formatted.contains("flow: worker -> answer"));
+        assert!(formatted.contains("flow route: single"));
+        assert!(formatted.contains("flow reason: atomic worker"));
+        assert!(formatted.contains("route - preview · single · atomic worker · worker -> answer"));
     }
 
     #[test]
@@ -1795,6 +1844,9 @@ mod tests {
             .content
             .contains("now: ● worker - abcdef12: running cargo test"));
         assert!(msg.content.contains("recent activity"));
+        assert!(msg.content.contains("plan ready: 2 worker run(s)"));
+        assert!(msg.content.contains("running 2 worker run(s)"));
+        assert!(!msg.content.contains("sub-task"));
         assert!(msg.content.contains("planning work"));
         assert!(msg.content.contains("full log: /process 200"));
     }

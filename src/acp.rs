@@ -1457,7 +1457,7 @@ fn remember_better_acp_text(slot: &mut Option<String>, candidate: String) {
 }
 
 fn format_acp_done_message(task_count: usize, final_output: Option<&str>) -> String {
-    let mut out = format!("✓ done — {task_count} sub-task(s) completed");
+    let mut out = format!("✓ done — {task_count} worker run(s) completed");
     match final_output.map(str::trim).filter(|text| !text.is_empty()) {
         Some(_) => {
             out.push_str("\n\nResult captured. Continue with a follow-up, or inspect the run process for details.");
@@ -1989,7 +1989,7 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
         }
         RunProgress::Planning => Some("Planning task.".into()),
         RunProgress::Planned { sub_task_count } => {
-            Some(format!("Planned {sub_task_count} sub-task(s)."))
+            Some(format!("Plan ready with {sub_task_count} worker run(s)."))
         }
         RunProgress::Critiquing { round } => Some(format!("Critiquing plan, round {round}.")),
         RunProgress::CritiqueResult { approved, issues } => {
@@ -2010,7 +2010,7 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
         )),
         RunProgress::DirectAnswer => Some("Answering directly.".into()),
         RunProgress::Executing { sub_task_count } => {
-            Some(format!("Executing {sub_task_count} sub-task(s)."))
+            Some(format!("Running {sub_task_count} worker run(s)."))
         }
         RunProgress::RoleOutput { role, content } => {
             if agent_events::is_redundant_role_output(role, content, 1600) {
@@ -2673,7 +2673,7 @@ mod tests {
             .transcript
             .push(AcpChatMsg::user("build the TUI queue controls"));
         session.transcript.push(AcpChatMsg::assistant(
-            "✓ done — 1 sub-task(s) completed\n\nResult captured. Continue with a follow-up, or inspect the run process for details.",
+            "✓ done — 1 worker run(s) completed\n\nResult captured. Continue with a follow-up, or inspect the run process for details.",
         ));
         session.last_result_output = Some("Queue controls were added.".into());
 

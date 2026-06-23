@@ -914,7 +914,7 @@ fn orchestrator_event_summary(payload: &Value) -> String {
             }
         }
         Some("done") => match payload_usize(payload, "count") {
-            Some(count) => format!("done · {count} sub-task(s)"),
+            Some(count) => format!("done · {count} worker run(s)"),
             None => normalized_payload_message(payload, "done"),
         },
         Some("failed") => format!("error · {}", normalized_payload_message(payload, "failed")),

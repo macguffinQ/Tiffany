@@ -787,7 +787,7 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
             top_task_id,
             serde_json::json!({
                 "status": "done",
-                "message": format!("plan ready - {sub_task_count} sub-task(s)"),
+                "message": format!("plan ready - {sub_task_count} worker run(s)"),
                 "count": sub_task_count,
             }),
         ),
@@ -850,7 +850,7 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
             top_task_id,
             serde_json::json!({
                 "status": "running",
-                "message": format!("running {sub_task_count} sub-task(s)"),
+                "message": format!("running {sub_task_count} worker run(s)"),
                 "count": sub_task_count,
             }),
         ),
@@ -981,7 +981,7 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
             top_task_id,
             serde_json::json!({
                 "status": "done",
-                "message": format!("done - {task_count} sub-task(s)"),
+                "message": format!("done - {task_count} worker run(s)"),
                 "count": task_count,
             }),
         ),

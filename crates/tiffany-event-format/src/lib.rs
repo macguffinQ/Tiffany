@@ -1246,7 +1246,7 @@ fn summarize_error_object(object: &Map<String, Value>) -> Option<String> {
 
 fn summarize_plan_object(object: &Map<String, Value>) -> Option<String> {
     let sub_tasks = object.get("sub_tasks").and_then(Value::as_array)?;
-    let mut out = format!("plan ready: {} sub-task(s)", sub_tasks.len());
+    let mut out = format!("plan ready: {} worker run(s)", sub_tasks.len());
 
     for (idx, task) in sub_tasks.iter().take(6).enumerate() {
         let prompt = task
@@ -1827,9 +1827,9 @@ fn summarize_loose_plan_json(s: &str) -> Option<String> {
     }
     let prompts = extract_loose_repeated_string_field(s, "prompt");
     if prompts.is_empty() {
-        return Some("plan ready: sub-task(s)".into());
+        return Some("plan ready: worker run(s)".into());
     }
-    let mut out = format!("plan ready: {} sub-task(s)", prompts.len());
+    let mut out = format!("plan ready: {} worker run(s)", prompts.len());
     for (idx, prompt) in prompts.iter().take(6).enumerate() {
         out.push_str(&format!("\n  {}. {}", idx + 1, sanitize_text(prompt, 140)));
     }
@@ -2004,7 +2004,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.kind, "event");
-        assert!(plan.text.contains("plan ready: 1 sub-task(s)"));
+        assert!(plan.text.contains("plan ready: 1 worker run(s)"));
         assert!(plan.text.contains("agent: worker-cc"));
 
         let review =
@@ -2271,7 +2271,7 @@ mod tests {
             500,
         );
 
-        assert!(display.contains("plan ready: 2 sub-task(s)"));
+        assert!(display.contains("plan ready: 2 worker run(s)"));
         assert!(display.contains("1. read the code"));
         assert!(display.contains("agent: worker-claude"));
         assert!(display.contains("2. patch JSON parsing"));
