@@ -1315,6 +1315,25 @@ mod tests {
         }
     }
 
+    struct AtomicTaggedPlanner;
+
+    #[async_trait::async_trait]
+    impl Planner for AtomicTaggedPlanner {
+        async fn plan(&self, _top_task: &Task) -> Result<PlanOutput> {
+            let mut task = Task::new("写参赛 agent");
+            task.tags = vec!["single_worker".to_string()];
+            Ok(PlanOutput {
+                sub_tasks: vec![task],
+                rationale: "test plan with atomic-looking child".to_string(),
+                estimated_cost_usd: 0.0,
+            })
+        }
+
+        async fn replan(&self, top_task: &Task, _critique: &CritiqueOutput) -> Result<PlanOutput> {
+            self.plan(top_task).await
+        }
+    }
+
     struct FailingReplanPlanner;
 
     #[async_trait::async_trait]
@@ -2278,6 +2297,79 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         assert!(!saw_planning, "single worker route should skip planner");
         assert!(!saw_critic, "single worker route should skip critic");
         assert!(!saw_review, "single worker route should skip reviewer");
+    }
+
+    #[tokio::test]
+    async fn full_pipeline_reviews_atomic_tagged_child_tasks() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(AtomicTaggedPlanner),
+            Arc::new(ApprovingCritic),
+            Arc::new(ApprovingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            true,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let completed = orch
+            .run_with_progress(Task::new("优化当前工程的参赛 agent 编排流程"), tx)
+            .await
+            .expect("full pipeline should review atomic-looking child tasks");
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].prompt, "写参赛 agent");
+        assert!(completed[0].tags.iter().any(|tag| tag == "single_worker"));
+
+        let mut saw_full_route = false;
+        let mut saw_reviewing = false;
+        let mut saw_review_result = false;
+        let mut saw_review_skipped = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::RouteSelected { route, .. } => {
+                    saw_full_route = route == "full-pipeline";
+                }
+                RunProgress::Reviewing { .. } => saw_reviewing = true,
+                RunProgress::ReviewResult {
+                    approved, issues, ..
+                } => {
+                    saw_review_result = approved && issues == 0;
+                }
+                RunProgress::ReviewSkipped { .. } => saw_review_skipped = true,
+                _ => {}
+            }
+        }
+
+        assert!(saw_full_route, "top-level route should be full pipeline");
+        assert!(
+            saw_reviewing,
+            "full pipeline should review child tasks even if they look atomic"
+        );
+        assert!(saw_review_result, "review result should be emitted");
+        assert!(
+            !saw_review_skipped,
+            "child task single-worker tags should not suppress full-pipeline review"
+        );
     }
 
     #[tokio::test]

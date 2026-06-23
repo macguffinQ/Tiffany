@@ -39,11 +39,8 @@ pub fn single_worker_task(top_task: &Task) -> Task {
     task
 }
 
-pub fn review_skip_reason(top_task: &Task, task: &Task) -> Option<&'static str> {
-    if let Some(reason) = classify_task_route(top_task).review_skip_reason() {
-        return Some(reason);
-    }
-    classify_task_route(task).review_skip_reason()
+pub fn review_skip_reason(top_task: &Task, _task: &Task) -> Option<&'static str> {
+    classify_task_route(top_task).review_skip_reason()
 }
 
 pub fn conversation_worker_prompt(user_message: &str) -> String {
@@ -253,10 +250,18 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             Some("conversational answer")
         );
 
+        let top = Task::new("写参赛 agent");
+        let task = Task::new("execute the atomic request");
+        assert_eq!(review_skip_reason(&top, &task), Some("single worker route"));
+
         let top = Task::new("优化当前工程");
         let mut task = Task::new("检查报错");
         task.tags = vec!["single_worker".to_string()];
-        assert_eq!(review_skip_reason(&top, &task), Some("single worker route"));
+        assert_eq!(
+            review_skip_reason(&top, &task),
+            None,
+            "full-pipeline review should not be skipped because a child task looks atomic"
+        );
 
         assert_eq!(
             review_skip_reason(&Task::new("优化当前工程"), &Task::new("改代码")),
