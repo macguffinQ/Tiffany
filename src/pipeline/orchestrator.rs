@@ -223,11 +223,28 @@ impl Orchestrator {
         let _ = tx.send(RunProgress::Planning);
         tracing::info!("planning task: {}", top_task.prompt);
         let plan_start = std::time::Instant::now();
-        let mut plan = self
+        let planned = self
             .planner
             .plan_with_progress(top_task, Some(tx.clone()))
-            .await
-            .context("planning task")?;
+            .await;
+        let mut plan = match planned {
+            Ok(plan) => plan,
+            Err(err) => {
+                let message = format!("{:#}", err);
+                tracing::warn!(
+                    "planner failed; continuing with original task as a single worker task: {}",
+                    message
+                );
+                let _ = tx.send(RunProgress::RoleOutput {
+                    role: "planner".to_string(),
+                    content: format!(
+                        "planning unavailable; continuing with original task: {}",
+                        first_error_line(&message)
+                    ),
+                });
+                fallback_single_task_plan(top_task, "planner unavailable; using original task")
+            }
+        };
         apply_conversation_policy(top_task, &mut plan);
         apply_top_task_agent_hint(top_task, &mut plan.sub_tasks);
         attach_parent_session(orchestration_session_id, &mut plan.sub_tasks);
@@ -246,11 +263,29 @@ impl Orchestrator {
                 let _ = tx.send(RunProgress::Critiquing { round: i + 1 });
                 tracing::info!("→ Critiquing started (round {})", i + 1);
                 let crit_start = std::time::Instant::now();
-                let crit = self
+                let critiqued = self
                     .critic
                     .critique_with_progress(top_task, &plan, Some(tx.clone()))
-                    .await
-                    .with_context(|| format!("critiquing plan round {}", i + 1))?;
+                    .await;
+                let crit = match critiqued {
+                    Ok(crit) => crit,
+                    Err(err) => {
+                        let message = format!("{:#}", err);
+                        tracing::warn!(
+                            "critic failed in round {}; continuing with current plan: {}",
+                            i + 1,
+                            message
+                        );
+                        let _ = tx.send(RunProgress::RoleOutput {
+                            role: "critic".to_string(),
+                            content: format!(
+                                "critique unavailable; continuing with current plan: {}",
+                                first_error_line(&message)
+                            ),
+                        });
+                        break;
+                    }
+                };
                 tracing::info!(
                     "→ Critiquing done (round {}): approved={}, {} issues in {:?}",
                     i + 1,
@@ -648,6 +683,26 @@ fn first_error_line(message: &str) -> String {
         .to_string()
 }
 
+fn fallback_single_task_plan(
+    top_task: &Task,
+    rationale: impl Into<String>,
+) -> crate::core::types::PlanOutput {
+    let mut task = Task::new(top_task.prompt.clone());
+    task.tags = top_task.tags.clone();
+    task.files_of_interest = top_task.files_of_interest.clone();
+    task.worktree = top_task.worktree.clone();
+    task.agent_hint = top_task.agent_hint.clone();
+    task.cc_agent_hint = top_task.cc_agent_hint.clone();
+    task.model_hint = top_task.model_hint.clone();
+    task.model_provider_hint = top_task.model_provider_hint.clone();
+    task.timeout = top_task.timeout;
+    crate::core::types::PlanOutput {
+        sub_tasks: vec![task],
+        rationale: rationale.into(),
+        estimated_cost_usd: 0.0,
+    }
+}
+
 fn spawn_progress_recorder(
     store: Arc<SessionStore>,
     session_id: Uuid,
@@ -1024,6 +1079,19 @@ mod tests {
         }
     }
 
+    struct FailingPlanner;
+
+    #[async_trait::async_trait]
+    impl Planner for FailingPlanner {
+        async fn plan(&self, _top_task: &Task) -> Result<PlanOutput> {
+            anyhow::bail!("planner unavailable")
+        }
+
+        async fn replan(&self, top_task: &Task, _critique: &CritiqueOutput) -> Result<PlanOutput> {
+            self.plan(top_task).await
+        }
+    }
+
     struct ApprovingCritic;
 
     #[async_trait::async_trait]
@@ -1154,12 +1222,16 @@ mod tests {
             },
         );
 
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+
         let orch = Orchestrator::new(
             Arc::new(StaticPlanner),
             critic,
             Arc::new(ApprovingReviewer),
             Arc::new(CapabilityRouter::new(&roles, &[])),
-            std::collections::HashMap::new(),
+            adapters,
             store,
             1,
             true,
@@ -1170,27 +1242,102 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_with_progress_reports_stage_errors() {
+    async fn run_with_progress_continues_when_critic_fails() {
         let (_tmp, orch) = test_orchestrator(Arc::new(FailingCritic));
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let err = orch
+        let completed = orch
             .run_with_progress(Task::new("top task"), tx)
             .await
-            .expect_err("critic failure");
+            .expect("critic failure should not abort worker execution");
 
-        let err_msg = format!("{:#}", err);
-        assert!(err_msg.contains("critiquing plan round 1"));
-        assert!(err_msg.contains("critic unavailable"));
-
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].prompt, "sub-task");
+        let mut saw_critic_warning = false;
+        let mut saw_done = false;
         let mut saw_failed = false;
         while let Ok(event) = rx.try_recv() {
-            if let RunProgress::Failed(msg) = event {
-                saw_failed =
-                    msg.contains("critiquing plan round 1") && msg.contains("critic unavailable");
+            match event {
+                RunProgress::RoleOutput { role, content } => {
+                    saw_critic_warning = role == "critic"
+                        && content.contains("critique unavailable; continuing with current plan")
+                        && content.contains("critic unavailable");
+                }
+                RunProgress::Done { task_count } => saw_done = task_count == 1,
+                RunProgress::Failed(_) => saw_failed = true,
+                _ => {}
             }
         }
-        assert!(saw_failed, "expected Failed progress event");
+        assert!(saw_critic_warning, "expected visible critic fallback event");
+        assert!(saw_done, "pipeline should still finish");
+        assert!(!saw_failed, "critic failure should not be terminal");
+    }
+
+    #[tokio::test]
+    async fn run_with_progress_continues_when_initial_planner_fails() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(FailingPlanner),
+            Arc::new(ApprovingCritic),
+            Arc::new(ApprovingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            false,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut top_task = Task::new("ship the smallest useful fix");
+        top_task.tags = vec!["implementation".to_string()];
+        top_task.agent_hint = Some("worker-cc".to_string());
+
+        let completed = orch
+            .run_with_progress(top_task, tx)
+            .await
+            .expect("planner failure should fall back to original task");
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].prompt, "ship the smallest useful fix");
+        assert_eq!(completed[0].tags, vec!["implementation".to_string()]);
+        assert_eq!(completed[0].agent_hint.as_deref(), Some("worker-cc"));
+        let mut saw_planner_warning = false;
+        let mut saw_done = false;
+        let mut saw_failed = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::RoleOutput { role, content } => {
+                    saw_planner_warning = role == "planner"
+                        && content.contains("planning unavailable; continuing with original task")
+                        && content.contains("planner unavailable");
+                }
+                RunProgress::Done { task_count } => saw_done = task_count == 1,
+                RunProgress::Failed(_) => saw_failed = true,
+                _ => {}
+            }
+        }
+        assert!(
+            saw_planner_warning,
+            "expected visible planner fallback event"
+        );
+        assert!(saw_done, "pipeline should still finish");
+        assert!(!saw_failed, "planner failure should not be terminal");
     }
 
     #[tokio::test]

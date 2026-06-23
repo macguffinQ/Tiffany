@@ -34,6 +34,9 @@ All notable changes to this project will be documented in this file.
   pipeline.
 - Surfaced non-zero planner/critic/reviewer CLI exits with stderr context so
   runtime, model, and permission failures are explicit in the TUI.
+- Made planner and critic subprocess failures non-fatal: Tiffany now shows a
+  visible warning, falls back to the original/current plan, and still runs the
+  worker instead of discarding useful worker output.
 
 ## [0.1.25] - 2026-06-22
 
