@@ -1436,6 +1436,9 @@ mod tests {
             current_stage_detail: "running tests".into(),
             agent_hint: Some("worker-codex".into()),
             run_route: Some("single-worker".into()),
+            run_route_reason: Some(
+                "atomic request; planner, critic, and reviewer are not needed".into(),
+            ),
             queued_prompts: vec!["follow up".into(), "then document".into()],
             history_folded: true,
             last_context_messages: 3,
@@ -1455,6 +1458,7 @@ mod tests {
         assert!(joined.contains("Worker: claude-code"));
         assert!(joined.contains("running tests"));
         assert!(joined.contains("flow single"));
+        assert!(joined.contains("reason atomic worker"));
         assert!(joined.contains("worker codex"));
         assert!(joined.contains("ctx compact 3 msg/420 chars"));
         assert!(joined.contains("queue 2 next"));
@@ -1467,6 +1471,10 @@ mod tests {
             current_stage: "Done".into(),
             agent_hint: Some("worker-cc".into()),
             run_route: Some("full-pipeline".into()),
+            run_route_reason: Some(
+                "project or implementation work; planner, critic, worker, and reviewer will run"
+                    .into(),
+            ),
             context_mode: super::super::state::ContextMode::Full,
             ..InputState::default()
         };
@@ -1477,6 +1485,7 @@ mod tests {
         assert!(joined.contains("ready"));
         assert!(joined.contains("last Done"));
         assert!(joined.contains("last flow full"));
+        assert!(joined.contains("reason implementation"));
         assert!(joined.contains("worker claude"));
         assert!(joined.contains("ctx full"));
         assert!(joined.contains("/ for commands"));

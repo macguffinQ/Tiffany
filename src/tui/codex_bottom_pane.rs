@@ -83,6 +83,12 @@ fn status_context_segments(input: &InputState, active: bool) -> Vec<String> {
     } else if let Some(flow) = input.run_route.as_deref() {
         segments.push(format!("last flow {}", flow_label(flow)));
     }
+    if let Some(reason) = input.run_route_reason.as_deref() {
+        let reason = route_reason_label(reason);
+        if !reason.is_empty() {
+            segments.push(format!("reason {reason}"));
+        }
+    }
 
     segments.push(format!(
         "worker {}",
@@ -125,6 +131,22 @@ fn flow_label(route: &str) -> String {
         "full-pipeline" => "full".into(),
         other => truncate_chars(other, 18),
     }
+}
+
+fn route_reason_label(reason: &str) -> String {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return String::new();
+    }
+    let label = match reason {
+        "simple conversational or explanatory request" => "chat/explain",
+        "atomic request; planner, critic, and reviewer are not needed" => "atomic worker",
+        "project or implementation work; planner, critic, worker, and reviewer will run" => {
+            "implementation"
+        }
+        other => other,
+    };
+    truncate_chars(label, 32)
 }
 
 fn context_segment(input: &InputState) -> String {
