@@ -157,8 +157,6 @@ async fn run_cli(
 
     let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
     if let Some(stderr) = child.stderr.take() {
-        let role = role.to_string();
-        let progress = progress.clone();
         let runtime = spec.runtime.label().to_string();
         let stderr_tx = stderr_tx.clone();
         tokio::spawn(async move {
@@ -169,11 +167,6 @@ async fn run_cli(
                     runtime = runtime.as_str(),
                     "{}",
                     line
-                );
-                emit_role_output(
-                    &progress,
-                    &role,
-                    format!("{} stderr: {}", runtime, truncate_cli_text(&line, 220)),
                 );
                 let _ = stderr_tx.send(line);
             }
@@ -199,6 +192,7 @@ async fn run_cli(
                 .with_context(|| format!("waiting for {}", spec.binary))?;
             let stderr = collect_stderr_lines(&mut stderr_rx);
             if !status.success() {
+                emit_actionable_stderr(&progress, role, spec.runtime.label(), &stderr);
                 return Err(anyhow!(
                     "{} exited with status {}{}",
                     spec.binary,
@@ -244,6 +238,28 @@ fn stderr_error_suffix(lines: &[String]) -> String {
         return String::new();
     }
     format!("; stderr: {}", truncate_cli_text(&joined, 500))
+}
+
+fn emit_actionable_stderr(
+    progress: &Option<UnboundedSender<RunProgress>>,
+    role: &str,
+    runtime: &str,
+    lines: &[String],
+) {
+    let joined = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.trim())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if joined.is_empty() {
+        return;
+    }
+    emit_role_output(
+        progress,
+        role,
+        format!("{} stderr: {}", runtime, truncate_cli_text(&joined, 500)),
+    );
 }
 
 fn role_cli_command(spec: &RoleCliSpec, system_prompt: &str, user_prompt: &str) -> Command {

@@ -32,8 +32,17 @@ All notable changes to this project will be documented in this file.
 - Treated pure URL/link-inspection prompts as direct worker answers while
   keeping creation, code, and implementation requests on the full orchestration
   pipeline.
+- Added a middle "single worker" route for atomic execution requests such as
+  external scaffolding or standalone diagnostics, avoiding planner/critic
+  churn and PR-style reviewer failures when no decomposition is useful.
+- Kept multi-turn continuation commands such as "continue" or "继续做" on the
+  full pipeline when prior context is clearly about the current Tiffany
+  project, TUI, roles, providers, or release work.
 - Surfaced non-zero planner/critic/reviewer CLI exits with stderr context so
   runtime, model, and permission failures are explicit in the TUI.
+- Suppressed successful planner/critic/reviewer stderr chatter from the live
+  workflow stream while still surfacing stderr when a control CLI actually
+  fails.
 - Made planner and critic subprocess failures non-fatal: Tiffany now shows a
   visible warning, falls back to the original/current plan, and still runs the
   worker instead of discarding useful worker output.

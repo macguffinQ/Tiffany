@@ -12,7 +12,8 @@ use crate::roles::planner::Planner;
 use crate::roles::reviewer::Reviewer;
 use crate::roles::router::CapabilityRouter;
 use crate::task_policy::{
-    apply_conversation_policy, is_conversational_task, should_skip_review_for_task,
+    apply_conversation_policy, classify_task_route, review_skip_reason, single_worker_task,
+    TaskRoute,
 };
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
@@ -218,10 +219,18 @@ impl Orchestrator {
         tx: UnboundedSender<RunProgress>,
         orchestration_session_id: Option<Uuid>,
     ) -> Result<Vec<Task>> {
-        if is_conversational_task(top_task) {
-            return self
-                .run_direct_conversation(top_task, tx, orchestration_session_id)
-                .await;
+        match classify_task_route(top_task) {
+            TaskRoute::DirectAnswer => {
+                return self
+                    .run_direct_conversation(top_task, tx, orchestration_session_id)
+                    .await;
+            }
+            TaskRoute::SingleWorker => {
+                return self
+                    .run_single_worker(top_task, tx, orchestration_session_id)
+                    .await;
+            }
+            TaskRoute::FullPipeline => {}
         }
 
         // 1. Plan
@@ -366,14 +375,15 @@ impl Orchestrator {
                 if t.status != TaskStatus::Completed {
                     continue;
                 }
-                if should_skip_review_for_task(top_task, t) {
+                if let Some(reason) = review_skip_reason(top_task, t) {
                     let _ = tx.send(RunProgress::ReviewSkipped {
                         task_id: t.id,
-                        reason: "conversational answer".to_string(),
+                        reason: reason.to_string(),
                     });
                     tracing::info!(
-                        "→ Review skipped for task {}: conversational answer",
-                        &t.id.to_string()[..8]
+                        "→ Review skipped for task {}: {}",
+                        &t.id.to_string()[..8],
+                        reason
                     );
                     continue;
                 }
@@ -482,6 +492,30 @@ impl Orchestrator {
             task_count: completed.len(),
         });
         tracing::info!("→ Direct conversation done: {} task(s)", completed.len());
+        Ok(completed)
+    }
+
+    async fn run_single_worker(
+        &self,
+        top_task: &Task,
+        tx: UnboundedSender<RunProgress>,
+        orchestration_session_id: Option<Uuid>,
+    ) -> Result<Vec<Task>> {
+        tracing::info!("→ Single worker route: {}", top_task.prompt);
+        let mut task = single_worker_task(top_task);
+        attach_parent_session(orchestration_session_id, std::slice::from_mut(&mut task));
+        let tasks = vec![task];
+        let _ = tx.send(RunProgress::Executing {
+            sub_task_count: tasks.len(),
+        });
+        let completed = self
+            .execute_dag(tasks, tx.clone())
+            .await
+            .context("executing single worker task")?;
+        let _ = tx.send(RunProgress::Done {
+            task_count: completed.len(),
+        });
+        tracing::info!("→ Single worker done: {} task(s)", completed.len());
         Ok(completed)
     }
 
@@ -1608,6 +1642,75 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
     }
 
     #[tokio::test]
+    async fn run_with_progress_routes_atomic_work_to_single_worker() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(FailingPlanner),
+            Arc::new(FailingCritic),
+            Arc::new(FailingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            true,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let completed = orch
+            .run_with_progress(Task::new("写参赛 agent"), tx)
+            .await
+            .expect("single worker route should not require control roles");
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].prompt, "写参赛 agent");
+        assert!(completed[0].tags.iter().any(|tag| tag == "single_worker"));
+
+        let mut saw_planning = false;
+        let mut saw_critic = false;
+        let mut saw_review = false;
+        let mut saw_executing = false;
+        let mut saw_done = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::Planning | RunProgress::Planned { .. } => saw_planning = true,
+                RunProgress::Critiquing { .. }
+                | RunProgress::CritiqueResult { .. }
+                | RunProgress::Replanning { .. } => saw_critic = true,
+                RunProgress::Reviewing { .. }
+                | RunProgress::ReviewResult { .. }
+                | RunProgress::ReviewUnavailable { .. } => saw_review = true,
+                RunProgress::Executing { sub_task_count } => {
+                    saw_executing = sub_task_count == 1;
+                }
+                RunProgress::Done { task_count } => saw_done = task_count == 1,
+                _ => {}
+            }
+        }
+        assert!(saw_executing, "single worker route should show execution");
+        assert!(saw_done, "single worker route should complete");
+        assert!(!saw_planning, "single worker route should skip planner");
+        assert!(!saw_critic, "single worker route should skip critic");
+        assert!(!saw_review, "single worker route should skip reviewer");
+    }
+
+    #[tokio::test]
     async fn run_with_progress_continues_when_reviewer_fails() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = Arc::new(
@@ -1640,7 +1743,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let completed = orch
-            .run_with_progress(Task::new("write an implementation plan"), tx)
+            .run_with_progress(Task::new("优化当前工程的编排流程实现"), tx)
             .await
             .expect("reviewer failure should not abort completed worker output");
 
