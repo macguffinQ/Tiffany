@@ -790,6 +790,16 @@ fn reviewer_event_summary(payload: &Value) -> String {
 
 fn orchestrator_event_summary(payload: &Value) -> String {
     match payload_str(payload, "status") {
+        Some("running") => {
+            let message = normalized_payload_message(payload, "orchestrator event");
+            match payload_str(payload, "reason")
+                .map(|reason| agent_events::humanize_jsonish(reason, EVENT_SUMMARY_MAX_CHARS))
+                .map(|reason| reason.trim().to_string())
+            {
+                Some(reason) if !reason.is_empty() => format!("{message} · {reason}"),
+                _ => message,
+            }
+        }
         Some("done") => match payload_usize(payload, "count") {
             Some(count) => format!("done · {count} sub-task(s)"),
             None => normalized_payload_message(payload, "done"),
@@ -1188,6 +1198,21 @@ mod tests {
         let line = format_session_event(&skipped);
         assert!(line.contains("review skipped · 12345678 · conversational answer"));
         assert!(!line.contains("review skipped -"));
+
+        let route = Event {
+            kind: "orchestrator".into(),
+            payload: serde_json::json!({
+                "status": "running",
+                "message": "route selected - single-worker",
+                "route": "single-worker",
+                "reason": "atomic request; planner, critic, and reviewer are not needed"
+            }),
+            ..skipped
+        };
+        let line = format_session_event(&route);
+        assert!(line.contains(
+            "orchestrator route selected · single-worker · atomic request; planner, critic, and reviewer are not needed"
+        ));
     }
 
     #[test]

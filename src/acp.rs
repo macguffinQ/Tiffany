@@ -1984,6 +1984,9 @@ async fn send_tool_call_update_status(
 
 fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<String> {
     match event {
+        RunProgress::RouteSelected { route, reason } => {
+            Some(format!("Route selected: {route}. {reason}."))
+        }
         RunProgress::Planning => Some("Planning task.".into()),
         RunProgress::Planned { sub_task_count } => {
             Some(format!("Planned {sub_task_count} sub-task(s)."))
@@ -2790,6 +2793,24 @@ mod tests {
         assert_eq!(
             text,
             "critic fallback: critique unavailable; continuing with current plan: codex exec --cd unsupported."
+        );
+    }
+
+    #[test]
+    fn acp_progress_text_shows_route_selection() {
+        let mut capture = AcpRunCapture::default();
+        let text = progress_text(
+            &RunProgress::RouteSelected {
+                route: "single-worker".into(),
+                reason: "atomic request; planner, critic, and reviewer are not needed".into(),
+            },
+            &mut capture,
+        )
+        .expect("route progress text");
+
+        assert_eq!(
+            text,
+            "Route selected: single-worker. atomic request; planner, critic, and reviewer are not needed."
         );
     }
 

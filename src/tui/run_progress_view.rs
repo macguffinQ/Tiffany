@@ -26,6 +26,9 @@ pub(super) struct RunStatusView {
 
 pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHistoryView> {
     match event {
+        RunProgress::RouteSelected { route, reason } => {
+            Some(running(format!("route {route} — {reason}")))
+        }
         RunProgress::Planning => Some(running("planning")),
         RunProgress::Planned { sub_task_count } => Some(success(format!(
             "plan ready — {sub_task_count} sub-task(s)"
@@ -129,6 +132,11 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
 
 pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
     match event {
+        RunProgress::RouteSelected { route, reason } => Some(status(
+            format!("Route: {route}"),
+            reason.clone(),
+            Some(format!("▸ Route {route} — {reason}")),
+        )),
         RunProgress::Planning => Some(status(
             "Planning",
             "decomposing task",
@@ -480,12 +488,40 @@ mod tests {
         assert_eq!(direct.icon, "●");
         assert_eq!(direct.line, "answering directly");
 
+        let route = progress_history_view(&RunProgress::RouteSelected {
+            route: "single-worker".into(),
+            reason: "atomic request; planner, critic, and reviewer are not needed".into(),
+        })
+        .expect("route view");
+        assert_eq!(route.icon, "●");
+        assert_eq!(
+            route.line,
+            "route single-worker — atomic request; planner, critic, and reviewer are not needed"
+        );
+
         let direct_status = run_status_view(&RunProgress::DirectAnswer).expect("direct status");
         assert_eq!(direct_status.stage, "Direct answer");
         assert_eq!(direct_status.detail, "running worker");
         assert_eq!(
             direct_status.assistant_update.as_deref(),
             Some("▸ Answering directly…")
+        );
+
+        let route_status = run_status_view(&RunProgress::RouteSelected {
+            route: "single-worker".into(),
+            reason: "atomic request; planner, critic, and reviewer are not needed".into(),
+        })
+        .expect("route status");
+        assert_eq!(route_status.stage, "Route: single-worker");
+        assert_eq!(
+            route_status.detail,
+            "atomic request; planner, critic, and reviewer are not needed"
+        );
+        assert_eq!(
+            route_status.assistant_update.as_deref(),
+            Some(
+                "▸ Route single-worker — atomic request; planner, critic, and reviewer are not needed"
+            )
         );
 
         let fallback = progress_history_view(&RunProgress::ControlFallback {

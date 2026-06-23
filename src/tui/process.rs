@@ -1383,6 +1383,15 @@ mod tests {
     fn run_events_record_compact_waterfall_lifecycle() {
         let task_id = uuid::Uuid::nil();
 
+        let route = format_run_event(&RunProgress::RouteSelected {
+            route: "single-worker".into(),
+            reason: "atomic request; planner, critic, and reviewer are not needed".into(),
+        });
+        assert_eq!(
+            route,
+            "route  single-worker · atomic request; planner, critic, and reviewer are not needed"
+        );
+
         let started = format_run_event(&RunProgress::WorkerStarted {
             task_id,
             agent: "claude-code".into(),

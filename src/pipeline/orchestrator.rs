@@ -26,6 +26,10 @@ use uuid::Uuid;
 /// (Borrowed from Claude Code's terminal pattern: background task + mpsc channel.)
 #[derive(Clone, Debug)]
 pub enum RunProgress {
+    RouteSelected {
+        route: String,
+        reason: String,
+    },
     Planning,
     Planned {
         sub_task_count: usize,
@@ -221,11 +225,20 @@ impl Orchestrator {
     ) -> Result<Vec<Task>> {
         match classify_task_route(top_task) {
             TaskRoute::DirectAnswer => {
+                let _ = tx.send(RunProgress::RouteSelected {
+                    route: "direct-answer".to_string(),
+                    reason: "simple conversational or explanatory request".to_string(),
+                });
                 return self
                     .run_direct_conversation(top_task, tx, orchestration_session_id)
                     .await;
             }
             TaskRoute::SingleWorker => {
+                let _ = tx.send(RunProgress::RouteSelected {
+                    route: "single-worker".to_string(),
+                    reason: "atomic request; planner, critic, and reviewer are not needed"
+                        .to_string(),
+                });
                 return self
                     .run_single_worker(top_task, tx, orchestration_session_id)
                     .await;
@@ -759,6 +772,16 @@ fn spawn_progress_recorder(
 
 fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgress) -> Event {
     let (kind, task_id, payload) = match event {
+        RunProgress::RouteSelected { route, reason } => (
+            "orchestrator",
+            top_task_id,
+            serde_json::json!({
+                "status": "running",
+                "message": format!("route selected - {route}"),
+                "route": route,
+                "reason": reason,
+            }),
+        ),
         RunProgress::Planning => (
             "planner",
             top_task_id,
@@ -1687,8 +1710,13 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         let mut saw_review = false;
         let mut saw_executing = false;
         let mut saw_done = false;
+        let mut saw_route = false;
         while let Ok(event) = rx.try_recv() {
             match event {
+                RunProgress::RouteSelected { route, reason } => {
+                    saw_route = route == "single-worker"
+                        && reason.contains("planner, critic, and reviewer are not needed");
+                }
                 RunProgress::Planning | RunProgress::Planned { .. } => saw_planning = true,
                 RunProgress::Critiquing { .. }
                 | RunProgress::CritiqueResult { .. }
@@ -1703,6 +1731,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                 _ => {}
             }
         }
+        assert!(saw_route, "single worker route should be explicit");
         assert!(saw_executing, "single worker route should show execution");
         assert!(saw_done, "single worker route should complete");
         assert!(!saw_planning, "single worker route should skip planner");

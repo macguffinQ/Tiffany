@@ -45,6 +45,25 @@ pub struct TiffanyProgressEvent {
 impl From<RunProgress> for TiffanyProgressEvent {
     fn from(event: RunProgress) -> Self {
         match event {
+            RunProgress::RouteSelected { route, reason } => Self {
+                role: "orchestrator",
+                status: "running",
+                message: format!("route selected - {route}"),
+                task_id: None,
+                agent: None,
+                worker_role: None,
+                runtime: None,
+                cc_agent: None,
+                model: None,
+                provider: None,
+                task_prompt: None,
+                content: None,
+                approved: None,
+                issues: None,
+                count: None,
+                duration_ms: None,
+                reason: Some(reason),
+            },
             RunProgress::Planning => Self {
                 role: "planner",
                 status: "running",
@@ -498,6 +517,9 @@ impl TiffanyTextProgressFormatter {
 
 pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
     match event {
+        RunProgress::RouteSelected { route, reason } => {
+            Some(format!("● route    {route} · {reason}"))
+        }
         RunProgress::Planning => Some("● planner  planning".into()),
         RunProgress::Planned { sub_task_count } => Some(format!(
             "✓ planner  plan ready · {sub_task_count} sub-task(s)"
@@ -628,6 +650,7 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
 
 pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
     match event {
+        RunProgress::RouteSelected { route, reason } => Some(format!("route  {route} · {reason}")),
         RunProgress::Planning => Some("plan  planning work".into()),
         RunProgress::Planned { sub_task_count } => {
             Some(format!("plan  plan ready · {sub_task_count} sub-task(s)"))
@@ -947,6 +970,16 @@ mod tests {
             format_compact_progress_event(&RunProgress::DirectAnswer).expect("direct answer line");
         assert_eq!(direct, "run  answering directly");
 
+        let route = format_compact_progress_event(&RunProgress::RouteSelected {
+            route: "single-worker".into(),
+            reason: "atomic request; planner, critic, and reviewer are not needed".into(),
+        })
+        .expect("route line");
+        assert_eq!(
+            route,
+            "route  single-worker · atomic request; planner, critic, and reviewer are not needed"
+        );
+
         let started = format_compact_progress_event(&RunProgress::WorkerStarted {
             task_id,
             agent: "claude-code".into(),
@@ -1042,5 +1075,29 @@ mod tests {
         assert_eq!(json["status"], "running");
         assert_eq!(json["message"], "answering directly");
         assert!(json.get("count").is_none());
+    }
+
+    #[test]
+    fn route_selected_event_is_visible_and_structured() {
+        let event = RunProgress::RouteSelected {
+            route: "single-worker".into(),
+            reason: "atomic request; planner, critic, and reviewer are not needed".into(),
+        };
+
+        let line = format_text_progress_event(&event).expect("route text line");
+        assert_eq!(
+            line,
+            "● route    single-worker · atomic request; planner, critic, and reviewer are not needed"
+        );
+
+        let json =
+            serde_json::to_value(TiffanyProgressEvent::from(event)).expect("serializes route");
+        assert_eq!(json["role"], "orchestrator");
+        assert_eq!(json["status"], "running");
+        assert_eq!(json["message"], "route selected - single-worker");
+        assert_eq!(
+            json["reason"],
+            "atomic request; planner, critic, and reviewer are not needed"
+        );
     }
 }

@@ -49,6 +49,9 @@ All notable changes to this project will be documented in this file.
 - Promoted planner/critic fallback paths to structured progress events so
   terminal chat, `/process`, ACP clients, and persisted logs render them as
   workflow warnings instead of noisy role output.
+- Added an explicit route-selected progress event so direct answers, atomic
+  single-worker runs, and full orchestration runs show why Tiffany chose that
+  path before execution starts.
 
 ## [0.1.25] - 2026-06-22
 

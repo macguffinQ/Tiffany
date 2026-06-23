@@ -180,7 +180,8 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
     }
 
     match event {
-        RunProgress::Planning
+        RunProgress::RouteSelected { .. }
+        | RunProgress::Planning
         | RunProgress::Planned { .. }
         | RunProgress::Critiquing { .. }
         | RunProgress::CritiqueResult { .. }
