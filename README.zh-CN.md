@@ -123,7 +123,7 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-check-examples`：只运行仓库内示例项目测试。
 - `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]`：运行汇总后的发布前检查；打 tag 前使用 `--full --tag vX.Y.Z`。带 tag 的检查默认有 24 小时发版冷却；只有安装损坏、启动失败、安全修复等紧急情况才设置 `TIFFANY_RELEASE_ALLOW_FREQUENT=1` 覆盖。
 - `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]`：根据已发布 release asset 和源码包 checksum 生成 Homebrew tap 公式。
-- `./scripts/tiffany-post-release-check --tag vX.Y.Z [--skip-install]`：验证已发布 GitHub Release asset、Homebrew tap checksum、安装版本、`doctor` 和 `brew test`。
+- `./scripts/tiffany-post-release-check --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--skip-install]`：验证已发布 GitHub Release asset、Homebrew tap checksum、安装版本、`doctor` 和 `brew test`。用 `--tap-dir` 可以直接校验本地 tap checkout，避免依赖 Homebrew 的本地 tap 缓存。
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small`：查看构建缓存大小、定位大文件，在保留已编译依赖和最终二进制的同时清理可重建缓存，或清理更大的 build 输出，避免 `target/` 膨胀。
 
 Tag 发布 workflow 会先发布 GitHub Release asset。只有配置了仓库 secret `HOMEBREW_TAP_TOKEN` 时才会自动更新 Homebrew tap；未配置时 Release 仍保持绿色，并在 Actions summary 里输出手动执行 `tiffany-update-homebrew-tap` 的命令。
@@ -373,7 +373,8 @@ behavior:
 | `./scripts/tiffany-install-smoke --smoke|--dist` | 在隔离临时 HOME 中验证安装后的命令行为 |
 | `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | 执行汇总后的本地发布前检查：format、clippy、测试、示例、审计；full 模式再跑 dist 检查 |
-| `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--commit --push]` | 为已发布版本生成并可选提交/推送 Homebrew tap 公式 |
+| `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]` | 为已发布版本生成并可选提交/推送 Homebrew tap 公式 |
+| `./scripts/tiffany-post-release-check --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--skip-install]` | 验证 release asset、tap 公式 checksum、安装版本、doctor 和 `brew test` |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` | 查看或精简共享/旧 Cargo 构建缓存；默认只删除旧 fork-local target |
 | `tiffany-loop` | 安装后打开主 tiffany-loop UI |
 | `tiffany-loop init` | 通过主命令生成 `~/.orchestrator/config.yaml` |

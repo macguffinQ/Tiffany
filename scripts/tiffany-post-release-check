@@ -12,12 +12,13 @@ Options:
   --tag TAG        Release tag to verify.
   --repo REPO      GitHub release repo. Default: macguffinQ/Tiffany.
   --tap REPO       Homebrew tap repo. Default: macguffinQ/tap.
+  --tap-dir DIR    Existing Homebrew tap checkout to verify instead of `brew --repository`.
   --formula NAME   Formula name. Default: tiffany-loop.
   --skip-install   Skip brew update/upgrade/test and only verify release + tap metadata.
 
 Examples:
   ./scripts/tiffany-post-release-check --tag vX.Y.Z
-  ./scripts/tiffany-post-release-check --tag vX.Y.Z --skip-install
+  ./scripts/tiffany-post-release-check --tag vX.Y.Z --tap-dir ../homebrew-tap --skip-install
 EOF
 }
 
@@ -53,6 +54,7 @@ require_cmd() {
 tag=""
 release_repo="macguffinQ/Tiffany"
 tap_repo="macguffinQ/tap"
+tap_dir=""
 formula_name="tiffany-loop"
 skip_install=false
 
@@ -91,6 +93,17 @@ while [[ "$#" -gt 0 ]]; do
     --tap=*)
       tap_repo="${1#--tap=}"
       ;;
+    --tap-dir)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      tap_dir="$2"
+      shift
+      ;;
+    --tap-dir=*)
+      tap_dir="${1#--tap-dir=}"
+      ;;
     --formula)
       if [[ -z "${2:-}" ]]; then
         usage >&2
@@ -123,9 +136,10 @@ if [[ -z "$tag" ]]; then
 fi
 
 require_cmd gh
-require_cmd jq
 require_cmd curl
-require_cmd brew
+if [[ -z "$tap_dir" || "$skip_install" != "true" ]]; then
+  require_cmd brew
+fi
 
 version="${tag#v}"
 asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
@@ -190,11 +204,12 @@ print_tap_checkout_diagnostics() {
 }
 
 step "GitHub Release"
-release_json="$(gh release view "$tag" --repo "$release_repo" --json tagName,isDraft,isPrerelease,assets)"
-assert_eq "release tag" "$tag" "$(printf '%s' "$release_json" | jq -r '.tagName')"
-assert_eq "release draft state" "false" "$(printf '%s' "$release_json" | jq -r '.isDraft')"
-asset_digest="$(printf '%s' "$release_json" | jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .digest')"
-asset_size="$(printf '%s' "$release_json" | jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .size')"
+release_tag="$(gh release view "$tag" --repo "$release_repo" --json tagName --jq '.tagName')"
+release_draft="$(gh release view "$tag" --repo "$release_repo" --json isDraft --jq '.isDraft')"
+assert_eq "release tag" "$tag" "$release_tag"
+assert_eq "release draft state" "false" "$release_draft"
+asset_digest="$(gh release view "$tag" --repo "$release_repo" --json assets --jq ".assets[] | select(.name == \"${asset}\") | .digest")"
+asset_size="$(gh release view "$tag" --repo "$release_repo" --json assets --jq ".assets[] | select(.name == \"${asset}\") | .size")"
 if [[ -z "$asset_digest" || "$asset_digest" == "null" ]]; then
   echo "release asset not found: $asset" >&2
   exit 1
@@ -205,8 +220,12 @@ echo "asset sha256: $arm_sha"
 echo "asset size: $asset_size"
 
 step "Homebrew tap formula"
-brew update >/dev/null
-tap_dir="$(brew --repository "$tap_repo")"
+if [[ -n "$tap_dir" ]]; then
+  tap_dir="${tap_dir/#\~/$HOME}"
+else
+  brew update >/dev/null
+  tap_dir="$(brew --repository "$tap_repo")"
+fi
 formula_path="$tap_dir/Formula/${formula_name}.rb"
 if [[ ! -f "$formula_path" ]]; then
   echo "formula not found: $formula_path" >&2

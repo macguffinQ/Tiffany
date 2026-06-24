@@ -3963,7 +3963,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "anyhow",
  "arboard",
@@ -13286,7 +13286,7 @@ dependencies = [
 
 [[package]]
 name = "tiffany-cli"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "anyhow",
  "clap",

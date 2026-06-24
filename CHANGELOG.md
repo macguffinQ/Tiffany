@@ -4,10 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.27] - 2026-06-24
+
 ### Added
 
 - Added a release preflight guard that requires `CHANGELOG.md` to contain the
   release section for the tag being checked.
+- Added a `--tap-dir` mode to `scripts/tiffany-post-release-check` so release
+  metadata can be verified against a known local Homebrew tap checkout.
 
 ### Changed
 
@@ -16,6 +20,8 @@ All notable changes to this project will be documented in this file.
   release artifact has already been published.
 - Replaced fixed historical release tags in README archive-install examples and
   the Homebrew formula template with `vX.Y.Z` placeholders.
+- Removed the external `jq` dependency from post-release checks by using
+  GitHub CLI's built-in `--jq` support.
 
 ### Fixed
 

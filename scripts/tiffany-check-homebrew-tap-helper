@@ -88,3 +88,53 @@ if command -v ruby >/dev/null 2>&1; then
 fi
 
 echo "homebrew tap helper check passed"
+
+tap_checkout="$tmp_root/homebrew-tools"
+mkdir -p "$tap_checkout/Formula"
+cp "$formula" "$tap_checkout/Formula/tiffany-loop.rb"
+
+cat > "$fake_bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -ge 3 && "$1" == "release" && "$2" == "view" ]]; then
+  case "$*" in
+    *"--json tagName --jq .tagName"*)
+      printf 'v9.8.7\n'
+      ;;
+    *"--json isDraft --jq .isDraft"*)
+      printf 'false\n'
+      ;;
+    *"--json assets --jq"*".digest"*)
+      printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+      ;;
+    *"--json assets --jq"*".size"*)
+      printf '12345\n'
+      ;;
+    *)
+      echo "unexpected fake gh invocation: $*" >&2
+      exit 2
+      ;;
+  esac
+  exit 0
+fi
+
+echo "unexpected fake gh invocation: $*" >&2
+exit 2
+EOF
+chmod +x "$fake_bin/gh"
+
+PATH="$fake_bin:$PATH" "$repo_dir/scripts/tiffany-post-release-check" \
+  --tag v9.8.7 \
+  --repo example/tiffany-loop \
+  --tap example/tools \
+  --tap-dir "$tap_checkout" \
+  --skip-install > "$tmp_root/post-release.log"
+
+if ! grep -F -- "post-release metadata checks passed for v9.8.7" "$tmp_root/post-release.log" >/dev/null; then
+  echo "expected post-release metadata check to pass" >&2
+  cat "$tmp_root/post-release.log" >&2
+  exit 1
+fi
+
+echo "post-release tap-dir helper check passed"

@@ -118,7 +118,7 @@ Development entrypoints:
 - `./scripts/tiffany-check-examples` - run only the checked-in example project tests.
 - `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` - run the consolidated release-readiness checks; use `--full --tag vX.Y.Z` before tagging. Tagged checks enforce a 24-hour release cooldown unless `TIFFANY_RELEASE_ALLOW_FREQUENT=1` is set for an urgent fix.
 - `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]` - generate the Homebrew formula from a published release asset and source archive checksums.
-- `./scripts/tiffany-post-release-check --tag vX.Y.Z [--skip-install]` - verify the published GitHub Release asset, Homebrew tap checksums, installed versions, `doctor`, and `brew test`.
+- `./scripts/tiffany-post-release-check --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--skip-install]` - verify the published GitHub Release asset, Homebrew tap checksums, installed versions, `doctor`, and `brew test`. Use `--tap-dir` to verify a local tap checkout without relying on Homebrew's cached tap repository.
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` - inspect build-cache size, find large artifacts, trim rebuildable caches while keeping compiled deps/final binaries, or remove larger build outputs when `target/` grows too large.
 
 The tag release workflow publishes GitHub Release assets first. It updates the Homebrew tap automatically only when the repository secret `HOMEBREW_TAP_TOKEN` is configured; otherwise the workflow leaves the Release green and prints the manual `tiffany-update-homebrew-tap` command in the Actions summary.
@@ -482,7 +482,7 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `./scripts/tiffany-check-examples` | Run only checked-in example tests |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | Run consolidated local release-readiness checks: format, clippy, tests, examples, audit, and dist checks in full mode |
 | `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--commit --push]` | Generate and optionally commit/push the Homebrew tap formula for a published release |
-| `./scripts/tiffany-post-release-check --tag vX.Y.Z [--skip-install]` | Verify release assets, tap formula checksums, installed versions, doctor, and `brew test` |
+| `./scripts/tiffany-post-release-check --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--skip-install]` | Verify release assets, tap formula checksums, installed versions, doctor, and `brew test` |
 | `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` | Inspect or trim shared and legacy Cargo build caches; default removes only the old fork-local target |
 | `tiffany-loop` | Open the primary tiffany-loop UI after install |
 | `tiffany-loop init` | Generate `~/.orchestrator/config.yaml` through the primary command |
@@ -750,7 +750,7 @@ cargo build --release    # release, ~5-8min first time
 ./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --quick
 ./scripts/tiffany-release-preflight --full --tag vX.Y.Z     # before tagging
-./scripts/tiffany-post-release-check --tag vX.Y.Z            # after release/tap update
+./scripts/tiffany-post-release-check --tag vX.Y.Z --tap-dir ../homebrew-tap --skip-install  # after release/tap update
 # Same-day follow-up tags are blocked by default; reserve this for urgent fixes:
 # TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full --tag vX.Y.Z
 
