@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+### Changed
+
+### Fixed
+
+## [0.1.26] - 2026-06-24
+
 ### Changed
 
 - Replaced upstream Codex placeholder docs in `tiffany-ui/docs` with
