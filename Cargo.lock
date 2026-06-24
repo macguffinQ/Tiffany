@@ -2039,7 +2039,7 @@ dependencies = [
 
 [[package]]
 name = "tiffany-loop"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 
 - Nothing yet.
 
+## [0.1.33] - 2026-06-24
+
+### Added
+
+- Added `/thread` and `/threads` in the terminal chat to show stable worker
+  threads, native Claude/Codex session IDs, manual resume commands, and the
+  latest Tiffany worker session for each role.
+
+### Fixed
+
+- Included recent Claude/Codex stderr in worker failure messages so model,
+  auth, permission, and native session errors do not collapse to a bare exit
+  status.
+- Added a focused diagnostic for Claude `Session ID ... is already in use`
+  failures with the role, worker thread, native session, `/thread` hint, and
+  manual `claude --resume` command.
+
 ## [0.1.32] - 2026-06-24
 
 ### Fixed
