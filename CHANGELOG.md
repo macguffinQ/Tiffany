@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.1.28] - 2026-06-24
+
+### Fixed
+
+- Removed the remaining `rg` dependency from release preflight and open-source
+  audit scripts so GitHub release runners can verify tags without extra tools.
+
 ## [0.1.27] - 2026-06-24
 
 ### Added

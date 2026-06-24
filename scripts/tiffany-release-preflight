@@ -120,7 +120,7 @@ check_changelog_release_entry() {
     echo "Missing CHANGELOG.md" >&2
     exit 1
   fi
-  if ! rg -q "^## \\[${expected//./\\.}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" "$changelog"; then
+  if ! grep -Eq "^## \\[${expected//./\\.}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" "$changelog"; then
     echo "CHANGELOG.md is missing a release entry for $expected" >&2
     echo "Add a section like: ## [$expected] - YYYY-MM-DD" >&2
     exit 1

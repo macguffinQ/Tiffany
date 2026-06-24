@@ -13,11 +13,11 @@ section() {
 section "tracked local state"
 tracked_state="$(
   git ls-files |
-    rg '(^|/)(target|\.orchestrator|\.tiffany|sessions)(/|$)|\.(db|sqlite|sqlite3|db-wal|db-shm|db-journal|log)$|(^|/)\.env(\.|$)|(^|/)(id_rsa|id_ed25519)(\.pub)?$|(^|/)config\.local\.ya?ml$' || true
+    grep -E '(^|/)(target|\.orchestrator|\.tiffany|sessions)(/|$)|\.(db|sqlite|sqlite3|db-wal|db-shm|db-journal|log)$|(^|/)\.env(\.|$)|(^|/)(id_rsa|id_ed25519)(\.pub)?$|(^|/)config\.local\.ya?ml$' || true
 )"
 tracked_state="$(
   printf '%s\n' "${tracked_state}" |
-    rg -v '^(third_party/openai-codex/|tiffany-ui/codex-rs/).*tests/fixtures/.*\.(jsonl|pem)$' || true
+    grep -Ev '^(third_party/openai-codex/|tiffany-ui/codex-rs/).*tests/fixtures/.*\.(jsonl|pem)$' || true
 )"
 if [[ -n "${tracked_state}" ]]; then
   echo "${tracked_state}"
@@ -29,11 +29,11 @@ fi
 section "untracked suspicious files"
 untracked_state="$(
   git ls-files --others --exclude-standard |
-    rg '(^|/)(target|\.orchestrator|\.tiffany|sessions)(/|$)|\.(db|sqlite|sqlite3|db-wal|db-shm|db-journal|log|jsonl|pem|key)$|(^|/)\.env(\.|$)|(^|/)(id_rsa|id_ed25519)(\.pub)?$|(^|/)config(\.local)?\.ya?ml$' || true
+    grep -E '(^|/)(target|\.orchestrator|\.tiffany|sessions)(/|$)|\.(db|sqlite|sqlite3|db-wal|db-shm|db-journal|log|jsonl|pem|key)$|(^|/)\.env(\.|$)|(^|/)(id_rsa|id_ed25519)(\.pub)?$|(^|/)config(\.local)?\.ya?ml$' || true
 )"
 untracked_state="$(
   printf '%s\n' "${untracked_state}" |
-    rg -v '^(third_party/openai-codex/|tiffany-ui/codex-rs/).*tests/fixtures/.*\.(jsonl|pem)$' || true
+    grep -Ev '^(third_party/openai-codex/|tiffany-ui/codex-rs/).*tests/fixtures/.*\.(jsonl|pem)$' || true
 )"
 if [[ -n "${untracked_state}" ]]; then
   echo "${untracked_state}"
