@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 - Nothing yet.
 
-## [0.1.30] - 2026-06-24
+## [0.1.31] - 2026-06-24
 
 ### Fixed
 
