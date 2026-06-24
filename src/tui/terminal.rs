@@ -612,7 +612,7 @@ fn complete_terminal_slash_argument(
 }
 
 fn print_intro(mode_notice: Option<&str>) {
-    term_line!("{CYAN}{BOLD}tiffany-loop{RESET} {DIM}upstream-derived terminal UI{RESET}");
+    term_line!("{CYAN}{BOLD}tiffany-loop{RESET} {DIM}orchestrator terminal UI{RESET}");
     if let Some(mode_notice) = mode_notice {
         term_line!("{YELLOW}⚠{RESET} {DIM}{mode_notice}{RESET}");
     }
@@ -1328,27 +1328,17 @@ fn terminal_help() -> String {
      /model [role]                 Show model assignments\n\
      /usage [today|week|month|all] Show token/cost usage\n\
      /sessions [n]                 List recent sessions with tree/log shortcuts\n\
-     /import-cc [project]          Import Claude Code sessions into chat history\n\
-     /resume last                  Restore the last terminal chat conversation\n\
      /session [id|prefix|last]     Show one session summary\n\
      /session tree [id|prefix|last] Show parent/child session tree\n\
      /session flow [id|prefix|last] [n] Show orchestration event waterfall\n\
-     /tree [id|prefix|last]        Show parent/child session tree\n\
-     /run-flow [id|prefix|last] [n] Show orchestration event waterfall\n\
-     /log [id|prefix|last] [n]     Show session log tail\n\
      /trace [on|off|full|compact] Configure captured trace verbosity\n\
      /context [compact|full|off|clear] Control remembered conversation context\n\
      /process [summary|full|n]     Show captured run process\n\
      /diff [summary|stat|full]     Show current git changes\n\
      /tests [suggest|quick|run|status] Show or run test helpers\n\
-     /handoff claude|codex         Save context package for another CLI\n\
-     /handoff open claude|codex    Save handoff and open that CLI inline\n\
      /continue claude|codex        Save handoff and open that CLI inline\n\
      /graph [compact|full|mermaid|save] Compress conversation into a flow graph\n\
      /acp [status|claude|codex]    Show ACP server/client setup hints\n\
-     /checkpoint [save|status]     Save current tracked git diff\n\
-     /rollback [last|check]        Reverse-apply last checkpoint patch\n\
-     /editor [draft]               Compose a longer prompt in $VISUAL or $EDITOR\n\
      /result [text]                Show last final result\n\
      /copy                         Copy last final result when available\n\
      /copy result                  Copy last final result\n\
@@ -1380,8 +1370,8 @@ mod tests {
         assert!(help.contains("Queued messages merge into the next batch"));
         assert!(help.contains("/o folds/expands future details"));
         assert!(help.contains("/result [text]"));
-        assert!(help.contains("/resume last"));
-        assert!(help.contains("/editor"));
+        assert!(!help.contains("/resume last"));
+        assert!(!help.contains("/editor"));
         assert!(help.contains("Up/Down recalls previous prompts"));
         assert!(!help.contains("--fullscreen"));
     }

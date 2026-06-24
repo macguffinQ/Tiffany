@@ -366,6 +366,7 @@ impl ChatWidget {
 
     pub(crate) fn set_tiffany_orchestrator_shell(&mut self, enabled: bool) {
         self.tiffany_orchestrator_shell = enabled;
+        self.bottom_pane.set_tiffany_orchestrator_shell(enabled);
         if enabled {
             self.bottom_pane
                 .set_queue_submissions(/*queue_submissions*/ false);

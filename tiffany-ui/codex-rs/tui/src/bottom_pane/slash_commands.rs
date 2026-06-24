@@ -64,12 +64,16 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) personality_command_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
     pub(crate) side_conversation_active: bool,
+    pub(crate) tiffany_orchestrator_shell: bool,
 }
 
 /// Return the built-ins that should be visible/usable for the current input.
 pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static str, SlashCommand)> {
     built_in_slash_commands()
         .into_iter()
+        .filter(|(_, cmd)| {
+            !flags.tiffany_orchestrator_shell || tiffany_orchestrator_command_visible(*cmd)
+        })
         .filter(|(_, cmd)| flags.allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
         .filter(|(_, cmd)| flags.collaboration_modes_enabled || *cmd != SlashCommand::Plan)
         .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
@@ -81,12 +85,29 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .collect()
 }
 
+fn tiffany_orchestrator_command_visible(cmd: SlashCommand) -> bool {
+    matches!(
+        cmd,
+        SlashCommand::Provider
+            | SlashCommand::Role
+            | SlashCommand::Roles
+            | SlashCommand::Doctor
+            | SlashCommand::Copy
+            | SlashCommand::Raw
+            | SlashCommand::Diff
+            | SlashCommand::Status
+            | SlashCommand::Clear
+            | SlashCommand::Quit
+            | SlashCommand::Exit
+    )
+}
+
 pub(crate) fn commands_for_input(
     flags: BuiltinCommandFlags,
     service_tier_commands: &[ServiceTierCommand],
 ) -> Vec<SlashCommandItem> {
     let mut commands = Vec::new();
-    let tiers_enabled = flags.service_tier_commands_enabled;
+    let tiers_enabled = flags.service_tier_commands_enabled && !flags.tiffany_orchestrator_shell;
     for (_, cmd) in builtins_for_input(flags) {
         commands.push(SlashCommandItem::Builtin(cmd));
         if cmd == SlashCommand::Model && tiers_enabled {
@@ -134,7 +155,7 @@ pub(crate) fn find_slash_command(
         return Some(SlashCommandItem::Builtin(cmd));
     }
 
-    let tiers_enabled = flags.service_tier_commands_enabled;
+    let tiers_enabled = flags.service_tier_commands_enabled && !flags.tiffany_orchestrator_shell;
     tiers_enabled
         .then(|| {
             service_tier_commands
@@ -173,6 +194,7 @@ mod tests {
             personality_command_enabled: true,
             allow_elevate_sandbox: true,
             side_conversation_active: false,
+            tiffany_orchestrator_shell: false,
         }
     }
 
@@ -287,6 +309,45 @@ mod tests {
             find_builtin_command("usage", flags),
             Some(SlashCommand::Usage)
         );
+    }
+
+    #[test]
+    fn tiffany_orchestrator_mode_hides_upstream_only_commands() {
+        let commands = builtins_for_input(BuiltinCommandFlags {
+            tiffany_orchestrator_shell: true,
+            ..all_enabled_flags()
+        })
+        .into_iter()
+        .map(|(_, command)| command)
+        .collect::<Vec<_>>();
+
+        assert!(commands.contains(&SlashCommand::Provider));
+        assert!(commands.contains(&SlashCommand::Role));
+        assert!(commands.contains(&SlashCommand::Roles));
+        assert!(commands.contains(&SlashCommand::Doctor));
+        assert!(commands.contains(&SlashCommand::Exit));
+        assert!(!commands.contains(&SlashCommand::Model));
+        assert!(!commands.contains(&SlashCommand::Permissions));
+        assert!(!commands.contains(&SlashCommand::Init));
+        assert!(!commands.contains(&SlashCommand::Compact));
+    }
+
+    #[test]
+    fn tiffany_orchestrator_mode_hides_service_tier_commands() {
+        let command = ServiceTierCommand {
+            id: "priority".to_string(),
+            name: "fast".to_string(),
+            description: "fastest inference".to_string(),
+        };
+        let flags = BuiltinCommandFlags {
+            tiffany_orchestrator_shell: true,
+            service_tier_commands_enabled: true,
+            ..all_enabled_flags()
+        };
+
+        assert!(!commands_for_input(flags, from_ref(&command))
+            .contains(&SlashCommandItem::ServiceTier(command.clone())));
+        assert_eq!(find_slash_command("fast", flags, from_ref(&command)), None);
     }
 
     #[test]

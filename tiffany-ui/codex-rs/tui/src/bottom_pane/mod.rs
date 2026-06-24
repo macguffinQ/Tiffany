@@ -1019,6 +1019,11 @@ impl BottomPane {
         self.composer.set_queue_submissions(queue_submissions);
     }
 
+    pub(crate) fn set_tiffany_orchestrator_shell(&mut self, enabled: bool) {
+        self.composer.set_tiffany_orchestrator_shell(enabled);
+        self.request_redraw();
+    }
+
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         if self.status.take().is_some() {

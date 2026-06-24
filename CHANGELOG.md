@@ -9,6 +9,9 @@ All notable changes to this project will be documented in this file.
   session history.
 - Improved Claude `Session ID ... is already in use` diagnostics with the new
   `/thread clear <role>` recovery command.
+- Hid unsupported upstream Codex slash commands from Tiffany orchestrator
+  command menus and help output, while keeping legacy handlers available for
+  direct compatibility.
 
 ## [0.1.33] - 2026-06-24
 

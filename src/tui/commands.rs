@@ -569,32 +569,8 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
             description: "show worker thread/native CLI sessions",
         },
         SlashCommandDef {
-            name: "import-cc",
-            description: "import Claude Code sessions",
-        },
-        SlashCommandDef {
-            name: "resume",
-            description: "restore last terminal chat",
-        },
-        SlashCommandDef {
             name: "session",
             description: "show one session summary",
-        },
-        SlashCommandDef {
-            name: "tree",
-            description: "show session parent/child tree",
-        },
-        SlashCommandDef {
-            name: "run-flow",
-            description: "show orchestration event waterfall",
-        },
-        SlashCommandDef {
-            name: "log",
-            description: "show session log tail",
-        },
-        SlashCommandDef {
-            name: "editor",
-            description: "compose a longer prompt",
         },
         SlashCommandDef {
             name: "diff",
@@ -603,10 +579,6 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
         SlashCommandDef {
             name: "tests",
             description: "show or run test helpers",
-        },
-        SlashCommandDef {
-            name: "handoff",
-            description: "save or open handoff package",
         },
         SlashCommandDef {
             name: "continue",
@@ -619,14 +591,6 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
         SlashCommandDef {
             name: "acp",
             description: "show ACP setup hints",
-        },
-        SlashCommandDef {
-            name: "checkpoint",
-            description: "save current git patch",
-        },
-        SlashCommandDef {
-            name: "rollback",
-            description: "reverse-apply checkpoint",
         },
         SlashCommandDef {
             name: "export",
@@ -1439,27 +1403,17 @@ fn help_text() -> String {
      /sessions [n]                 List recent sessions with tree/log shortcuts\n\
      /thread [role]                Show worker thread/native CLI session state\n\
      /thread clear <role>          Clear a stuck native CLI session for a role\n\
-     /import-cc [project]          Import Claude Code sessions into chat history\n\
-     /resume last                  Restore the last terminal chat conversation\n\
      /session [id|prefix|last]     Show one session summary\n\
      /session tree [id|prefix|last] Show parent/child session tree\n\
      /session flow [id|prefix|last] [n] Show orchestration event waterfall\n\
-     /tree [id|prefix|last]        Show parent/child session tree\n\
-     /run-flow [id|prefix|last] [n] Show orchestration event waterfall\n\
-     /log [id|prefix|last] [n]     Show session log tail\n\
      /trace [on|off|full|compact] Control live trace in the chat\n\
      /context [compact|full|off|clear] Control remembered conversation context\n\
      /process [summary|full|n]     Show captured run process\n\
-     /editor [draft]               Compose a longer prompt in $VISUAL or $EDITOR\n\
      /diff [summary|stat|full]      Show current git changes\n\
      /tests [suggest|quick|run|status] Show or run test helpers\n\
-     /handoff claude|codex          Save context package for another CLI\n\
-     /handoff open claude|codex     Save handoff and open that CLI inline\n\
      /continue claude|codex         Save handoff and open that CLI inline\n\
      /graph [compact|full|mermaid|save] Compress conversation into a flow graph\n\
      /acp [status|claude|codex]     Show ACP server/client setup hints\n\
-     /checkpoint [save|status]      Save current tracked git diff\n\
-     /rollback [last|check]         Reverse-apply last checkpoint patch\n\
      /process filter <text>        Filter captured process events\n\
      /process clear-filter         Clear process event filter\n\
      /process save                 Save captured process\n\
@@ -2054,7 +2008,7 @@ fn format_roles_registry(config: &Config, input: &InputState) -> String {
     out.push_str(
         "\n\nActions: /roles use <role>, /role <role>, /roles route, /roles save <role> --provider <provider> --model-name <api-model> --runtime <runtime>",
     );
-    out.push_str("\nHealth: fix provider/auth with /provider, fix role/model/runtime with /role <role>, verify with /doctor.");
+    out.push_str("\nHealth: configure provider/auth in the Tiffany provider UI or config file, fix role/model/runtime with /role <role>, verify with /doctor.");
     out
 }
 
@@ -5096,7 +5050,7 @@ behavior:
         let registry = input.transcript.last().expect("roles response");
         assert!(registry.content.contains("Role registry"));
         assert!(registry.content.contains("worker-cc"));
-        assert!(registry.content.contains("Health: fix provider/auth"));
+        assert!(registry.content.contains("Health: configure provider/auth"));
 
         handle_slash_command("/roles use worker-cc", &store, &cfg, &mut input);
         assert_eq!(input.agent_hint.as_deref(), Some("worker-cc"));

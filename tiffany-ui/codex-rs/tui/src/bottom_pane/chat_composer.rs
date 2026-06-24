@@ -381,6 +381,7 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
+    tiffany_orchestrator_shell: bool,
     history_search: Option<HistorySearchSession>,
     submit_keys: Vec<KeyBinding>,
     queue_keys: Vec<KeyBinding>,
@@ -448,6 +449,7 @@ impl ChatComposer {
             personality_command_enabled: self.personality_command_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
             side_conversation_active: self.side_conversation_active,
+            tiffany_orchestrator_shell: self.tiffany_orchestrator_shell,
         }
     }
 
@@ -545,6 +547,7 @@ impl ChatComposer {
             personality_command_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
+            tiffany_orchestrator_shell: false,
             history_search: None,
             submit_keys: vec![key_hint::plain(KeyCode::Enter)],
             queue_keys: vec![key_hint::plain(KeyCode::Tab)],
@@ -3889,6 +3892,10 @@ impl ChatComposer {
 
     pub(crate) fn set_queue_submissions(&mut self, queue_submissions: bool) {
         self.queue_submissions = queue_submissions;
+    }
+
+    pub(crate) fn set_tiffany_orchestrator_shell(&mut self, enabled: bool) {
+        self.tiffany_orchestrator_shell = enabled;
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {

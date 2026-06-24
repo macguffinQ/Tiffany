@@ -50,6 +50,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) personality_command_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
     pub(crate) side_conversation_active: bool,
+    pub(crate) tiffany_orchestrator_shell: bool,
 }
 
 impl From<CommandPopupFlags> for BuiltinCommandFlags {
@@ -64,6 +65,7 @@ impl From<CommandPopupFlags> for BuiltinCommandFlags {
             personality_command_enabled: value.personality_command_enabled,
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
             side_conversation_active: value.side_conversation_active,
+            tiffany_orchestrator_shell: value.tiffany_orchestrator_shell,
         }
     }
 }
@@ -537,6 +539,7 @@ mod tests {
                 personality_command_enabled: true,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
+                tiffany_orchestrator_shell: false,
             },
             Vec::new(),
         );
@@ -564,6 +567,7 @@ mod tests {
                 personality_command_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
+                tiffany_orchestrator_shell: false,
             },
             Vec::new(),
         );
@@ -596,6 +600,7 @@ mod tests {
                 personality_command_enabled: true,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
+                tiffany_orchestrator_shell: false,
             },
             Vec::new(),
         );
@@ -607,6 +612,59 @@ mod tests {
                 panic!("expected personality command, got service tier {command:?}")
             }
             other => panic!("expected personality to be selected for exact match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tiffany_orchestrator_popup_only_shows_wired_commands() {
+        let mut popup = CommandPopup::new(
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: true,
+                plugins_command_enabled: true,
+                token_activity_command_enabled: true,
+                service_tier_commands_enabled: true,
+                goal_command_enabled: true,
+                personality_command_enabled: true,
+                windows_degraded_sandbox_active: true,
+                side_conversation_active: false,
+                tiffany_orchestrator_shell: true,
+            },
+            vec![ServiceTierCommand {
+                id: "priority".to_string(),
+                name: "fast".to_string(),
+                description: "Fastest inference".to_string(),
+            }],
+        );
+        popup.on_composer_text_change("/".to_string());
+
+        let cmds: Vec<String> = popup
+            .filtered_items()
+            .into_iter()
+            .map(|item| match item {
+                CommandItem::Builtin(cmd) => cmd.command().to_string(),
+                CommandItem::ServiceTier(command) => command.name,
+            })
+            .collect();
+
+        for expected in ["provider", "role", "roles", "doctor", "status", "exit"] {
+            assert!(
+                cmds.iter().any(|cmd| cmd == expected),
+                "expected '/{expected}' in Tiffany popup, got {cmds:?}"
+            );
+        }
+        for hidden in [
+            "model",
+            "permissions",
+            "init",
+            "compact",
+            "apps",
+            "fast",
+        ] {
+            assert!(
+                !cmds.iter().any(|cmd| cmd == hidden),
+                "expected '/{hidden}' to be hidden in Tiffany popup, got {cmds:?}"
+            );
         }
     }
 

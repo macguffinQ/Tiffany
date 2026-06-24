@@ -1159,6 +1159,7 @@ impl ChatWidget {
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
+            tiffany_orchestrator_shell: self.tiffany_orchestrator_shell,
         }
     }
 

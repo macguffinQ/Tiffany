@@ -180,6 +180,7 @@ impl<'a> SlashInput<'a> {
                 personality_command_enabled: self.command_flags.personality_command_enabled,
                 windows_degraded_sandbox_active: self.command_flags.allow_elevate_sandbox,
                 side_conversation_active: self.command_flags.side_conversation_active,
+                tiffany_orchestrator_shell: self.command_flags.tiffany_orchestrator_shell,
             },
             self.service_tier_commands.to_vec(),
         );
