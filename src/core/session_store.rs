@@ -3,7 +3,9 @@
 use crate::core::types::{Event, Role, Session};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
+use fs2::FileExt;
 use rusqlite::{params, Connection};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -38,6 +40,18 @@ pub struct WorkerThread {
     pub last_session_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Cross-process guard for one worker thread.
+///
+/// The terminal UI starts a fresh orchestrator subprocess for each prompt. An
+/// in-memory mutex only serializes work inside one subprocess, but Claude Code
+/// rejects concurrent `--resume <session>` users with "Session ID ... is already
+/// in use". This guard keeps a role's native CLI session single-owner across
+/// subprocesses while preserving stable reuse after the previous run exits.
+pub struct WorkerThreadLease {
+    _file: File,
+    _thread_id: Uuid,
 }
 
 impl SessionStore {
@@ -267,6 +281,38 @@ impl SessionStore {
         select_worker_thread_by_role(&db, role)
     }
 
+    pub fn worker_thread_by_id(&self, thread_id: Uuid) -> Result<Option<WorkerThread>> {
+        let db = self.inner.db.lock().unwrap();
+        select_worker_thread_by_id(&db, thread_id)
+    }
+
+    pub async fn acquire_worker_thread_lease(&self, thread_id: Uuid) -> Result<WorkerThreadLease> {
+        let path = self.worker_thread_lock_path(thread_id)?;
+        tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&path)
+                .with_context(|| format!("opening worker thread lock {}", path.display()))?;
+            file.lock_exclusive()
+                .with_context(|| format!("locking worker thread {}", thread_id))?;
+            Ok(WorkerThreadLease {
+                _file: file,
+                _thread_id: thread_id,
+            })
+        })
+        .await
+        .context("joining worker thread lease task")?
+    }
+
+    fn worker_thread_lock_path(&self, thread_id: Uuid) -> Result<PathBuf> {
+        let dir = self.inner.log_dir.join("locks").join("worker-threads");
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        Ok(dir.join(format!("{thread_id}.lock")))
+    }
+
     pub fn clear_worker_thread_native_session(&self, thread_id: Uuid) -> Result<()> {
         let db = self.inner.db.lock().unwrap();
         db.execute(
@@ -427,6 +473,12 @@ impl SessionStore {
             cost_usd,
             files_touched,
         })
+    }
+}
+
+impl Drop for WorkerThreadLease {
+    fn drop(&mut self) {
+        let _ = self._file.unlock();
     }
 }
 

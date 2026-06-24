@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 - Nothing yet.
 
+## [0.1.32] - 2026-06-24
+
+### Fixed
+
+- Serialized worker runs by stable worker thread across orchestrator
+  subprocesses, preventing concurrent prompts from racing the same Claude Code
+  native session.
+- Refreshed the latest native worker session under the worker lock before
+  starting Claude/Codex, so the same role keeps resuming the newest CLI
+  conversation.
+- Aligned the native TUI run header with the actual contextual route sent to
+  the orchestrator, so continuation prompts no longer show `single` while
+  running `full`.
+- Added `--skip-git-repo-check` to Codex control-role and worker invocations so
+  planning/reviewing works outside trusted Git repositories.
+
+### Changed
+
+- `/continue claude` now resumes the recorded Claude Code native session with
+  `claude --resume <session>` when available, falling back to the handoff
+  package path otherwise.
+- Session detail views now show a `native resume` command for Claude/Codex
+  worker sessions.
+
 ## [0.1.31] - 2026-06-24
 
 ### Fixed

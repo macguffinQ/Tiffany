@@ -3582,13 +3582,15 @@ fn format_session_detail(store: &SessionStore, selector: Option<&str>) -> String
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "none".to_string());
+            let native_resume = native_resume_command(&s);
             format!(
-                "Session {}\n  task: {}\n  parents: {}\n  worker thread: {}\n  native session: {}\n  worktree: {}\n  state: {}\n  agent: {}\n  role: {}\n  model: {}\n  started: {}\n  ended: {}\n  tokens: in={} out={} total={}\n  cost: ${:.4}\n  files: {}\n  log: {}",
+                "Session {}\n  task: {}\n  parents: {}\n  worker thread: {}\n  native session: {}\n  native resume: {}\n  worktree: {}\n  state: {}\n  agent: {}\n  role: {}\n  model: {}\n  started: {}\n  ended: {}\n  tokens: in={} out={} total={}\n  cost: ${:.4}\n  files: {}\n  log: {}",
                 s.id,
                 s.task_id,
                 parents,
                 worker_thread,
                 native_session,
+                native_resume,
                 worktree,
                 format_session_state(&s),
                 s.agent,
@@ -3608,6 +3610,24 @@ fn format_session_detail(store: &SessionStore, selector: Option<&str>) -> String
         }
         Err(e) => e,
     }
+}
+
+fn native_resume_command(session: &Session) -> String {
+    let Some(native_session_id) = session
+        .native_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return "none".into();
+    };
+    if session.agent == "claude-code" {
+        return format!("claude --resume {native_session_id}");
+    }
+    if session.agent == "codex" {
+        return format!("codex exec resume {native_session_id}");
+    }
+    "none".into()
 }
 
 fn format_session_tree_command(store: &SessionStore, selector: Option<&str>) -> String {

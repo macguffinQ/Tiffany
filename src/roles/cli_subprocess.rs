@@ -341,7 +341,8 @@ fn codex_role_command(spec: &RoleCliSpec, system_prompt: &str, user_prompt: &str
         .arg("--model")
         .arg(&spec.model)
         .arg("--cd")
-        .arg(cwd);
+        .arg(cwd)
+        .arg("--skip-git-repo-check");
     for (key, value) in &spec.config_overrides {
         cmd.arg("-c")
             .arg(format!("{key}={}", toml_string_literal(value)));
@@ -1277,6 +1278,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(args.iter().any(|arg| arg == "--cd"));
+        assert!(args.iter().any(|arg| arg == "--skip-git-repo-check"));
         assert!(!args.iter().any(|arg| arg == "--cwd"));
     }
 }

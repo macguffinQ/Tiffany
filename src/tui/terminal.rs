@@ -971,9 +971,16 @@ fn open_agent_continue(
     let Some(path) = input.last_handoff_path.clone() else {
         return Err(anyhow!("handoff package was not created: {}", saved));
     };
-    let command = agent_continue_command(target, config, &path);
+    let native_session_id = native_session_for_continue(target, store, config, input);
+    let command = agent_continue_command(target, config, &path, native_session_id.as_deref());
 
-    clear_for_external_cli(target, &command, &path, render_state)?;
+    clear_for_external_cli(
+        target,
+        &command,
+        &path,
+        native_session_id.as_deref(),
+        render_state,
+    )?;
     let status = {
         let _terminal = TerminalModeSuspension::suspend()?;
         Command::new(&command.program)
@@ -985,26 +992,60 @@ fn open_agent_continue(
 
     if status.success() {
         Ok(format!(
-            "Returned from {}.\n  handoff: {}\n  command: {}",
+            "Returned from {}.\n  native session: {}\n  handoff: {}\n  command: {}",
             target.as_str(),
+            native_session_id.as_deref().unwrap_or("none"),
             path.display(),
             command.display()
         ))
     } else {
         Ok(format!(
-            "{} exited with status {}.\n  handoff: {}\n  command: {}",
+            "{} exited with status {}.\n  native session: {}\n  handoff: {}\n  command: {}",
             target.as_str(),
             status,
+            native_session_id.as_deref().unwrap_or("none"),
             path.display(),
             command.display()
         ))
     }
 }
 
+fn native_session_for_continue(
+    target: AgentContinueTarget,
+    store: &SessionStore,
+    config: &Config,
+    input: &InputState,
+) -> Option<String> {
+    if target != AgentContinueTarget::Claude {
+        return None;
+    }
+    let role = input
+        .agent_hint
+        .as_deref()
+        .filter(|role| {
+            config
+                .roles
+                .get(*role)
+                .is_some_and(|cfg| crate::runtime::is_claude_runtime(&cfg.runtime))
+        })
+        .map(str::to_string)
+        .or_else(|| {
+            crate::runtime::default_worker_role_for_runtime(&config.roles, "claude-code")
+        })?;
+    store
+        .worker_thread_by_role(&role)
+        .ok()
+        .flatten()
+        .and_then(|thread| thread.native_session_id)
+        .map(|session_id| session_id.trim().to_string())
+        .filter(|session_id| !session_id.is_empty())
+}
+
 fn clear_for_external_cli(
     target: AgentContinueTarget,
     command: &ExternalAgentCommand,
     path: &Path,
+    native_session_id: Option<&str>,
     render_state: &mut TerminalRenderState,
 ) -> Result<()> {
     write_history_lines(
@@ -1014,6 +1055,10 @@ fn clear_for_external_cli(
                 "{DIM}opening {} with handoff: {}{RESET}",
                 target.as_str(),
                 path.display()
+            ),
+            format!(
+                "{DIM}native session: {}{RESET}",
+                native_session_id.unwrap_or("none")
             ),
             format!("{DIM}command: {}{RESET}", command.display()),
             String::new(),
@@ -2043,12 +2088,12 @@ mod tests {
         );
         let handoff = std::path::Path::new("/tmp/orchestrator-handoff.md");
 
-        let claude = agent_continue_command(AgentContinueTarget::Claude, &cfg, handoff);
+        let claude = agent_continue_command(AgentContinueTarget::Claude, &cfg, handoff, None);
         assert_eq!(claude.program, "claude-custom");
         assert!(claude.args.contains(&"--add-dir".into()));
         assert!(claude.display().contains("/tmp/orchestrator-handoff.md"));
 
-        let codex = agent_continue_command(AgentContinueTarget::Codex, &cfg, handoff);
+        let codex = agent_continue_command(AgentContinueTarget::Codex, &cfg, handoff, None);
         assert_eq!(codex.program, "codex-custom");
         assert!(codex.args.contains(&"--no-alt-screen".into()));
         assert!(codex.display().contains("/tmp/orchestrator-handoff.md"));

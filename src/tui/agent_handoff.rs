@@ -62,6 +62,7 @@ pub(super) fn agent_continue_command(
     target: AgentContinueTarget,
     config: &Config,
     handoff_path: &Path,
+    native_session_id: Option<&str>,
 ) -> ExternalAgentCommand {
     let program = config
         .runtime_config(target.runtime_name())
@@ -73,13 +74,7 @@ pub(super) fn agent_continue_command(
     match target {
         AgentContinueTarget::Claude => ExternalAgentCommand {
             program,
-            args: vec![
-                "--add-dir".into(),
-                cwd.display().to_string(),
-                "--name".into(),
-                "orchestrator-handoff".into(),
-                prompt,
-            ],
+            args: claude_continue_args(&cwd, native_session_id, prompt),
         },
         AgentContinueTarget::Codex => ExternalAgentCommand {
             program,
@@ -91,6 +86,33 @@ pub(super) fn agent_continue_command(
             ],
         },
     }
+}
+
+fn claude_continue_args(
+    cwd: &Path,
+    native_session_id: Option<&str>,
+    prompt: String,
+) -> Vec<String> {
+    if let Some(session_id) = native_session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        return vec![
+            "--resume".into(),
+            session_id.to_string(),
+            "--add-dir".into(),
+            cwd.display().to_string(),
+            prompt,
+        ];
+    }
+
+    vec![
+        "--add-dir".into(),
+        cwd.display().to_string(),
+        "--name".into(),
+        "orchestrator-handoff".into(),
+        prompt,
+    ]
 }
 
 fn format_agent_continue_prompt(handoff_path: &Path) -> String {
@@ -140,14 +162,29 @@ mod tests {
         );
         let handoff = std::path::Path::new("/tmp/orchestrator-handoff.md");
 
-        let claude = agent_continue_command(AgentContinueTarget::Claude, &cfg, handoff);
+        let claude = agent_continue_command(AgentContinueTarget::Claude, &cfg, handoff, None);
         assert_eq!(claude.program, "claude-custom");
         assert!(claude.args.contains(&"--add-dir".into()));
         assert!(claude.display().contains("/tmp/orchestrator-handoff.md"));
 
-        let codex = agent_continue_command(AgentContinueTarget::Codex, &cfg, handoff);
+        let codex = agent_continue_command(AgentContinueTarget::Codex, &cfg, handoff, None);
         assert_eq!(codex.program, "codex-custom");
         assert!(codex.args.contains(&"--no-alt-screen".into()));
         assert!(codex.display().contains("/tmp/orchestrator-handoff.md"));
+    }
+
+    #[test]
+    fn claude_continue_command_resumes_native_session_when_available() {
+        let cfg = Config::default();
+        let handoff = std::path::Path::new("/tmp/orchestrator-handoff.md");
+        let claude =
+            agent_continue_command(AgentContinueTarget::Claude, &cfg, handoff, Some("native-1"));
+
+        assert!(claude
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--resume", "native-1"]));
+        assert!(!claude.args.iter().any(|arg| arg == "--name"));
+        assert!(claude.display().contains("/tmp/orchestrator-handoff.md"));
     }
 }

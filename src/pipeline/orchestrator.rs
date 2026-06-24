@@ -778,17 +778,100 @@ impl Orchestrator {
                         });
                     }
                 });
+                let session_store = self.session_store.clone();
+                let runtime = assignment.runtime.clone();
                 joinset.spawn(async move {
                     let _guard = thread_lock.lock().await;
-                    let res = adapter.start(&t, Some(event_tx)).await;
+                    let _lease = match session_store.acquire_worker_thread_lease(thread.id).await {
+                        Ok(lease) => lease,
+                        Err(err) => {
+                            drop(event_tx);
+                            let _ = forwarder.await;
+                            return (
+                                task_id,
+                                Some(thread.id),
+                                agent,
+                                worker_role,
+                                duration_ms(worker_start.elapsed()),
+                                Err(err.context("acquiring worker thread lease")),
+                            );
+                        }
+                    };
+                    let mut locked_task = t;
+                    match session_store.worker_thread_by_id(thread.id) {
+                        Ok(Some(latest_thread)) => {
+                            locked_task.native_session_id = latest_thread.native_session_id.clone();
+                            if runtime == "claude-code"
+                                && is_stale_claude_native_session_id(&latest_thread)
+                            {
+                                if let Err(err) =
+                                    session_store.clear_worker_thread_native_session(thread.id)
+                                {
+                                    drop(event_tx);
+                                    let _ = forwarder.await;
+                                    return (
+                                        task_id,
+                                        Some(thread.id),
+                                        agent,
+                                        worker_role,
+                                        duration_ms(worker_start.elapsed()),
+                                        Err(err.context(
+                                            "clearing stale claude native session under lease",
+                                        )),
+                                    );
+                                }
+                                locked_task.native_session_id = None;
+                            }
+                            if let Some(parent_id) = latest_thread.last_session_id {
+                                if !locked_task.parent_session_ids.contains(&parent_id) {
+                                    locked_task.parent_session_ids.push(parent_id);
+                                }
+                            }
+                            if let Some(worktree_path) = latest_thread.worktree_path {
+                                locked_task.worktree = Some(worktree_path);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            drop(event_tx);
+                            let _ = forwarder.await;
+                            return (
+                                task_id,
+                                Some(thread.id),
+                                agent,
+                                worker_role,
+                                duration_ms(worker_start.elapsed()),
+                                Err(err.context("refreshing worker thread under lease")),
+                            );
+                        }
+                    }
+                    let res = adapter.start(&locked_task, Some(event_tx)).await;
                     let _ = forwarder.await;
+                    let res = res.map(|h| h.session).and_then(|session| {
+                        if let Some(thread_id) = session.worker_thread_id {
+                            session_store
+                                .update_worker_thread_after_session(
+                                    thread_id,
+                                    session.native_session_id.as_deref(),
+                                    session.id,
+                                    session.worktree_path.as_deref(),
+                                )
+                                .with_context(|| {
+                                    format!(
+                                        "updating worker thread after session {} under lease",
+                                        session.id
+                                    )
+                                })?;
+                        }
+                        Ok(session)
+                    });
                     (
                         task_id,
                         Some(thread.id),
                         agent,
                         worker_role,
                         duration_ms(worker_start.elapsed()),
-                        res.map(|h| h.session),
+                        res,
                     )
                 });
             }
@@ -850,19 +933,6 @@ impl Orchestrator {
                         self.session_store
                             .finalize(&session)
                             .with_context(|| format!("finalizing worker session {}", session.id))?;
-                        if let Some(thread_id) = session.worker_thread_id {
-                            self.session_store
-                                .update_worker_thread_after_session(
-                                    thread_id,
-                                    session.native_session_id.as_deref(),
-                                    session.id,
-                                    session.worktree_path.as_deref(),
-                                )
-                                .with_context(|| {
-                                    format!("updating worker thread after session {}", session.id)
-                                })?;
-                        }
-
                         // Mark the task complete.
                         if let Some(slot) = tasks.iter_mut().find(|t| t.id == task_id) {
                             slot.status = TaskStatus::Completed;
@@ -1691,6 +1761,62 @@ mod tests {
             session.parent_session_ids = task.parent_session_ids.clone();
             session.worker_thread_id = task.worker_thread_id;
             session.native_session_id = task.native_session_id.clone();
+            session.worktree_path = task.worktree.clone();
+            Ok(WorkerHandle {
+                session,
+                kill: Arc::new(|| {}),
+            })
+        }
+
+        fn stream_events(&self, _session: &Session) -> BoxStream<'static, Result<Event>> {
+            Box::pin(stream::empty())
+        }
+
+        async fn cancel(&self, _session: &Session) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_diff(&self, _session: &Session) -> Result<String> {
+            Ok(String::new())
+        }
+
+        async fn build_context(
+            &self,
+            _reader: &dyn crate::core::session_store::SessionReader,
+            _parent_ids: &[Uuid],
+        ) -> Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    struct NativeSessionAdapter {
+        seen: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+        next_native: Option<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl WorkerAdapter for NativeSessionAdapter {
+        fn name(&self) -> &str {
+            "test-worker"
+        }
+
+        async fn start(
+            &self,
+            task: &Task,
+            _event_tx: Option<tokio::sync::mpsc::UnboundedSender<Event>>,
+        ) -> Result<WorkerHandle> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(task.native_session_id.clone());
+            let mut session = Session::new(task.id, self.name(), Role::Worker);
+            session.model = task.model_hint.clone().unwrap_or_default();
+            session.parent_session_ids = task.parent_session_ids.clone();
+            session.worker_thread_id = task.worker_thread_id;
+            session.native_session_id = self
+                .next_native
+                .clone()
+                .or_else(|| task.native_session_id.clone());
             session.worktree_path = task.worktree.clone();
             Ok(WorkerHandle {
                 session,
@@ -2990,6 +3116,70 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                 .parent_session_ids
                 .contains(&first_session.id),
             "Tiffany context should link previous worker session"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_dag_refreshes_native_session_under_worker_thread_lease() {
+        let (_tmp, mut orch) =
+            test_orchestrator_with_runtime(Arc::new(ApprovingCritic), "test-runtime");
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert(
+                "test-runtime".to_string(),
+                Arc::new(NativeSessionAdapter {
+                    seen: seen.clone(),
+                    next_native: Some("native-from-first-run".into()),
+                }),
+            );
+
+        let first_task = Task::new("first turn");
+        let first_task_id = first_task.id;
+        let (first_tx, _first_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch.execute_dag(vec![first_task], first_tx).await.unwrap();
+        let first_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == first_task_id)
+            .expect("first worker session");
+        let thread_id = first_session
+            .worker_thread_id
+            .expect("first session should record worker thread");
+        assert_eq!(
+            orch.session_store
+                .worker_thread_by_role("worker-cc")
+                .unwrap()
+                .unwrap()
+                .native_session_id
+                .as_deref(),
+            Some("native-from-first-run")
+        );
+
+        orch.session_store
+            .update_worker_thread_after_session(
+                thread_id,
+                Some("native-updated-before-second-start"),
+                first_session.id,
+                first_session.worktree_path.as_deref(),
+            )
+            .unwrap();
+
+        let second_task = Task::new("second turn");
+        let (second_tx, _second_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch
+            .execute_dag(vec![second_task], second_tx)
+            .await
+            .unwrap();
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.first().cloned().flatten(), None);
+        assert_eq!(
+            seen.get(1).cloned().flatten().as_deref(),
+            Some("native-updated-before-second-start"),
+            "worker start should see the latest native session after acquiring the thread lease"
         );
     }
 

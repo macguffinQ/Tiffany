@@ -282,7 +282,8 @@ fn codex_exec_command(binary: &str, model: &str, worktree: &std::path::Path) -> 
         .arg("--model")
         .arg(model)
         .arg("--cd")
-        .arg(worktree);
+        .arg(worktree)
+        .arg("--skip-git-repo-check");
     cmd
 }
 
@@ -441,6 +442,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(args.iter().any(|arg| arg == "--cd"));
+        assert!(args.iter().any(|arg| arg == "--skip-git-repo-check"));
         assert!(!args.iter().any(|arg| arg == "--cwd"));
         assert!(args
             .windows(2)

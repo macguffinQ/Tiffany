@@ -1,6 +1,6 @@
 [package]
 name = "tiffany-loop"
-version = "0.1.31"
+version = "0.1.32"
 edition = "2021"
 description = "tiffany-loop: a lightweight multi-agent orchestration shell for Claude Code, Codex CLI, and other LLM CLIs"
 license = "MIT"
@@ -66,6 +66,7 @@ rmcp = { version = "0.1", features = ["client", "transport-child-process"] }
 which = "6"
 home = "0.5"
 dirs = "5"
+fs2 = "0.4"
 tempfile = "3"
 unicode-width = "0.2"
 tiffany-event-format = { path = "crates/tiffany-event-format" }

@@ -1954,7 +1954,7 @@ fn direct_workflow_line(label: &'static str) -> Line<'static> {
 }
 
 fn launch_route(launch: &TiffanyOrchestratorLaunch) -> event_format::OrchestrationRoute {
-    event_format::classify_orchestration_route(&launch.user_prompt)
+    event_format::classify_orchestration_route(&launch.prompt)
 }
 
 fn command_hint_line() -> Line<'static> {
@@ -2968,6 +2968,30 @@ mod tests {
         ));
         assert!(text.contains("context 2 turn(s)"));
         assert!(text.contains("flow  planner → critic → worker → reviewer"));
+    }
+
+    #[test]
+    fn run_intro_uses_contextual_route_for_continuations() {
+        let prompt = "Previous turns:\nuser:\n优化 tiffany-loop 编排流程\n\nassistant result:\n已完成。\n\n---\nCurrent user request:\n继续";
+        let launch = TiffanyOrchestratorLaunch {
+            bin: "orchestrator".into(),
+            user_prompt: "继续".into(),
+            prompt: prompt.into(),
+            extra_args: vec![],
+            config_path: None,
+            context_turn_count: 1,
+        };
+        let lines = [
+            run_status_line(&launch),
+            run_reason_line(&launch),
+            run_workflow_line(&launch),
+        ];
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("flow full"));
+        assert!(text.contains("context 1 turn(s)"));
+        assert!(text.contains("flow  planner → critic → worker → reviewer"));
+        assert!(!text.contains("flow single"));
     }
 
     #[test]
