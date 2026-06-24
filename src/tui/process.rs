@@ -447,7 +447,7 @@ fn summarize_worker_output(output: &str) -> String {
         let kind = kind.trim();
         if matches!(
             kind,
-            "tool call" | "tool result" | "stderr" | "alert" | "output"
+            "question" | "tool call" | "tool result" | "stderr" | "alert" | "output"
         ) {
             (Some(kind), rest.trim())
         } else {

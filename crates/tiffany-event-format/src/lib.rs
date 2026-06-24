@@ -11,6 +11,7 @@ pub struct AgentEventSummary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisibleAgentOutputKind {
     Final,
+    Question,
     ToolCall,
     ToolResult,
     Stderr,
@@ -22,6 +23,7 @@ impl VisibleAgentOutputKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Final => "final",
+            Self::Question => "question",
             Self::ToolCall => "tool call",
             Self::ToolResult => "tool result",
             Self::Stderr => "stderr",
@@ -802,6 +804,13 @@ pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOut
     }
 
     let display = clean_visible_agent_output(content, max)?;
+    if let Some(question) = question_output_display(content, &display, max) {
+        return Some(VisibleAgentOutput {
+            kind: VisibleAgentOutputKind::Question,
+            dedupe_key: sanitize_text(&normalize_output_summary(&question), max),
+            display: question,
+        });
+    }
     let kind = hinted_kind.unwrap_or_else(|| {
         if looks_like_actionable_output(&display) {
             VisibleAgentOutputKind::Actionable
@@ -840,6 +849,42 @@ fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
         | "tool_search_output" => Some(VisibleAgentOutputKind::ToolResult),
         _ => None,
     }
+}
+
+fn question_output_display(content: &str, display: &str, max: usize) -> Option<String> {
+    let normalized = normalize_output_summary(display);
+    let normalized = normalized.trim();
+    let lower = format!("{content}\n{normalized}").to_ascii_lowercase();
+
+    if lower.contains("tool error: answer questions")
+        || lower.contains("tool askuserquestion error")
+        || lower.contains("request_user_input error")
+    {
+        return Some(sanitize_text(
+            "waiting for user input: Answer questions?",
+            max,
+        ));
+    }
+
+    if lower.contains("askuserquestion") || lower.contains("request_user_input") {
+        let display = normalized
+            .replace("tool AskUserQuestion", "question requested")
+            .replace("tool askuserquestion", "question requested")
+            .replace("request_user_input", "question requested");
+        return Some(sanitize_text(display.trim(), max));
+    }
+
+    if normalized
+        .to_ascii_lowercase()
+        .starts_with("question requested")
+        || normalized
+            .to_ascii_lowercase()
+            .starts_with("waiting for user input")
+    {
+        return Some(sanitize_text(normalized, max));
+    }
+
+    None
 }
 
 fn prefix_is_stderr(prefix: &str) -> bool {
@@ -1435,14 +1480,20 @@ fn summarize_review_object(object: &Map<String, Value>) -> Option<String> {
 }
 
 fn summarize_tool_object(object: &Map<String, Value>) -> Option<String> {
-    let name = object
+    let raw_name = object
         .get("tool_name")
         .or_else(|| object.get("name"))
         .or_else(|| object.get("tool"))
         .and_then(Value::as_str)
-        .and_then(|name| non_empty(name).map(|text| sanitize_text(&text, 80)))?;
-    let detail = tool_detail_text(object);
+        .and_then(non_empty)?;
+    let name = sanitize_text(&raw_name, 80);
+    if is_question_tool_name(&raw_name) {
+        return Some(format_question_request_summary(question_tool_detail_text(
+            object,
+        )));
+    }
 
+    let detail = tool_detail_text(object);
     Some(match detail {
         Some(detail) => format!("tool {name}: {}", sanitize_text(&detail, 160)),
         None => format!("tool {name}"),
@@ -1580,6 +1631,16 @@ fn summarize_tool_result_object(object: &Map<String, Value>) -> Option<String> {
         .or_else(|| object.get("result").and_then(value_to_text))
         .or_else(|| object.get("output").and_then(output_body_text))
         .unwrap_or_default();
+    if object
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && is_question_tool_error(&content)
+    {
+        return Some(format_question_waiting_summary(Some(
+            content.trim().to_string(),
+        )));
+    }
     let prefix = if object
         .get("is_error")
         .and_then(Value::as_bool)
@@ -1634,6 +1695,85 @@ fn format_tool_result_summary(
         }
         _ => prefix,
     }
+}
+
+fn is_question_tool_name(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "askuserquestion" | "ask_user_question" | "request_user_input"
+    )
+}
+
+fn is_question_tool_error(content: &str) -> bool {
+    let lower = content.trim().to_ascii_lowercase();
+    lower == "answer questions?"
+        || lower == "answer questions"
+        || lower.contains("answer questions?")
+        || lower.contains("request user input")
+}
+
+fn format_question_request_summary(detail: Option<String>) -> String {
+    match detail {
+        Some(detail) if !detail.trim().is_empty() => {
+            format!("question requested: {}", sanitize_text(detail.trim(), 220))
+        }
+        _ => "question requested".to_string(),
+    }
+}
+
+fn format_question_waiting_summary(detail: Option<String>) -> String {
+    match detail {
+        Some(detail) if !detail.trim().is_empty() => {
+            format!(
+                "waiting for user input: {}",
+                sanitize_text(detail.trim(), 220)
+            )
+        }
+        _ => "waiting for user input".to_string(),
+    }
+}
+
+fn question_tool_detail_text(object: &Map<String, Value>) -> Option<String> {
+    for key in ["question", "prompt", "message", "header"] {
+        if let Some(text) = object.get(key).and_then(value_to_text) {
+            return Some(text);
+        }
+    }
+
+    let input = object
+        .get("input")
+        .or_else(|| object.get("parameters"))
+        .or_else(|| object.get("args"))
+        .or_else(|| object.get("arguments"))?;
+    if let Some(text) = input.as_str().and_then(non_empty) {
+        return Some(humanize_argument_text(&text));
+    }
+    let input = input.as_object()?;
+    for key in ["question", "prompt", "message", "header"] {
+        if let Some(text) = input.get(key).and_then(value_to_text) {
+            return Some(text);
+        }
+    }
+    if let Some(questions) = input.get("questions").and_then(Value::as_array) {
+        let text = questions
+            .iter()
+            .filter_map(|question| {
+                question
+                    .get("question")
+                    .or_else(|| question.get("prompt"))
+                    .or_else(|| question.get("header"))
+                    .and_then(value_to_text)
+                    .or_else(|| extract_text_from_value(question))
+            })
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(" / ");
+        if !text.trim().is_empty() {
+            return Some(text);
+        }
+    }
+    tool_detail_text(object)
 }
 
 fn tool_result_content_text(value: &Value) -> Option<String> {
@@ -2367,6 +2507,23 @@ mod tests {
         assert_eq!(tool_result.kind, VisibleAgentOutputKind::ToolResult);
         assert_eq!(tool_result.kind.label(), "tool result");
         assert_eq!(tool_result.display, "tool result: tests passed");
+
+        let question_call = visible_agent_output("claude-code tool_use: tool AskUserQuestion", 500)
+            .expect("question call");
+        assert_eq!(question_call.kind, VisibleAgentOutputKind::Question);
+        assert_eq!(question_call.kind.label(), "question");
+        assert_eq!(question_call.display, "question requested");
+
+        let question_error = visible_agent_output(
+            "claude-code tool_result: tool error: Answer questions?",
+            500,
+        )
+        .expect("question wait");
+        assert_eq!(question_error.kind, VisibleAgentOutputKind::Question);
+        assert_eq!(
+            question_error.display,
+            "waiting for user input: Answer questions?"
+        );
 
         let normal =
             visible_agent_output("claude assistant: useful summary", 500).expect("normal output");

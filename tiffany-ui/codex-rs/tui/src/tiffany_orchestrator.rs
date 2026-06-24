@@ -2261,6 +2261,7 @@ fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
     };
     match event_format::visible_agent_output(raw, CONTROL_SUMMARY_MAX_CHARS).map(|view| view.kind) {
         Some(event_format::VisibleAgentOutputKind::Final) => "final",
+        Some(event_format::VisibleAgentOutputKind::Question) => "question",
         Some(event_format::VisibleAgentOutputKind::ToolCall) => "tool call",
         Some(event_format::VisibleAgentOutputKind::ToolResult) => "tool result",
         Some(event_format::VisibleAgentOutputKind::Stderr) => "stderr",
@@ -3411,6 +3412,13 @@ mod tests {
                 ..base.clone()
             }),
             "worker tool call · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"
+        );
+        assert_eq!(
+            output_title(&TiffanyProgressEvent {
+                content: Some("claude-code tool_use: tool AskUserQuestion".to_string()),
+                ..base.clone()
+            }),
+            "worker question · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"
         );
         assert_eq!(
             output_title(&TiffanyProgressEvent {

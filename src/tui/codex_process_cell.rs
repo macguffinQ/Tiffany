@@ -202,6 +202,7 @@ fn visible_worker_output_line(
 
 fn worker_output_style(kind: agent_events::VisibleAgentOutputKind) -> (&'static str, &'static str) {
     match kind {
+        agent_events::VisibleAgentOutputKind::Question => ("?", TIFFANY),
         agent_events::VisibleAgentOutputKind::ToolCall => ("↳", CYAN),
         agent_events::VisibleAgentOutputKind::ToolResult => ("✓", DIM),
         agent_events::VisibleAgentOutputKind::Stderr => ("✗", RED),
@@ -628,6 +629,45 @@ mod tests {
         assert_eq!(alert.1, YELLOW);
         assert!(alert.2.contains("alert"));
         assert!(alert.2.contains("permission denied"));
+    }
+
+    #[test]
+    fn labels_worker_questions_without_error_tone() {
+        let task_id = uuid::Uuid::nil();
+
+        let question = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                content: "claude-code tool_use: tool AskUserQuestion".into(),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("question request should be visible");
+
+        assert_eq!(question.0, "?");
+        assert_eq!(question.1, TIFFANY);
+        assert!(question.2.contains("worker-cc · claude-code · question"));
+        assert!(question.2.contains("question requested"));
+
+        let waiting = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                content: "claude-code tool_result: tool error: Answer questions?".into(),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("question waiting state should be visible");
+
+        assert_eq!(waiting.0, "?");
+        assert_eq!(waiting.1, TIFFANY);
+        assert!(waiting.2.contains("waiting for user input"));
+        assert!(!waiting.2.contains("tool error"));
     }
 
     #[test]
