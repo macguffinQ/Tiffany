@@ -267,6 +267,15 @@ impl SessionStore {
         select_worker_thread_by_role(&db, role)
     }
 
+    pub fn clear_worker_thread_native_session(&self, thread_id: Uuid) -> Result<()> {
+        let db = self.inner.db.lock().unwrap();
+        db.execute(
+            "UPDATE worker_threads SET native_session_id = NULL, updated_at = ? WHERE id = ?",
+            params![Utc::now().to_rfc3339(), thread_id.to_string()],
+        )?;
+        Ok(())
+    }
+
     pub fn get_many(&self, ids: &[Uuid]) -> Result<Vec<Session>> {
         if ids.is_empty() {
             return Ok(vec![]);
@@ -627,6 +636,35 @@ mod tests {
             updated.worktree_path.as_deref(),
             Some(std::path::Path::new("/tmp/tiffany-worker"))
         );
+    }
+
+    #[test]
+    fn worker_thread_native_session_can_be_cleared() {
+        let (_tmp, store) = test_store();
+        let thread = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        store
+            .update_worker_thread_after_session(
+                thread.id,
+                Some("stale-native"),
+                Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+
+        store.clear_worker_thread_native_session(thread.id).unwrap();
+
+        let updated = store.worker_thread_by_role("worker-cc").unwrap().unwrap();
+        assert_eq!(updated.id, thread.id);
+        assert!(updated.native_session_id.is_none());
+        assert!(updated.last_session_id.is_some());
     }
 
     #[test]

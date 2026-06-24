@@ -688,18 +688,26 @@ impl Orchestrator {
                         assignment.provider.as_deref(),
                     )
                     .with_context(|| format!("assigning worker thread for {}", assignment.role))?;
+                let thread = if assignment.runtime == "claude-code"
+                    && is_stale_claude_native_session_id(&thread)
+                {
+                    self.session_store
+                        .clear_worker_thread_native_session(thread.id)
+                        .with_context(|| {
+                            format!(
+                                "clearing stale claude native session for {}",
+                                assignment.role
+                            )
+                        })?;
+                    let mut thread = thread;
+                    thread.native_session_id = None;
+                    thread
+                } else {
+                    thread
+                };
                 let reused = thread.last_session_id.is_some() || thread.native_session_id.is_some();
                 t.worker_thread_id = Some(thread.id);
-                t.native_session_id = match assignment.runtime.as_str() {
-                    "claude-code" => Some(
-                        thread
-                            .native_session_id
-                            .clone()
-                            .unwrap_or_else(|| thread.id.to_string()),
-                    ),
-                    "codex" => thread.native_session_id.clone(),
-                    _ => thread.native_session_id.clone(),
-                };
+                t.native_session_id = thread.native_session_id.clone();
                 if let Some(parent_id) = thread.last_session_id {
                     if !t.parent_session_ids.contains(&parent_id) {
                         t.parent_session_ids.push(parent_id);
@@ -1301,6 +1309,13 @@ fn route_updated_payload(route: &str, reason: &str) -> serde_json::Value {
     payload
 }
 
+fn is_stale_claude_native_session_id(thread: &crate::core::session_store::WorkerThread) -> bool {
+    thread
+        .native_session_id
+        .as_deref()
+        .is_some_and(|native_session_id| native_session_id == thread.id.to_string())
+}
+
 fn apply_top_task_agent_hint(top_task: &Task, sub_tasks: &mut [Task]) {
     for task in sub_tasks {
         if task.agent_hint.is_none() {
@@ -1724,6 +1739,45 @@ mod tests {
         let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
             std::collections::HashMap::new();
         adapters.insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+
+        let orch = Orchestrator::new(
+            Arc::new(StaticPlanner),
+            critic,
+            Arc::new(ApprovingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            false,
+        );
+
+        (tmp, orch)
+    }
+
+    fn test_orchestrator_with_runtime(
+        critic: Arc<dyn Critic>,
+        runtime: &str,
+    ) -> (tempfile::TempDir, Orchestrator) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: runtime.to_string(),
+                agent_teams: false,
+            },
+        );
+
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert(runtime.to_string(), Arc::new(CompletingAdapter));
 
         let orch = Orchestrator::new(
             Arc::new(StaticPlanner),
@@ -2799,6 +2853,144 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             "first turn should create a visible worker thread"
         );
         assert!(saw_reused, "second turn should visibly reuse worker thread");
+    }
+
+    #[tokio::test]
+    async fn execute_dag_does_not_pass_thread_uuid_as_claude_native_session() {
+        let (_tmp, orch) = test_orchestrator_with_runtime(Arc::new(ApprovingCritic), "claude-code");
+
+        let first_task = Task::new("first turn");
+        let first_task_id = first_task.id;
+        let (first_tx, _first_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch.execute_dag(vec![first_task], first_tx).await.unwrap();
+        let first_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == first_task_id)
+            .expect("first worker session");
+        let thread_id = first_session
+            .worker_thread_id
+            .expect("first session should record worker thread");
+        let stale_native_session_id = thread_id.to_string();
+        orch.session_store
+            .update_worker_thread_after_session(
+                thread_id,
+                Some(stale_native_session_id.as_str()),
+                first_session.id,
+                first_session.worktree_path.as_deref(),
+            )
+            .unwrap();
+
+        let second_task = Task::new("second turn");
+        let second_task_id = second_task.id;
+        let (second_tx, mut second_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch
+            .execute_dag(vec![second_task], second_tx)
+            .await
+            .unwrap();
+        let second_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == second_task_id)
+            .expect("second worker session");
+
+        assert_eq!(second_session.worker_thread_id, Some(thread_id));
+        assert!(
+            second_session.native_session_id.is_none(),
+            "claude-code must not receive Tiffany worker thread UUID as --session-id"
+        );
+        assert!(
+            second_session
+                .parent_session_ids
+                .contains(&first_session.id),
+            "Tiffany context should still link previous worker session"
+        );
+        let thread = orch
+            .session_store
+            .worker_thread_by_role("worker-cc")
+            .unwrap()
+            .expect("worker thread");
+        assert!(
+            thread.native_session_id.is_none(),
+            "stale claude native session id should be cleared from the thread"
+        );
+
+        let mut saw_reused_without_native = false;
+        while let Ok(event) = second_rx.try_recv() {
+            if let RunProgress::WorkerThreadReady {
+                thread_id: seen,
+                native_session_id,
+                reused,
+                ..
+            } = event
+            {
+                saw_reused_without_native =
+                    seen == thread_id && reused && native_session_id.is_none();
+            }
+        }
+        assert!(
+            saw_reused_without_native,
+            "UI should show thread reuse without a native claude session id"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_dag_passes_real_claude_native_session() {
+        let (_tmp, orch) = test_orchestrator_with_runtime(Arc::new(ApprovingCritic), "claude-code");
+
+        let first_task = Task::new("first turn");
+        let first_task_id = first_task.id;
+        let (first_tx, _first_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch.execute_dag(vec![first_task], first_tx).await.unwrap();
+        let first_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == first_task_id)
+            .expect("first worker session");
+        let thread_id = first_session
+            .worker_thread_id
+            .expect("first session should record worker thread");
+        orch.session_store
+            .update_worker_thread_after_session(
+                thread_id,
+                Some("claude-real-session"),
+                first_session.id,
+                first_session.worktree_path.as_deref(),
+            )
+            .unwrap();
+
+        let second_task = Task::new("second turn");
+        let second_task_id = second_task.id;
+        let (second_tx, _second_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch
+            .execute_dag(vec![second_task], second_tx)
+            .await
+            .unwrap();
+        let second_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == second_task_id)
+            .expect("second worker session");
+
+        assert_eq!(second_session.worker_thread_id, Some(thread_id));
+        assert_eq!(
+            second_session.native_session_id.as_deref(),
+            Some("claude-real-session")
+        );
+        assert!(
+            second_session
+                .parent_session_ids
+                .contains(&first_session.id),
+            "Tiffany context should link previous worker session"
+        );
     }
 
     #[tokio::test]

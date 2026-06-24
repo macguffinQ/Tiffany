@@ -6,6 +6,17 @@ All notable changes to this project will be documented in this file.
 
 - Nothing yet.
 
+## [0.1.30] - 2026-06-24
+
+### Fixed
+
+- Fixed Claude Code worker continuity so Tiffany no longer passes its internal
+  worker thread UUID as Claude's native session ID.
+- Switched Claude Code native continuation from `--session-id` to `--resume`
+  and capture real Claude session IDs from stream JSON output.
+- Cleared stale Claude native session IDs written by older Tiffany releases to
+  prevent `Session ID ... is already in use` failures on the next turn.
+
 ## [0.1.29] - 2026-06-24
 
 ### Changed

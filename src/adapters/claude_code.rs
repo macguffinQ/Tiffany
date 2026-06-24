@@ -91,9 +91,6 @@ impl WorkerAdapter for ClaudeCodeAdapter {
             self.worktree_pool.acquire(task.id, repo_root.as_deref())?
         };
         session.worktree_path = Some(worktree.clone());
-        if session.native_session_id.is_none() {
-            session.native_session_id = task.worker_thread_id.map(|id| id.to_string());
-        }
 
         // Build context from parent sessions
         let conversational = is_conversational_task(task);
@@ -221,13 +218,17 @@ impl WorkerAdapter for ClaudeCodeAdapter {
         // Drain stdout to the normalized session event log.
         let mut reader = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = reader.next_line().await {
+            let payload = serde_json::from_str::<serde_json::Value>(&line)
+                .unwrap_or_else(|_| serde_json::Value::String(line.clone()));
+            if session.native_session_id.is_none() {
+                session.native_session_id = extract_claude_native_session_id(&payload);
+            }
             let event = Event {
                 session_id: session.id,
                 task_id: task.id,
                 ts: Utc::now(),
                 kind: agent_events::classify_json_line(&line),
-                payload: serde_json::from_str(&line)
-                    .unwrap_or(serde_json::Value::String(line.clone())),
+                payload,
             };
             let _ = self.session_store.append(&event);
             if let Some(tx) = &event_tx {
@@ -376,7 +377,7 @@ fn claude_worker_args(
         .map(str::trim)
         .filter(|session_id| !session_id.is_empty())
     {
-        args.push("--session-id".to_string());
+        args.push("--resume".to_string());
         args.push(session_id.to_string());
     }
     if let Some(agent) = cc_agent_hint
@@ -396,6 +397,37 @@ fn claude_worker_args(
     }
     args.push(prompt.to_string());
     args
+}
+
+fn extract_claude_native_session_id(value: &serde_json::Value) -> Option<String> {
+    find_string_field(value, &["session_id", "sessionId"]).filter(|id| !id.trim().is_empty())
+}
+
+fn find_string_field(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in keys {
+                if let Some(text) = map.get(*key).and_then(|value| value.as_str()) {
+                    return Some(text.to_string());
+                }
+            }
+            for child in map.values() {
+                if let Some(found) = find_string_field(child, keys) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                if let Some(found) = find_string_field(child, keys) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 fn apply_claude_provider_env(
@@ -472,7 +504,8 @@ mod tests {
             .any(|pair| pair == ["--append-system-prompt", "system"]));
         assert!(args
             .windows(2)
-            .any(|pair| pair == ["--session-id", "123e4567-e89b-42d3-a456-426614174000"]));
+            .any(|pair| pair == ["--resume", "123e4567-e89b-42d3-a456-426614174000"]));
+        assert!(!args.iter().any(|arg| arg == "--session-id"));
         assert_eq!(args.last().map(String::as_str), Some("do the work"));
     }
 
@@ -492,5 +525,33 @@ mod tests {
         assert!(!args.iter().any(|arg| arg == "--permission-mode"));
         assert!(!args.iter().any(|arg| arg == "--append-system-prompt"));
         assert!(!args.iter().any(|arg| arg == "--session-id"));
+        assert!(!args.iter().any(|arg| arg == "--resume"));
+    }
+
+    #[test]
+    fn extracts_claude_native_session_id_from_stream_json() {
+        let top_level = serde_json::json!({
+            "type": "system",
+            "session_id": "claude-session-1"
+        });
+        assert_eq!(
+            extract_claude_native_session_id(&top_level).as_deref(),
+            Some("claude-session-1")
+        );
+
+        let nested = serde_json::json!({
+            "event": {
+                "message": {
+                    "sessionId": "claude-session-2"
+                }
+            }
+        });
+        assert_eq!(
+            extract_claude_native_session_id(&nested).as_deref(),
+            Some("claude-session-2")
+        );
+
+        let missing = serde_json::json!({"type": "assistant"});
+        assert!(extract_claude_native_session_id(&missing).is_none());
     }
 }
