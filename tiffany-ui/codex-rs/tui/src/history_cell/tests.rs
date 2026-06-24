@@ -610,6 +610,7 @@ async fn session_info_uses_availability_nux_tooltip_override() {
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
         /*show_fast_status*/ false,
+        /*show_model_hint*/ true,
     );
 
     let rendered = render_transcript(&cell).join("\n");
@@ -632,6 +633,7 @@ async fn session_info_availability_nux_tooltip_snapshot() {
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
         /*show_fast_status*/ false,
+        /*show_model_hint*/ true,
     );
 
     let rendered = render_transcript(&cell).join("\n");
@@ -649,11 +651,58 @@ async fn session_info_first_event_suppresses_tooltips_and_nux() {
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
         /*show_fast_status*/ false,
+        /*show_model_hint*/ true,
     );
 
     let rendered = render_transcript(&cell).join("\n");
     assert!(!rendered.contains("Model just became available"));
     assert!(rendered.contains("To get started"));
+}
+
+#[tokio::test]
+async fn session_info_first_event_keeps_codex_commands_by_default() {
+    let config = test_config().await;
+    let cell = new_session_info(
+        &config,
+        "gpt-5",
+        &session_configured_event("gpt-5"),
+        /*is_first_event*/ true,
+        /*tooltip_override*/ None,
+        Some(PlanType::Free),
+        /*show_fast_status*/ false,
+        /*show_model_hint*/ true,
+    );
+
+    let rendered = render_transcript(&cell).join("\n");
+    assert!(rendered.contains("/init"));
+    assert!(rendered.contains("/permissions"));
+    assert!(rendered.contains("/model"));
+    assert!(rendered.contains("/review"));
+    assert!(rendered.contains("/model to change"));
+}
+
+#[tokio::test]
+async fn tiffany_session_info_first_event_uses_orchestrator_commands() {
+    let config = test_config().await;
+    let cell = new_session_info(
+        &config,
+        "gpt-5",
+        &session_configured_event("gpt-5"),
+        /*is_first_event*/ true,
+        /*tooltip_override*/ None,
+        Some(PlanType::Free),
+        /*show_fast_status*/ false,
+        /*show_model_hint*/ false,
+    );
+
+    let rendered = render_transcript(&cell).join("\n");
+    assert!(rendered.contains("/provider"));
+    assert!(rendered.contains("/role"));
+    assert!(rendered.contains("/roles"));
+    assert!(rendered.contains("/doctor"));
+    assert!(!rendered.contains("/model to change"));
+    assert!(!rendered.contains("/init - create"));
+    assert!(!rendered.contains("/permissions"));
 }
 
 #[tokio::test]
@@ -668,6 +717,7 @@ async fn session_info_hides_tooltips_when_disabled() {
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
         /*show_fast_status*/ false,
+        /*show_model_hint*/ true,
     );
 
     let rendered = render_transcript(&cell).join("\n");
@@ -1512,6 +1562,27 @@ fn session_header_hides_fast_status_when_disabled() {
 
     assert!(model_line.contains("gpt-4o high"));
     assert!(!model_line.contains("fast"));
+}
+
+#[test]
+fn session_header_can_hide_model_change_hint() {
+    let cell = SessionHeaderHistoryCell::new(
+        "gpt-4o".to_string(),
+        Some(ReasoningEffortConfig::High),
+        /*show_fast_status*/ false,
+        std::env::temp_dir(),
+        "test",
+    )
+    .with_model_hint(/*show_model_hint*/ false);
+
+    let lines = render_lines(&cell.display_lines(/*width*/ 80));
+    let model_line = lines
+        .iter()
+        .find(|line| line.contains("model:"))
+        .expect("model line");
+
+    assert!(model_line.contains("gpt-4o high"));
+    assert!(!model_line.contains("/model to change"));
 }
 
 #[test]

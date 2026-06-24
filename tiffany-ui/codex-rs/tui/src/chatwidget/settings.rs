@@ -370,6 +370,17 @@ impl ChatWidget {
         if enabled {
             self.bottom_pane
                 .set_queue_submissions(/*queue_submissions*/ false);
+            if self
+                .transcript
+                .active_cell
+                .as_ref()
+                .is_some_and(|cell| cell.as_any().is::<history_cell::SessionHeaderHistoryCell>())
+            {
+                self.transcript.active_cell = Some(Self::placeholder_session_header_cell(
+                    &self.config,
+                    /*show_model_hint*/ false,
+                ));
+            }
         }
         self.refresh_plan_mode_nudge();
     }

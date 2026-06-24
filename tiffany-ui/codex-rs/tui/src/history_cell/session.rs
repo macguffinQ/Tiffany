@@ -145,6 +145,7 @@ pub(crate) fn new_session_info(
     tooltip_override: Option<String>,
     auth_plan: Option<PlanType>,
     show_fast_status: bool,
+    show_model_hint: bool,
 ) -> SessionInfoCell {
     // Header box rendered as history (so it appears at the very top)
     let header = SessionHeaderHistoryCell::new(
@@ -157,42 +158,77 @@ pub(crate) fn new_session_info(
     .with_yolo_mode(has_yolo_permissions(
         session.approval_policy,
         &session.permission_profile,
-    ));
+    ))
+    .with_model_hint(show_model_hint);
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
     if is_first_event {
         // Help lines below the header (new copy and list)
-        let help_lines: Vec<Line<'static>> = vec![
-            "  To get started, describe a task or try one of these commands:"
-                .dim()
-                .into(),
-            Line::from(""),
-            Line::from(vec![
-                "  ".into(),
-                "/init".into(),
-                " - create an AGENTS.md file with instructions for tiffany-loop".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/status".into(),
-                " - show current session configuration".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/permissions".into(),
-                " - choose what tiffany-loop is allowed to do".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/model".into(),
-                " - choose what model and reasoning effort to use".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/review".into(),
-                " - review any changes and find issues".dim(),
-            ]),
-        ];
+        let help_lines: Vec<Line<'static>> = if show_model_hint {
+            vec![
+                "  To get started, describe a task or try one of these commands:"
+                    .dim()
+                    .into(),
+                Line::from(""),
+                Line::from(vec![
+                    "  ".into(),
+                    "/init".into(),
+                    " - create an AGENTS.md file with instructions for tiffany-loop".dim(),
+                ]),
+                Line::from(vec![
+                    "  ".into(),
+                    "/status".into(),
+                    " - show current session configuration".dim(),
+                ]),
+                Line::from(vec![
+                    "  ".into(),
+                    "/permissions".into(),
+                    " - choose what tiffany-loop is allowed to do".dim(),
+                ]),
+                Line::from(vec![
+                    "  ".into(),
+                    "/model".into(),
+                    " - choose what model and reasoning effort to use".dim(),
+                ]),
+                Line::from(vec![
+                    "  ".into(),
+                    "/review".into(),
+                    " - review any changes and find issues".dim(),
+                ]),
+            ]
+        } else {
+            vec![
+                "  To get started, describe a task or try one of these commands:"
+                    .dim()
+                    .into(),
+                Line::from(""),
+                Line::from(vec![
+                    "  ".into(),
+                    "/provider".into(),
+                    " - configure orchestrator providers".dim(),
+                ]),
+                Line::from(vec![
+                    "  ".into(),
+                    "/role".into(),
+                    " - register one orchestrator role".dim(),
+                ]),
+                Line::from(vec![
+                    "  ".into(),
+                    "/roles".into(),
+                    " - inspect role routing".dim(),
+                ]),
+                Line::from(vec![
+                    "  ".into(),
+                    "/doctor".into(),
+                    " - diagnose provider/model/runtime setup".dim(),
+                ]),
+                Line::from(vec![
+                    "  ".into(),
+                    "/status".into(),
+                    " - show current session configuration".dim(),
+                ]),
+            ]
+        };
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
@@ -244,6 +280,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     show_fast_status: bool,
+    show_model_hint: bool,
     directory: PathBuf,
     yolo_mode: bool,
 }
@@ -280,6 +317,7 @@ impl SessionHeaderHistoryCell {
             model_style,
             reasoning_effort,
             show_fast_status,
+            show_model_hint: true,
             directory,
             yolo_mode: false,
         }
@@ -287,6 +325,11 @@ impl SessionHeaderHistoryCell {
 
     pub(crate) fn with_yolo_mode(mut self, yolo_mode: bool) -> Self {
         self.yolo_mode = yolo_mode;
+        self
+    }
+
+    pub(crate) fn with_model_hint(mut self, show_model_hint: bool) -> Self {
+        self.show_model_hint = show_model_hint;
         self
     }
 
@@ -369,9 +412,11 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 spans.push("   ".into());
                 spans.push(Span::styled("fast", self.model_style.magenta()));
             }
-            spans.push("   ".dim());
-            spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
-            spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
+            if self.show_model_hint {
+                spans.push("   ".dim());
+                spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
+                spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
+            }
             spans
         };
 

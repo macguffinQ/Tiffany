@@ -1459,7 +1459,10 @@ impl ChatWidget {
     }
 
     /// Build a placeholder header cell while the session is configuring.
-    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
+    fn placeholder_session_header_cell(
+        config: &Config,
+        show_model_hint: bool,
+    ) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
         Box::new(
             history_cell::SessionHeaderHistoryCell::new_with_style(
@@ -1470,7 +1473,8 @@ impl ChatWidget {
                 config.cwd.to_path_buf(),
                 TIFFANY_LOOP_VERSION,
             )
-            .with_yolo_mode(history_cell::is_yolo_mode(config)),
+            .with_yolo_mode(history_cell::is_yolo_mode(config))
+            .with_model_hint(show_model_hint),
         )
     }
 

@@ -62,7 +62,10 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let active_cell = Some(Self::placeholder_session_header_cell(
+            &config,
+            /*show_model_hint*/ true,
+        ));
 
         let current_cwd = Some(config.cwd.to_path_buf());
         let effective_service_tier = crate::service_tier_resolution::effective_service_tier(

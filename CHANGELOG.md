@@ -12,6 +12,10 @@ All notable changes to this project will be documented in this file.
 - Hid unsupported upstream Codex slash commands from Tiffany orchestrator
   command menus and help output, while keeping legacy handlers available for
   direct compatibility.
+- Tiffany orchestrator mode now explains known-but-hidden Codex slash commands
+  such as `/model` or `/init` instead of submitting them as plain prompts.
+- Removed the `/model to change` header hint from Tiffany orchestrator mode
+  because provider/model routing is configured through `/provider` and `/role`.
 
 ## [0.1.33] - 2026-06-24
 
