@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Updated the release workflow's manual Homebrew tap instructions to run
+  post-release metadata checks against the just-updated tap checkout.
+
 ## [0.1.28] - 2026-06-24
 
 ### Fixed

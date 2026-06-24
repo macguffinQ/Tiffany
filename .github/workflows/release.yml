@@ -234,7 +234,7 @@ jobs:
               echo "\`\`\`bash"
               echo "git clone https://github.com/${HOMEBREW_TAP_REPO}.git ../homebrew-tap 2>/dev/null || git -C ../homebrew-tap pull --ff-only"
               echo "./scripts/tiffany-update-homebrew-tap --tag ${GITHUB_REF_NAME} --tap-dir ../homebrew-tap --commit --push"
-              echo "./scripts/tiffany-post-release-check --tag ${GITHUB_REF_NAME}"
+              echo "./scripts/tiffany-post-release-check --tag ${GITHUB_REF_NAME} --tap-dir ../homebrew-tap --skip-install"
               echo "\`\`\`"
             } >> "${GITHUB_STEP_SUMMARY}"
             echo "::warning::HOMEBREW_TAP_TOKEN is not configured. GitHub Release was published; automatic Homebrew tap update was skipped."

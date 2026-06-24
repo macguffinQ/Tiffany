@@ -75,3 +75,11 @@ if [[ "$tap_name_custom" != "example/tools" ]]; then
 fi
 
 echo "tap name helper checks passed"
+
+release_workflow="$repo_dir/.github/workflows/release.yml"
+if ! grep -F -- './scripts/tiffany-post-release-check --tag ${GITHUB_REF_NAME} --tap-dir ../homebrew-tap --skip-install' "$release_workflow" >/dev/null; then
+  echo "expected release workflow manual tap instructions to use --tap-dir" >&2
+  exit 1
+fi
+
+echo "release workflow helper checks passed"
