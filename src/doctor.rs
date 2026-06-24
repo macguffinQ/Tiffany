@@ -4,6 +4,7 @@ use crate::config::{self, Config, RoleConfig};
 use crate::runtime;
 use crate::tiffany_install;
 use serde::Serialize;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::Path;
@@ -175,6 +176,16 @@ impl DoctorReport {
             .map(|line| line.message.as_str())
             .collect::<Vec<_>>();
         if self.issue_count == 0 {
+            if messages.iter().any(|message| {
+                message.contains("homebrew tap formula is stale")
+                    || message.contains("homebrew package is older than tap formula")
+                    || message.contains("homebrew package is older than remote formula")
+            }) {
+                steps.push(
+                    "Refresh Homebrew with `brew update`, then `brew upgrade macguffinQ/tap/tiffany-loop`; if it still reports the old version, run `brew untap macguffinQ/tap && brew tap macguffinQ/tap`."
+                        .to_string(),
+                );
+            }
             if messages
                 .iter()
                 .any(|message| message.contains("OpenAI-compatible provider has no base_url"))
@@ -1473,7 +1484,7 @@ fn check_homebrew(builder: &mut DoctorReportBuilder) {
         }
     }
 
-    match command_summary("brew", &["tap"]) {
+    let tap_installed = match command_summary("brew", &["tap"]) {
         Ok(summary)
             if summary
                 .stdout
@@ -1481,51 +1492,87 @@ fn check_homebrew(builder: &mut DoctorReportBuilder) {
                 .any(|line| line.trim().eq_ignore_ascii_case("macguffinQ/tap")) =>
         {
             builder.ok("homebrew tap: macguffinQ/tap");
+            true
         }
         Ok(summary) if summary.success => {
             builder.warn("homebrew tap: macguffinQ/tap not tapped");
             builder.hint("run `brew tap macguffinQ/tap && brew install tiffany-loop`");
+            false
         }
-        Ok(summary) => builder.warn(format!(
-            "homebrew tap check failed: {}",
-            summary.short_failure()
-        )),
-        Err(err) => builder.warn(format!("homebrew tap check failed: {err}")),
-    }
-    check_homebrew_tap_checkout(builder, "macguffinQ/tap");
+        Ok(summary) => {
+            builder.warn(format!(
+                "homebrew tap check failed: {}",
+                summary.short_failure()
+            ));
+            false
+        }
+        Err(err) => {
+            builder.warn(format!("homebrew tap check failed: {err}"));
+            false
+        }
+    };
+    let tap_dir = tap_installed
+        .then(|| check_homebrew_tap_checkout(builder, "macguffinQ/tap"))
+        .flatten();
+    let local_formula_version = tap_dir
+        .as_deref()
+        .and_then(|path| check_homebrew_tap_formula(builder, path));
 
+    let installed_version = check_homebrew_package(builder);
+    let remote_formula_version = check_homebrew_remote_formula(builder);
+    report_homebrew_formula_alignment(
+        builder,
+        installed_version.as_deref(),
+        local_formula_version.as_deref(),
+        remote_formula_version.as_deref(),
+    );
+
+    check_homebrew_binary_visibility(builder);
+}
+
+fn check_homebrew_package(builder: &mut DoctorReportBuilder) -> Option<String> {
     match command_summary("brew", &["list", "--versions", "tiffany-loop"]) {
         Ok(summary) if summary.success && !summary.stdout.trim().is_empty() => {
             let installed = summary.stdout.trim();
             match parse_homebrew_tiffany_version(installed) {
                 Some(env!("CARGO_PKG_VERSION")) => {
                     builder.ok(format!("homebrew package: {installed}"));
+                    parse_homebrew_tiffany_version(installed).map(ToString::to_string)
                 }
                 Some(version) => {
                     builder.warn(format!(
                         "homebrew package: tiffany-loop {version} (current source/release is {})",
                         env!("CARGO_PKG_VERSION")
                     ));
-                    builder.hint("run `brew update && brew upgrade tiffany-loop`");
+                    builder.hint("run `brew update && brew upgrade macguffinQ/tap/tiffany-loop`");
                     builder.hint("if the local tap has divergent history, run `brew untap macguffinQ/tap && brew tap macguffinQ/tap`");
+                    Some(version.to_string())
                 }
-                None => builder.ok(format!("homebrew package: {installed}")),
+                None => {
+                    builder.ok(format!("homebrew package: {installed}"));
+                    None
+                }
             }
         }
         Ok(summary) if summary.success => {
             builder.hint("homebrew package not installed: `brew install tiffany-loop`");
+            None
         }
-        Ok(summary) => builder.hint(format!(
-            "homebrew package status unavailable: {}",
-            summary.short_failure()
-        )),
-        Err(err) => builder.hint(format!("homebrew package status unavailable: {err}")),
+        Ok(summary) => {
+            builder.hint(format!(
+                "homebrew package status unavailable: {}",
+                summary.short_failure()
+            ));
+            None
+        }
+        Err(err) => {
+            builder.hint(format!("homebrew package status unavailable: {err}"));
+            None
+        }
     }
-
-    check_homebrew_binary_visibility(builder);
 }
 
-fn check_homebrew_tap_checkout(builder: &mut DoctorReportBuilder, tap: &str) {
+fn check_homebrew_tap_checkout(builder: &mut DoctorReportBuilder, tap: &str) -> Option<PathBuf> {
     let tap_dir = match command_summary("brew", &["--repository", tap]) {
         Ok(summary) if summary.success && !summary.stdout.trim().is_empty() => {
             PathBuf::from(summary.stdout.trim())
@@ -1535,11 +1582,11 @@ fn check_homebrew_tap_checkout(builder: &mut DoctorReportBuilder, tap: &str) {
                 "homebrew tap repository check failed: {}",
                 summary.short_failure()
             ));
-            return;
+            return None;
         }
         Err(err) => {
             builder.warn(format!("homebrew tap repository check failed: {err}"));
-            return;
+            return None;
         }
     };
 
@@ -1549,7 +1596,7 @@ fn check_homebrew_tap_checkout(builder: &mut DoctorReportBuilder, tap: &str) {
             tap_dir.display()
         ));
         builder.hint(format!("run `brew untap {tap} && brew tap {tap}`"));
-        return;
+        return Some(tap_dir);
     }
 
     match homebrew_tap_git_state(&tap_dir) {
@@ -1558,6 +1605,155 @@ fn check_homebrew_tap_checkout(builder: &mut DoctorReportBuilder, tap: &str) {
             "homebrew tap git state unavailable for {}: {err}",
             tap_dir.display()
         )),
+    }
+    Some(tap_dir)
+}
+
+fn check_homebrew_tap_formula(builder: &mut DoctorReportBuilder, tap_dir: &Path) -> Option<String> {
+    let formula_path = tap_dir.join("Formula").join("tiffany-loop.rb");
+    match std::fs::read_to_string(&formula_path) {
+        Ok(contents) => match parse_homebrew_formula_version(&contents) {
+            Some(version) => {
+                builder.ok(format!(
+                    "homebrew tap formula: tiffany-loop {version} ({})",
+                    formula_path.display()
+                ));
+                Some(version.to_string())
+            }
+            None => {
+                builder.warn(format!(
+                    "homebrew tap formula version unavailable: {}",
+                    formula_path.display()
+                ));
+                None
+            }
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            builder.warn(format!(
+                "homebrew tap formula missing: {}",
+                formula_path.display()
+            ));
+            builder.hint("run `brew untap macguffinQ/tap && brew tap macguffinQ/tap`");
+            None
+        }
+        Err(err) => {
+            builder.hint(format!(
+                "homebrew tap formula unreadable: {} ({err})",
+                formula_path.display()
+            ));
+            None
+        }
+    }
+}
+
+fn check_homebrew_remote_formula(builder: &mut DoctorReportBuilder) -> Option<String> {
+    const REMOTE_FORMULA_URL: &str =
+        "https://raw.githubusercontent.com/macguffinQ/homebrew-tap/main/Formula/tiffany-loop.rb";
+
+    match command_summary(
+        "curl",
+        &[
+            "-fsSL",
+            "--connect-timeout",
+            "2",
+            "--max-time",
+            "4",
+            REMOTE_FORMULA_URL,
+        ],
+    ) {
+        Ok(summary) if summary.success => match parse_homebrew_formula_version(&summary.stdout) {
+            Some(version) => {
+                builder.ok(format!("homebrew remote formula: tiffany-loop {version}"));
+                Some(version.to_string())
+            }
+            None => {
+                builder.hint("homebrew remote formula fetched but version was not found");
+                None
+            }
+        },
+        Ok(summary) => {
+            builder.hint(format!(
+                "homebrew remote formula check unavailable: {}",
+                summary.short_failure()
+            ));
+            None
+        }
+        Err(err) => {
+            builder.hint(format!("homebrew remote formula check skipped: {err}"));
+            None
+        }
+    }
+}
+
+fn report_homebrew_formula_alignment(
+    builder: &mut DoctorReportBuilder,
+    installed_version: Option<&str>,
+    local_formula_version: Option<&str>,
+    remote_formula_version: Option<&str>,
+) {
+    if let (Some(installed), Some(local)) = (installed_version, local_formula_version) {
+        match compare_semver(local, installed) {
+            Some(Ordering::Greater) => {
+                builder.warn(format!(
+                    "homebrew package is older than tap formula: installed {installed}, tap {local}"
+                ));
+                builder.hint("run `brew upgrade macguffinQ/tap/tiffany-loop`");
+                builder.hint("if Homebrew still reports the old version, run `brew reinstall macguffinQ/tap/tiffany-loop`");
+            }
+            Some(Ordering::Less) => {
+                builder.warn(format!(
+                    "homebrew package is newer than local tap formula: installed {installed}, tap {local}"
+                ));
+                builder.hint("refresh the tap with `brew update` or `brew untap macguffinQ/tap && brew tap macguffinQ/tap`");
+            }
+            Some(Ordering::Equal) => {
+                builder.ok(format!("homebrew package matches tap formula: {installed}"));
+            }
+            None if installed != local => {
+                builder.hint(format!(
+                    "homebrew package/formula versions differ but could not be ordered: installed {installed}, tap {local}"
+                ));
+            }
+            None => {}
+        }
+    }
+
+    if let (Some(local), Some(remote)) = (local_formula_version, remote_formula_version) {
+        match compare_semver(remote, local) {
+            Some(Ordering::Greater) => {
+                builder.warn(format!(
+                    "homebrew tap formula is stale: local {local}, remote {remote}"
+                ));
+                builder.hint("run `brew update`");
+                builder.hint("if it still stays old, run `brew untap macguffinQ/tap && brew tap macguffinQ/tap`");
+                builder.hint("then run `brew upgrade macguffinQ/tap/tiffany-loop`");
+                return;
+            }
+            Some(Ordering::Equal) => {}
+            Some(Ordering::Less) => {
+                builder.ok(format!(
+                    "homebrew tap formula is newer than remote: {local}"
+                ));
+            }
+            None if local != remote => {
+                builder.hint(format!(
+                    "homebrew local/remote formula versions differ but could not be ordered: local {local}, remote {remote}"
+                ));
+            }
+            None => {}
+        }
+    }
+
+    if local_formula_version.is_none() {
+        if let (Some(installed), Some(remote)) = (installed_version, remote_formula_version) {
+            if compare_semver(remote, installed) == Some(Ordering::Greater) {
+                builder.warn(format!(
+                    "homebrew package is older than remote formula: installed {installed}, remote {remote}"
+                ));
+                builder.hint("run `brew update && brew upgrade macguffinQ/tap/tiffany-loop`");
+                builder.hint("if it still stays old, run `brew untap macguffinQ/tap && brew tap macguffinQ/tap`");
+            }
+        }
     }
 }
 
@@ -1663,6 +1859,39 @@ fn parse_homebrew_tiffany_version(output: &str) -> Option<&str> {
         .lines()
         .find_map(|line| line.trim().strip_prefix("tiffany-loop "))
         .and_then(|rest| rest.split_whitespace().next())
+}
+
+fn parse_homebrew_formula_version(contents: &str) -> Option<&str> {
+    contents.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("version ")?;
+        let rest = rest.trim();
+        let rest = rest.strip_prefix('"')?;
+        let (version, _) = rest.split_once('"')?;
+        Some(version)
+    })
+}
+
+fn compare_semver(left: &str, right: &str) -> Option<Ordering> {
+    Some(parse_semver_core(left)?.cmp(&parse_semver_core(right)?))
+}
+
+fn parse_semver_core(value: &str) -> Option<(u64, u64, u64)> {
+    let value = value.trim().trim_start_matches('v');
+    let mut parts = value.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let patch_digits = patch
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if patch_digits.is_empty() {
+        return None;
+    }
+    Some((major, minor, patch_digits.parse().ok()?))
 }
 
 fn check_homebrew_binary_visibility(builder: &mut DoctorReportBuilder) {
@@ -2239,6 +2468,76 @@ mod tests {
             Some("0.1.7")
         );
         assert_eq!(parse_homebrew_tiffany_version("other 1.0\n"), None);
+    }
+
+    #[test]
+    fn parses_homebrew_formula_version() {
+        assert_eq!(
+            parse_homebrew_formula_version(
+                r#"
+class TiffanyLoop < Formula
+  desc "Lightweight multi-agent orchestration shell for LLM CLIs"
+  version "0.1.28"
+end
+"#
+            ),
+            Some("0.1.28")
+        );
+        assert_eq!(
+            parse_homebrew_formula_version("class Empty < Formula\nend"),
+            None
+        );
+    }
+
+    #[test]
+    fn compares_semver_core_versions() {
+        assert_eq!(compare_semver("0.1.28", "0.1.25"), Some(Ordering::Greater));
+        assert_eq!(compare_semver("v0.1.25", "0.1.28"), Some(Ordering::Less));
+        assert_eq!(
+            compare_semver("0.1.28-beta1", "0.1.28"),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(compare_semver("not-a-version", "0.1.28"), None);
+    }
+
+    #[test]
+    fn homebrew_alignment_reports_installed_older_than_tap() {
+        let mut builder = DoctorReportBuilder::default();
+
+        report_homebrew_formula_alignment(
+            &mut builder,
+            Some("0.1.25"),
+            Some("0.1.28"),
+            Some("0.1.28"),
+        );
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 0);
+        assert!(rendered.contains("homebrew package is older than tap formula"));
+        assert!(rendered.contains("installed 0.1.25, tap 0.1.28"));
+        assert!(rendered.contains("brew upgrade macguffinQ/tap/tiffany-loop"));
+        assert!(rendered.contains("Refresh Homebrew"));
+    }
+
+    #[test]
+    fn homebrew_alignment_reports_stale_local_tap() {
+        let mut builder = DoctorReportBuilder::default();
+
+        report_homebrew_formula_alignment(
+            &mut builder,
+            Some("0.1.25"),
+            Some("0.1.25"),
+            Some("0.1.28"),
+        );
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 0);
+        assert!(rendered.contains("homebrew tap formula is stale"));
+        assert!(rendered.contains("local 0.1.25, remote 0.1.28"));
+        assert!(rendered.contains("brew untap macguffinQ/tap && brew tap macguffinQ/tap"));
+        assert!(rendered.contains("Refresh Homebrew"));
     }
 
     #[test]

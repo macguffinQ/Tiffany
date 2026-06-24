@@ -270,6 +270,8 @@ tiffany-loop --version
 If Homebrew still says an old version is up to date, reset the local tap cache:
 
 ```bash
+tiffany-loop doctor
+brew info macguffinQ/tap/tiffany-loop
 brew untap macguffinQ/tap
 brew tap macguffinQ/tap
 brew reinstall macguffinQ/tap/tiffany-loop
@@ -308,7 +310,9 @@ tiffany-loop doctor
 
 `tiffany-loop doctor` and `orchestrator doctor` check the Homebrew package
 prefix, the installed `tiffany-loop` / `orchestrator` binaries, and whether
-both commands are actually visible on `PATH`.
+both commands are actually visible on `PATH`. They also compare the installed
+package, local tap formula, and remote tap formula when Homebrew appears stuck
+on an older release.
 
 Prebuilt macOS Apple Silicon binaries are published on the GitHub Releases page after each `v*` tag. Archives include `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias. Linux, Windows, and Intel Mac users can install from source while additional prebuilt targets are being staged.
 
