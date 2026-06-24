@@ -4,8 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Nothing yet.
+
+## [0.1.29] - 2026-06-24
+
 ### Changed
 
+- Added `doctor` diagnostics that compare the installed Homebrew package,
+  local tap formula, and remote tap formula so stale tap/cache problems are
+  explicit.
 - Updated the release workflow's manual Homebrew tap instructions to run
   post-release metadata checks against the just-updated tap checkout.
 
