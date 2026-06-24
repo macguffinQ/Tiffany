@@ -16,6 +16,9 @@ All notable changes to this project will be documented in this file.
   such as `/model` or `/init` instead of submitting them as plain prompts.
 - Removed the `/model to change` header hint from Tiffany orchestrator mode
   because provider/model routing is configured through `/provider` and `/role`.
+- Clarified README command docs so the default native Tiffany TUI only lists
+  currently wired commands, with legacy terminal chat commands called out
+  separately.
 
 ## [0.1.33] - 2026-06-24
 

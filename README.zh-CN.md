@@ -447,34 +447,24 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 
 后续替换目标是 tiffany-loop UI adapter，而不是继续扩写旧 TUI。
 
-常用 `/` 命令：
+默认原生 TUI 的 `/` 命令：
 
-- `/help`：查看命令。
-- `/doctor`：诊断配置、runtime、API key、角色绑定和本地工具。
-- `/provider [setup|edit <provider>]|list|delete <provider>|env|key|endpoint`：打开或修改 provider 设置表单，查看/删除/配置 provider。
-- `/role [<role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]`：打开角色注册表单，或直接注册一个角色；已有内部 model id 仍可用 `--model <id>`。
-- `/roles show|route|use|save`：查看、选择、保存角色路由。
-- tiffany-loop UI 原生模式支持 `/provider`：`/provider` 打开借鉴 OpenClaw 的 provider 设置面板，provider、type、env、key、endpoint 分开填写；面板会显示 preset 摘要、auth 状态（环境变量 set/unset、字面量 key 警告、Ollama 无需 key）以及即将执行的 `config provider setup ...` 写入预览；带 `▾` 的字段按 `Space` 或 `F4` 打开可滚动下拉，可用上下键或数字选择，`Enter` 应用；选择 provider 会自动填默认 type/env/endpoint；`/provider edit minimax` 会从现有配置预填；`/provider list` 查看配置，`/provider delete minimax` 删除 provider，`/provider env openai OPENAI_API_KEY` 写入环境变量引用，`/provider endpoint openai https://api.openai.com/v1` 写入 endpoint。
-- provider/type、role/provider/model/runtime 这类选择字段已经锁定为下拉选项，不能直接乱输入；key/env/endpoint 保留自由输入。`/role` 里用户只选 `API Model`，orchestrator 内部 model id 自动生成；内置模型会跟随当前 provider 过滤，`custom`/`none` 下允许手动输入模型。
-- tiffany-loop UI 原生模式支持 `/role`：`/role` 打开独立角色注册表单，role、provider、model、name、runtime、teams 分开填写；`/role worker-codex` 会预填该角色；`/role register worker-cc --provider minimax --model-name MiniMax-M3 --runtime claude-code --agent-teams` 可直接写入 orchestrator 配置。
-- Claude Code worker 可以注册多个。`worker-cc` 只是默认示例；`worker-cc-minimax`、`worker-cc-sonnet`、`executor-ui` 这类角色只要 `runtime` 是 `claude-code`，都可以通过 `/roles use <role>` 精确选择。
-- tiffany-loop UI 原生模式支持 `/roles`：`/roles` 列出角色，`/roles show critic` 查看单个角色；`/roles save <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 会同时写入 model 和 role，旧的 `/roles save <role> <model> <runtime>` 仍可绑定已有 model id。
-- `/workflow`：查看当前选择的 direct/single/full flow、route reason、flow steps，以及 full pipeline 的角色接线。
-- `/agent claude|codex|auto`：选择后续 worker 路由。
-- `/context compact|full|off|clear`：控制上下文记忆。
-- `/process summary|full|200`：查看运行过程捕获。
-- `/trace full`：显示更多过程追踪。
-- `/queue pause|resume|run|edit n text`：管理排队消息。
-- `/result`：输出完整纯文本最终结果，适合选中复制。
-- `/copy result`：复制最终结果到剪贴板。
-- `/handoff claude|codex`：生成交接包。
-- `/continue claude|codex`：保存交接包并切到对应 CLI。
-- `/graph compact|full|mermaid|save`：把对话压缩为流程图/摘要。
-- `/acp status|claude|codex`：查看 ACP server 和客户端配置提示。
-- `/usage today|week|month|all`：查看 token/成本用量，以及已配置的预算告警。
-- `/o`：折叠或展开后续过程详情。
+- `/provider`：打开 provider 设置；支持 `list`、`edit <provider>`、`delete <provider>`、`env <provider> <ENV>`、`key <provider> <value>`、`endpoint <provider> <url>`。
+- `/role`：打开角色注册表单，或用 `register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 直接注册一个角色。
+- `/roles`：查看角色接线、选择当前 worker 路由，或保存 role/provider/model/runtime 绑定。
+- `/doctor`：诊断配置、runtime、API key、角色绑定、本地工具和安装状态。
+- `/status`：显示当前会话和配置状态。
+- `/diff`：显示当前 git 改动。
+- `/copy`：复制最后一条 assistant 回复为 Markdown。
+- `/raw`：切换便于系统选中复制的 raw scrollback 模式。
+- `/clear`：清空当前聊天界面。
+- `/exit` 或 `/quit`：退出 UI。
 
-底部状态行会常驻显示当前阶段、耗时、worker 路由、上下文模式、队列数量、`/o` 折叠状态、process filter、review/worker 问题计数，尽量保持一行内可扫读。
+原生 TUI 会主动隐藏 `/model`、`/init`、`/permissions`、`/compact`、`/review`、`/resume`、`/agent` 等上游专用命令。手动输入这些命令时，Tiffany 会显示本地解释，不会把它们当普通聊天内容发给 worker。
+
+旧 terminal chat 命令只在 `ORCHESTRATOR_LEGACY_TUI=1` 强制 fallback 或直接运行兼容 terminal chat 时可用，包括 `/workflow`、`/agent`、`/context`、`/process`、`/trace`、`/queue`、`/tests`、`/handoff`、`/continue`、`/graph`、`/acp`、`/result`、`/usage`、`/o`、`/resume last` 等。
+
+默认原生 TUI 的底部状态行会常驻显示当前阶段、耗时、worker 路由、上下文模式、队列数量、折叠状态、process filter、review/worker 问题计数，尽量保持一行内可扫读。
 
 优先排障：
 

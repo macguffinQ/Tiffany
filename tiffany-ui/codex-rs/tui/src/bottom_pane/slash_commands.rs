@@ -103,41 +103,66 @@ fn tiffany_orchestrator_command_visible(cmd: SlashCommand) -> bool {
 }
 
 pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Option<String> {
-    let cmd = SlashCommand::from_str(name).ok()?;
-    if tiffany_orchestrator_command_visible(cmd) {
-        return None;
-    }
+    let (command, hint) = if let Ok(cmd) = SlashCommand::from_str(name) {
+        if tiffany_orchestrator_command_visible(cmd) {
+            return None;
+        }
 
-    let command = cmd.command();
-    let hint = match cmd {
-        SlashCommand::Model => "Use /provider and /role to configure provider/model routing.",
-        SlashCommand::Permissions => {
-            "Tiffany runs orchestrator workers through registered runtimes; use /doctor to inspect setup."
-        }
-        SlashCommand::Init => {
-            "Tiffany does not create project instruction files from this shell; add project guidance manually when needed."
-        }
-        SlashCommand::Compact => {
-            "Tiffany keeps orchestration memory separately; use normal follow-up prompts or /doctor for diagnostics."
-        }
-        SlashCommand::Review => {
-            "Ask for review in the chat, or register a reviewer role with /role and /roles."
-        }
-        SlashCommand::Resume => {
-            "Tiffany resumes worker sessions through stable roles; use /roles or /doctor to inspect them."
-        }
-        SlashCommand::Logout => {
-            "Tiffany uses provider settings instead of account login; configure providers with /provider."
-        }
-        SlashCommand::Agent | SlashCommand::MultiAgents => {
-            "Use /role and /roles to register or select Tiffany worker roles."
-        }
-        _ => "Use /provider, /role, /roles, /doctor, /status, /diff, /copy, or plain chat prompts.",
+        let hint = match cmd {
+            SlashCommand::Model => "Use /provider and /role to configure provider/model routing.",
+            SlashCommand::Permissions => {
+                "Tiffany runs orchestrator workers through registered runtimes; use /doctor to inspect setup."
+            }
+            SlashCommand::Init => {
+                "Tiffany does not create project instruction files from this shell; add project guidance manually when needed."
+            }
+            SlashCommand::Compact => {
+                "Tiffany keeps orchestration memory separately; use normal follow-up prompts or /doctor for diagnostics."
+            }
+            SlashCommand::Review => {
+                "Ask for review in the chat, or register a reviewer role with /role and /roles."
+            }
+            SlashCommand::Resume => {
+                "Tiffany resumes worker sessions through stable roles; use /roles or /doctor to inspect them."
+            }
+            SlashCommand::Logout => {
+                "Tiffany uses provider settings instead of account login; configure providers with /provider."
+            }
+            SlashCommand::Agent | SlashCommand::MultiAgents => {
+                "Use /role and /roles to register or select Tiffany worker roles."
+            }
+            _ => tiffany_native_command_hint(),
+        };
+        (cmd.command(), hint)
+    } else if let Some(hint) = tiffany_orchestrator_legacy_command_hint(name) {
+        (name, hint)
+    } else {
+        return None;
     };
 
     Some(format!(
         "'/{command}' is not available in Tiffany orchestrator mode. {hint}"
     ))
+}
+
+fn tiffany_native_command_hint() -> &'static str {
+    "Use /provider, /role, /roles, /doctor, /status, /diff, /copy, /raw, or plain chat prompts."
+}
+
+fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> {
+    let hint = match name {
+        "workflow" | "flow" | "process" | "trace" | "queue" | "tests" | "test" | "context"
+        | "ctx" | "handoff" | "continue" | "graph" | "acp" | "result" | "final" | "usage"
+        | "thread" | "threads" | "sessions" | "history" | "checkpoint" | "rollback" | "retry"
+        | "cancel" | "o" => {
+            "This is a legacy terminal chat command; the native Tiffany TUI currently exposes setup and local utility commands only."
+        }
+        "help" | "h" | "commands" => {
+            "Type / to open the native command menu: /provider, /role, /roles, /doctor, /status, /diff, /copy, /raw."
+        }
+        _ => return None,
+    };
+    Some(hint)
 }
 
 pub(crate) fn commands_for_input(
@@ -401,6 +426,11 @@ mod tests {
             tiffany_orchestrator_unsupported_command_message("init")
                 .expect("init should be known but hidden")
                 .contains("project instruction files")
+        );
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("process")
+                .expect("legacy terminal chat command should be explained")
+                .contains("legacy terminal chat command")
         );
         assert!(tiffany_orchestrator_unsupported_command_message("provider").is_none());
         assert!(tiffany_orchestrator_unsupported_command_message("does-not-exist").is_none());

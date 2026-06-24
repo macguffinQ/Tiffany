@@ -550,33 +550,24 @@ Forward explicit orchestrator arguments after the subcommand:
 ./scripts/tiffany-dev orchestrator -- --help
 ```
 
-Useful commands:
+Default native TUI slash commands:
 
-- `/help` - show commands
-- `/doctor` - diagnose config, runtimes, API keys, role wiring, and local tools
-- `/provider [setup|edit <provider>]|list|delete <provider>|env <provider> <ENV>|key <provider> <value>|endpoint <provider> <url>` - open or edit a provider setup form, inspect config, delete a provider, or configure orchestrator providers
-- `/role [<role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]` - open the role-registration form or register one role; `--model <id>` remains supported for existing model ids
-- `/roles show|route|use <role>|snippet <role> <model> <runtime>|save <role> --provider <provider> --model-name <api-model> --runtime <runtime>` - inspect configured commander/critic/executor/reviewer roles, select a worker route, print a snippet, or write a role to config
-- `/workflow` - show the selected direct/single/full flow, route reason, flow steps, and full-pipeline role wiring
-- `/agent claude|codex|auto` - route future worker tasks
-- `/context compact|full|off|clear` - control multi-turn memory
-- `/process summary|full|200` - inspect captured run events without raw JSON noise
-- `/trace full` - show more live process detail in the chat
-- `/queue pause|resume|run|edit n text` - hold, resume, run, or edit pending follow-up messages
-- `/diff summary|stat|full|cached` - inspect current git changes
-- `/tests suggest|quick|run quick|status|tail` - show, run, and inspect background test commands; `quick` runs the focused TUI + ACP + runtime checks
-- `/handoff claude|codex` - save a markdown context package for continuing in another CLI
-- `/handoff open claude|codex` - save a handoff package and open the target CLI inline
-- `/continue claude|codex` - save a handoff package, suspend orchestrator input mode, and open the target CLI inline
-- `/graph compact|full|mermaid|save` - compress recent conversation history into text or Mermaid flow graphs
-- `/acp status|claude|codex` - show Agent Client Protocol server command and client setup hints
-- `/checkpoint` and `/rollback last` - save and reverse-apply a tracked git patch checkpoint
-- `/result` and `/copy result` - replay or copy the last final result as plain text
-- `/usage today|week|month|all` - show token/cost usage and configured budget alerts
-- `/o` - fold or expand history summaries
-- `/resume last` - restore the last terminal chat snapshot
+- `/provider` - open provider setup; supports `list`, `edit <provider>`, `delete <provider>`, `env <provider> <ENV>`, `key <provider> <value>`, and `endpoint <provider> <url>`
+- `/role` - open the role-registration form or register one role with `register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`
+- `/roles` - inspect role wiring, select the active worker route, or save role/provider/model/runtime bindings
+- `/doctor` - diagnose config, runtimes, API keys, role wiring, local tools, and install surface
+- `/status` - show current session/config status
+- `/diff` - show current git changes
+- `/copy` - copy the last assistant response as markdown
+- `/raw` - toggle copy-friendly raw scrollback mode
+- `/clear` - clear the current chat surface
+- `/exit` or `/quit` - leave the UI
 
-The bottom status line follows tiffany-loop-style run HUD behavior: it keeps one compact line for stage, elapsed time, worker route, context mode, queued message count, detail fold state, process filter, and review/worker issue counters.
+The native TUI intentionally hides unsupported upstream-only commands such as `/model`, `/init`, `/permissions`, `/compact`, `/review`, `/resume`, and `/agent`. If typed manually, Tiffany shows a local explanation instead of sending them to a worker as chat text.
+
+Legacy terminal chat commands are still available only when forcing the fallback runner with `ORCHESTRATOR_LEGACY_TUI=1` or running the compatibility terminal chat directly. That surface includes older commands such as `/workflow`, `/agent`, `/context`, `/process`, `/trace`, `/queue`, `/tests`, `/handoff`, `/continue`, `/graph`, `/acp`, `/result`, `/usage`, `/o`, and `/resume last`.
+
+The native bottom status line follows tiffany-loop-style run HUD behavior: it keeps one compact line for stage, elapsed time, worker route, context mode, queued message count, detail fold state, process filter, and review/worker issue counters.
 
 Troubleshooting first:
 

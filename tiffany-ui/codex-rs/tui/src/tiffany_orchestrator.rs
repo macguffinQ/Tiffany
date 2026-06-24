@@ -261,7 +261,8 @@ pub(crate) fn idle_intro_lines() -> Vec<Line<'static>> {
         brand_line("orchestration shell"),
         idle_status_line(),
         workflow_line(),
-        command_hint_line(),
+        command_hint_line("setup", &["/provider", "/role", "/roles", "/doctor"]),
+        command_hint_line("tools", &["/status", "/diff", "/copy", "/raw"]),
     ]
 }
 
@@ -1957,23 +1958,18 @@ fn launch_route(launch: &TiffanyOrchestratorLaunch) -> event_format::Orchestrati
     event_format::classify_orchestration_route(&launch.prompt)
 }
 
-fn command_hint_line() -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            "cmd",
-            Style::default()
-                .fg(TIFFANY_BLUE)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled("/provider", Style::default().fg(TIFFANY_SOFT)),
-        Span::raw("  "),
-        Span::styled("/role", Style::default().fg(TIFFANY_SOFT)),
-        Span::raw("  "),
-        Span::styled("/roles", Style::default().fg(TIFFANY_SOFT)),
-        Span::raw("  "),
-        Span::styled("/doctor", Style::default().fg(TIFFANY_SOFT)),
-    ])
+fn command_hint_line(label: &'static str, commands: &[&'static str]) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        label,
+        Style::default()
+            .fg(TIFFANY_BLUE)
+            .add_modifier(Modifier::BOLD),
+    )];
+    for command in commands {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(*command, Style::default().fg(TIFFANY_SOFT)));
+    }
+    Line::from(spans)
 }
 
 fn memory_capture_line() -> Line<'static> {
@@ -2838,12 +2834,14 @@ mod tests {
         assert!(text.contains("status ready"));
         assert!(text.contains("flow  direct / single / full  →  selected per prompt"));
         assert!(!text.contains("status ready\nflow  planner → critic"));
-        assert!(text.contains("cmd  /provider  /role  /roles  /doctor"));
+        assert!(text.contains("setup  /provider  /role  /roles  /doctor"));
+        assert!(text.contains("tools  /status  /diff  /copy  /raw"));
         assert_eq!(lines[0].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[0].spans[2].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[0].spans[3].style.fg, Some(TIFFANY_SOFT));
         assert_eq!(lines[2].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[3].spans[2].style.fg, Some(TIFFANY_SOFT));
+        assert_eq!(lines[4].spans[2].style.fg, Some(TIFFANY_SOFT));
     }
 
     #[test]
