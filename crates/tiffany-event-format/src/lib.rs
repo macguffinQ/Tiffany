@@ -45,6 +45,7 @@ pub enum AgentFailureCategory {
     Permission,
     RateLimit,
     Runtime,
+    Dependency,
     Network,
     Parse,
 }
@@ -57,6 +58,7 @@ impl AgentFailureCategory {
             Self::Permission => "permission blocked execution",
             Self::RateLimit => "provider rate limit or quota",
             Self::Runtime => "worker runtime is not available",
+            Self::Dependency => "dependency blocked by failed worker",
             Self::Network => "network or endpoint failure",
             Self::Parse => "agent output could not be parsed",
         }
@@ -78,6 +80,9 @@ impl AgentFailureCategory {
             }
             Self::Runtime => {
                 "Install the missing worker CLI or update the role runtime in /role; verify with /doctor."
+            }
+            Self::Dependency => {
+                "Open /process full, fix the failed worker first, then rerun the request or queue the dependent work."
             }
             Self::Network => {
                 "Check the provider endpoint, proxy, and network, then retry."
@@ -1133,6 +1138,19 @@ fn classify_failure_category(lower: &str) -> Option<AgentFailureCategory> {
         ],
     ) {
         return Some(AgentFailureCategory::Runtime);
+    }
+    if contains_any(
+        lower,
+        &[
+            "task dag blocked",
+            "failed dependencies",
+            "behind failed dependencies",
+            "blocked by failed",
+            "dependency failed",
+            "failed dependency",
+        ],
+    ) {
+        return Some(AgentFailureCategory::Dependency);
     }
     if contains_any(
         lower,
@@ -2589,6 +2607,15 @@ mod tests {
         assert!(parse.evidence.contains("planner returned no worker runs"));
         assert!(!parse.evidence.contains("sub_tasks"));
         assert!(parse.action().contains("/process full"));
+
+        let dependency = agent_failure_hint(
+            "task DAG blocked: 1 task(s) remain behind failed dependencies",
+            500,
+        )
+        .expect("dependency hint");
+        assert_eq!(dependency.category, AgentFailureCategory::Dependency);
+        assert!(dependency.title().contains("dependency blocked"));
+        assert!(dependency.action().contains("fix the failed worker"));
     }
 
     #[test]

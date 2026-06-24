@@ -2012,6 +2012,27 @@ mod tests {
     }
 
     #[test]
+    fn failure_context_surfaces_dag_dependency_hint() {
+        let mut input = InputState::default();
+        input.run_events = vec![
+            "10:00:00  worker  worker-cc started · claude-code · minimax/MiniMax-M3 · aaaabbbb"
+                .into(),
+            "10:00:01  worker  worker-cc failed · aaaabbbb · 1.0s".into(),
+            "10:00:02  error  task DAG blocked: 1 task(s) remain behind failed dependencies".into(),
+        ];
+
+        let formatted = format_failure_context(&input).expect("failure context");
+
+        assert!(formatted.contains("Likely cause:"));
+        assert!(formatted.contains("dependency blocked by failed worker"));
+        assert!(formatted.contains("failed dependencies"));
+        assert!(formatted.contains("Next step:"));
+        assert!(formatted.contains("fix the failed worker"));
+        assert!(formatted.contains("Recent process:"));
+        assert!(formatted.contains("task DAG blocked"));
+    }
+
+    #[test]
     fn live_trace_refresh_creates_persistent_block() {
         let mut input = InputState::default();
         input.trace_live_enabled = true;
