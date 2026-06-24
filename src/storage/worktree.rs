@@ -21,12 +21,27 @@ impl WorktreePool {
     /// If `repo_root` is None, allocates an isolated directory (not a real worktree).
     pub fn acquire(&self, task_id: Uuid, repo_root: Option<&Path>) -> Result<PathBuf> {
         let path = self.base.join(task_id.to_string());
+        self.acquire_path(path, repo_root)
+    }
+
+    /// Allocate a stable worktree for a worker thread. Reuses the directory if
+    /// it already exists so repeated turns keep the same checkout.
+    pub fn acquire_thread(&self, thread_id: Uuid, repo_root: Option<&Path>) -> Result<PathBuf> {
+        let path = self.base.join("threads").join(thread_id.to_string());
+        self.acquire_path(path, repo_root)
+    }
+
+    fn acquire_path(&self, path: PathBuf, repo_root: Option<&Path>) -> Result<PathBuf> {
         // Only create the parent dir (`worktree_base`) — let `git worktree add`
         // create the leaf dir itself. Pre-creating the leaf makes git refuse
         // with "already exists".
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating worktree base {}", parent.display()))?;
+        }
+
+        if path.exists() {
+            return Ok(path);
         }
 
         if let Some(repo) = repo_root {
@@ -53,6 +68,9 @@ impl WorktreePool {
                     stderr_oneline
                 );
             }
+        } else {
+            std::fs::create_dir_all(&path)
+                .with_context(|| format!("creating isolated worktree {}", path.display()))?;
         }
         Ok(path)
     }
@@ -77,9 +95,18 @@ impl WorktreePool {
     /// Compute a unified diff of the worktree against its starting commit.
     pub fn diff(&self, task_id: Uuid) -> Result<String> {
         let path = self.base.join(task_id.to_string());
+        self.diff_path(&path)
+    }
+
+    pub fn diff_thread(&self, thread_id: Uuid) -> Result<String> {
+        let path = self.base.join("threads").join(thread_id.to_string());
+        self.diff_path(&path)
+    }
+
+    pub fn diff_path(&self, path: &Path) -> Result<String> {
         let output = Command::new("git")
             .args(["diff", "HEAD"])
-            .current_dir(&path)
+            .current_dir(path)
             .output()
             .with_context(|| "running git diff")?;
         if !output.status.success() {

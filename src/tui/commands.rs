@@ -3568,11 +3568,28 @@ fn format_session_detail(store: &SessionStore, selector: Option<&str>) -> String
                     .collect::<Vec<_>>()
                     .join(", ")
             };
+            let worker_thread = s
+                .worker_thread_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let native_session = s
+                .native_session_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or("none");
+            let worktree = s
+                .worktree_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "none".to_string());
             format!(
-                "Session {}\n  task: {}\n  parents: {}\n  state: {}\n  agent: {}\n  role: {}\n  model: {}\n  started: {}\n  ended: {}\n  tokens: in={} out={} total={}\n  cost: ${:.4}\n  files: {}\n  log: {}",
+                "Session {}\n  task: {}\n  parents: {}\n  worker thread: {}\n  native session: {}\n  worktree: {}\n  state: {}\n  agent: {}\n  role: {}\n  model: {}\n  started: {}\n  ended: {}\n  tokens: in={} out={} total={}\n  cost: ${:.4}\n  files: {}\n  log: {}",
                 s.id,
                 s.task_id,
                 parents,
+                worker_thread,
+                native_session,
+                worktree,
                 format_session_state(&s),
                 s.agent,
                 s.role.as_str(),

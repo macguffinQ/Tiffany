@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -70,6 +71,13 @@ pub enum RunProgress {
         model: String,
         provider: Option<String>,
         prompt: String,
+    },
+    WorkerThreadReady {
+        task_id: Uuid,
+        role: String,
+        thread_id: Uuid,
+        native_session_id: Option<String>,
+        reused: bool,
     },
     WorkerOutput {
         task_id: Uuid,
@@ -484,14 +492,18 @@ impl Orchestrator {
                     .and_then(|sessions| sessions.into_iter().find(|s| s.task_id == t.id));
                 let ctx = session
                     .map(|s| {
-                        let worktree = t.worktree.clone().unwrap_or_else(|| {
-                            self.session_store
-                                .log_dir()
-                                .parent()
-                                .unwrap_or_else(|| std::path::Path::new("."))
-                                .join("worktrees")
-                                .join(t.id.to_string())
-                        });
+                        let worktree = s
+                            .worktree_path
+                            .clone()
+                            .or_else(|| t.worktree.clone())
+                            .unwrap_or_else(|| {
+                                self.session_store
+                                    .log_dir()
+                                    .parent()
+                                    .unwrap_or_else(|| std::path::Path::new("."))
+                                    .join("worktrees")
+                                    .join(t.id.to_string())
+                            });
                         crate::core::types::ReviewContext {
                             session_log_path: self.session_store.log_path(s.id),
                             worktree_path: worktree,
@@ -632,7 +644,10 @@ impl Orchestrator {
         let mut successful_ids: HashSet<Uuid> = HashSet::new();
         let mut terminal_ids: HashSet<Uuid> = HashSet::new();
         let mut results: Vec<Task> = Vec::new();
-        let mut joinset: JoinSet<(Uuid, String, String, u64, Result<Session>)> = JoinSet::new();
+        let mut active_thread_ids: HashSet<Uuid> = HashSet::new();
+        let mut joinset: JoinSet<(Uuid, Option<Uuid>, String, String, u64, Result<Session>)> =
+            JoinSet::new();
+        let mut thread_locks: HashMap<Uuid, Arc<Mutex<()>>> = HashMap::new();
 
         loop {
             // Find ready tasks: status==Pending (only — NOT Running) and all
@@ -648,11 +663,6 @@ impl Orchestrator {
                 .collect();
 
             for mut t in ready {
-                t.status = TaskStatus::Running;
-                // Update the in-list task to Running
-                if let Some(slot) = tasks.iter_mut().find(|x| x.id == t.id) {
-                    slot.status = TaskStatus::Running;
-                }
                 let assignment = self.router.resolve(&t)?;
                 if t.model_hint.is_none() {
                     t.model_hint = Some(assignment.model.clone());
@@ -667,10 +677,60 @@ impl Orchestrator {
                         anyhow::anyhow!("no adapter for runtime '{}'", assignment.runtime)
                     })?
                     .clone();
+                let thread = self
+                    .session_store
+                    .get_or_create_worker_thread(
+                        &assignment.role,
+                        &assignment.runtime,
+                        adapter.name(),
+                        &assignment.model,
+                        assignment.provider.as_deref(),
+                    )
+                    .with_context(|| format!("assigning worker thread for {}", assignment.role))?;
+                let reused = thread.last_session_id.is_some() || thread.native_session_id.is_some();
+                t.worker_thread_id = Some(thread.id);
+                t.native_session_id = match assignment.runtime.as_str() {
+                    "claude-code" => Some(
+                        thread
+                            .native_session_id
+                            .clone()
+                            .unwrap_or_else(|| thread.id.to_string()),
+                    ),
+                    "codex" => thread.native_session_id.clone(),
+                    _ => thread.native_session_id.clone(),
+                };
+                if let Some(parent_id) = thread.last_session_id {
+                    if !t.parent_session_ids.contains(&parent_id) {
+                        t.parent_session_ids.push(parent_id);
+                    }
+                }
+                if let Some(worktree_path) = thread.worktree_path.clone() {
+                    t.worktree = Some(worktree_path);
+                }
+                if active_thread_ids.contains(&thread.id) {
+                    continue;
+                }
+                active_thread_ids.insert(thread.id);
+                t.status = TaskStatus::Running;
+                // Update the in-list task with the resolved thread/session metadata.
+                if let Some(slot) = tasks.iter_mut().find(|x| x.id == t.id) {
+                    *slot = t.clone();
+                }
+                let thread_lock = thread_locks
+                    .entry(thread.id)
+                    .or_insert_with(|| Arc::new(Mutex::new(())))
+                    .clone();
                 let task_id = t.id;
                 let agent = adapter.name().to_string();
                 let worker_role = assignment.role.clone();
                 let worker_start = std::time::Instant::now();
+                let _ = tx.send(RunProgress::WorkerThreadReady {
+                    task_id,
+                    role: worker_role.clone(),
+                    thread_id: thread.id,
+                    native_session_id: t.native_session_id.clone(),
+                    reused,
+                });
                 let _ = tx.send(RunProgress::WorkerStarted {
                     task_id,
                     agent: agent.clone(),
@@ -710,10 +770,12 @@ impl Orchestrator {
                     }
                 });
                 joinset.spawn(async move {
+                    let _guard = thread_lock.lock().await;
                     let res = adapter.start(&t, Some(event_tx)).await;
                     let _ = forwarder.await;
                     (
                         task_id,
+                        Some(thread.id),
                         agent,
                         worker_role,
                         duration_ms(worker_start.elapsed()),
@@ -753,7 +815,10 @@ impl Orchestrator {
             }
 
             if let Some(joined) = joinset.join_next().await {
-                let (task_id, agent, role, duration_ms, res) = joined?;
+                let (task_id, thread_id, agent, role, duration_ms, res) = joined?;
+                if let Some(thread_id) = thread_id {
+                    active_thread_ids.remove(&thread_id);
+                }
                 match res {
                     Ok(mut session) => {
                         let done_agent = if session.agent.trim().is_empty() {
@@ -761,7 +826,11 @@ impl Orchestrator {
                         } else {
                             session.agent.clone()
                         };
-                        if let Some(task) = by_id.get(&task_id) {
+                        if let Some(task) = tasks
+                            .iter()
+                            .find(|task| task.id == task_id)
+                            .or_else(|| by_id.get(&task_id))
+                        {
                             for parent_id in &task.parent_session_ids {
                                 if !session.parent_session_ids.contains(parent_id) {
                                     session.parent_session_ids.push(*parent_id);
@@ -772,6 +841,18 @@ impl Orchestrator {
                         self.session_store
                             .finalize(&session)
                             .with_context(|| format!("finalizing worker session {}", session.id))?;
+                        if let Some(thread_id) = session.worker_thread_id {
+                            self.session_store
+                                .update_worker_thread_after_session(
+                                    thread_id,
+                                    session.native_session_id.as_deref(),
+                                    session.id,
+                                    session.worktree_path.as_deref(),
+                                )
+                                .with_context(|| {
+                                    format!("updating worker thread after session {}", session.id)
+                                })?;
+                        }
 
                         // Mark the task complete.
                         if let Some(slot) = tasks.iter_mut().find(|t| t.id == task_id) {
@@ -779,9 +860,17 @@ impl Orchestrator {
                         }
                         successful_ids.insert(task_id);
                         terminal_ids.insert(task_id);
-                        if let Some(t) = by_id.get(&task_id).cloned() {
+                        if let Some(t) = tasks
+                            .iter()
+                            .find(|task| task.id == task_id)
+                            .cloned()
+                            .or_else(|| by_id.get(&task_id).cloned())
+                        {
                             let mut t = t;
                             t.status = TaskStatus::Completed;
+                            if t.worktree.is_none() {
+                                t.worktree = session.worktree_path.clone();
+                            }
                             results.push(t);
                         }
                         let _ = tx.send(RunProgress::WorkerDone {
@@ -1038,6 +1127,28 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "model": model,
                 "provider": provider,
                 "task_prompt": prompt,
+            }),
+        ),
+        RunProgress::WorkerThreadReady {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            reused,
+        } => (
+            "worker",
+            *task_id,
+            serde_json::json!({
+                "status": "ready",
+                "message": format!(
+                    "{role} worker thread {}",
+                    if *reused { "reused" } else { "created" }
+                ),
+                "task_id": task_id,
+                "worker_role": role,
+                "worker_thread_id": thread_id,
+                "native_session_id": native_session_id,
+                "reused": reused,
             }),
         ),
         RunProgress::WorkerOutput {
@@ -1512,6 +1623,10 @@ mod tests {
             }
             let mut session = Session::new(task.id, self.name(), Role::Worker);
             session.model = task.model_hint.clone().unwrap_or_default();
+            session.parent_session_ids = task.parent_session_ids.clone();
+            session.worker_thread_id = task.worker_thread_id;
+            session.native_session_id = task.native_session_id.clone();
+            session.worktree_path = task.worktree.clone();
             Ok(WorkerHandle {
                 session,
                 kill: Arc::new(|| {}),
@@ -1557,6 +1672,10 @@ mod tests {
             }
             let mut session = Session::new(task.id, self.name(), Role::Worker);
             session.model = task.model_hint.clone().unwrap_or_default();
+            session.parent_session_ids = task.parent_session_ids.clone();
+            session.worker_thread_id = task.worker_thread_id;
+            session.native_session_id = task.native_session_id.clone();
+            session.worktree_path = task.worktree.clone();
             Ok(WorkerHandle {
                 session,
                 kill: Arc::new(|| {}),
@@ -2606,6 +2725,116 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             .find(|s| s.task_id == task_id)
             .expect("worker session should be finalized");
         assert_eq!(session.model, "test-model");
+    }
+
+    #[tokio::test]
+    async fn execute_dag_reuses_worker_thread_and_links_previous_worker_session() {
+        let (_tmp, mut orch) = test_orchestrator(Arc::new(ApprovingCritic));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+
+        let first_task = Task::new("first turn");
+        let first_task_id = first_task.id;
+        let (first_tx, mut first_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch.execute_dag(vec![first_task], first_tx).await.unwrap();
+        let first_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == first_task_id)
+            .expect("first worker session");
+        let thread_id = first_session
+            .worker_thread_id
+            .expect("first session should record worker thread");
+
+        let second_task = Task::new("second turn");
+        let second_task_id = second_task.id;
+        let (second_tx, mut second_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch
+            .execute_dag(vec![second_task], second_tx)
+            .await
+            .unwrap();
+        let second_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == second_task_id)
+            .expect("second worker session");
+
+        assert_eq!(second_session.worker_thread_id, Some(thread_id));
+        assert!(
+            second_session
+                .parent_session_ids
+                .contains(&first_session.id),
+            "second turn should link previous worker session as parent"
+        );
+        let mut saw_created = false;
+        while let Ok(event) = first_rx.try_recv() {
+            if let RunProgress::WorkerThreadReady {
+                thread_id: seen,
+                reused,
+                ..
+            } = event
+            {
+                saw_created = seen == thread_id && !reused;
+            }
+        }
+        let mut saw_reused = false;
+        while let Ok(event) = second_rx.try_recv() {
+            if let RunProgress::WorkerThreadReady {
+                thread_id: seen,
+                reused,
+                ..
+            } = event
+            {
+                saw_reused = seen == thread_id && reused;
+            }
+        }
+        assert!(
+            saw_created,
+            "first turn should create a visible worker thread"
+        );
+        assert!(saw_reused, "second turn should visibly reuse worker thread");
+    }
+
+    #[tokio::test]
+    async fn execute_dag_serializes_same_thread_tasks_within_one_run() {
+        let (_tmp, mut orch) = test_orchestrator(Arc::new(ApprovingCritic));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert("test-runtime".to_string(), Arc::new(CompletingAdapter));
+
+        let first = Task::new("first same-run task");
+        let first_task_id = first.id;
+        let second = Task::new("second same-run task");
+        let second_task_id = second.id;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let completed = orch.execute_dag(vec![first, second], tx).await.unwrap();
+
+        assert_eq!(completed.len(), 2);
+        let sessions = orch.session_store.list(10).unwrap();
+        let first_session = sessions
+            .iter()
+            .find(|session| session.task_id == first_task_id)
+            .expect("first session should be finalized");
+        let second_session = sessions
+            .iter()
+            .find(|session| session.task_id == second_task_id)
+            .expect("second session should be finalized");
+        assert_eq!(
+            first_session.worker_thread_id,
+            second_session.worker_thread_id
+        );
+        assert!(
+            second_session
+                .parent_session_ids
+                .contains(&first_session.id),
+            "second task in the same run should resume from the first worker session"
+        );
     }
 
     #[tokio::test]

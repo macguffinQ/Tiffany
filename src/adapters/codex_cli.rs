@@ -64,13 +64,21 @@ impl WorkerAdapter for CodexCLIAdapter {
         let mut session = Session::new(task.id, self.name(), task.role);
         session.model = model.clone();
         session.parent_session_ids = task.parent_session_ids.clone();
+        session.worker_thread_id = task.worker_thread_id;
+        session.native_session_id = task.native_session_id.clone();
 
         let repo_root = task
             .worktree
             .as_deref()
             .and_then(WorktreePool::detect_repo_root_from)
             .or_else(WorktreePool::detect_repo_root);
-        let worktree = self.worktree_pool.acquire(task.id, repo_root.as_deref())?;
+        let worktree = if let Some(thread_id) = task.worker_thread_id {
+            self.worktree_pool
+                .acquire_thread(thread_id, repo_root.as_deref())?
+        } else {
+            self.worktree_pool.acquire(task.id, repo_root.as_deref())?
+        };
+        session.worktree_path = Some(worktree.clone());
 
         let conversational = is_conversational_task(task);
         let history = if conversational {
@@ -97,6 +105,7 @@ impl WorkerAdapter for CodexCLIAdapter {
             }
         }
 
+        append_codex_resume_args(&mut cmd, task.native_session_id.as_deref());
         cmd.arg(&full_prompt)
             .kill_on_drop(true)
             .stdout(Stdio::piped())
@@ -135,6 +144,11 @@ impl WorkerAdapter for CodexCLIAdapter {
 
         let mut reader = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = reader.next_line().await {
+            if session.native_session_id.is_none() {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                    session.native_session_id = extract_codex_native_session_id(&value);
+                }
+            }
             let event = Event {
                 session_id: session.id,
                 task_id: task.id,
@@ -243,6 +257,12 @@ impl WorkerAdapter for CodexCLIAdapter {
     }
 
     async fn get_diff(&self, session: &Session) -> Result<String> {
+        if let Some(path) = session.worktree_path.as_deref() {
+            return self.worktree_pool.diff_path(path);
+        }
+        if let Some(thread_id) = session.worker_thread_id {
+            return self.worktree_pool.diff_thread(thread_id);
+        }
         self.worktree_pool.diff(session.task_id)
     }
 
@@ -264,6 +284,47 @@ fn codex_exec_command(binary: &str, model: &str, worktree: &std::path::Path) -> 
         .arg("--cd")
         .arg(worktree);
     cmd
+}
+
+fn append_codex_resume_args(cmd: &mut Command, native_session_id: Option<&str>) {
+    if let Some(session_id) = native_session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        cmd.arg("resume").arg(session_id);
+    }
+}
+
+fn extract_codex_native_session_id(value: &serde_json::Value) -> Option<String> {
+    find_string_field(value, &["thread_id", "threadId", "session_id", "sessionId"])
+        .filter(|id| !id.trim().is_empty())
+}
+
+fn find_string_field(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in keys {
+                if let Some(text) = map.get(*key).and_then(|value| value.as_str()) {
+                    return Some(text.to_string());
+                }
+            }
+            for child in map.values() {
+                if let Some(found) = find_string_field(child, keys) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                if let Some(found) = find_string_field(child, keys) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 fn apply_codex_provider_config(cmd: &mut Command, provider_id: &str, provider: &ProviderConfig) {
@@ -387,5 +448,58 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair[0] == "--cd" && pair[1] == "/tmp/repo"));
+        assert!(!args.iter().any(|arg| arg == "resume"));
+    }
+
+    #[test]
+    fn codex_exec_command_resumes_native_session_after_exec_options() {
+        let mut cmd = codex_exec_command("codex", "gpt-5.1", std::path::Path::new("/tmp/repo"));
+        apply_codex_provider_config(
+            &mut cmd,
+            "ollama",
+            &ProviderConfig {
+                kind: "ollama".to_string(),
+                base_url: Some("http://localhost:11434/v1".to_string()),
+                api_key: None,
+            },
+        );
+        append_codex_resume_args(&mut cmd, Some("123e4567-e89b-42d3-a456-426614174000"));
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args[0], "exec");
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--cd" && pair[1] == "/tmp/repo"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "resume" && pair[1] == "123e4567-e89b-42d3-a456-426614174000"));
+        let resume_pos = args.iter().position(|arg| arg == "resume").unwrap();
+        let cd_pos = args.iter().position(|arg| arg == "--cd").unwrap();
+        let config_pos = args.iter().position(|arg| arg == "-c").unwrap();
+        assert!(resume_pos > cd_pos, "resume must follow exec options");
+        assert!(
+            resume_pos > config_pos,
+            "resume must follow provider config overrides"
+        );
+    }
+
+    #[test]
+    fn extracts_codex_native_session_id_from_nested_json_events() {
+        let value = serde_json::json!({
+            "msg": {
+                "type": "session_configured",
+                "session_id": "8f7c4ac2-6141-42da-b4d5-7032a8e8df3b",
+                "model": "gpt-5.1"
+            }
+        });
+
+        assert_eq!(
+            extract_codex_native_session_id(&value).as_deref(),
+            Some("8f7c4ac2-6141-42da-b4d5-7032a8e8df3b")
+        );
     }
 }

@@ -67,6 +67,12 @@ pub struct Task {
     pub role: Role,
     pub timeout: u32,
     pub parent_session_ids: Vec<Uuid>,
+    /// Stable Tiffany worker thread assigned to this task.
+    #[serde(default)]
+    pub worker_thread_id: Option<Uuid>,
+    /// Native CLI session/thread id used by the worker runtime.
+    #[serde(default)]
+    pub native_session_id: Option<String>,
     pub status: TaskStatus,
     pub created_at: DateTime<Utc>,
     pub result: Option<serde_json::Value>,
@@ -89,6 +95,8 @@ impl Task {
             role: Role::Worker,
             timeout: 600,
             parent_session_ids: vec![],
+            worker_thread_id: None,
+            native_session_id: None,
             status: TaskStatus::Pending,
             created_at: Utc::now(),
             result: None,
@@ -118,6 +126,12 @@ pub struct Session {
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
     pub parent_session_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub worker_thread_id: Option<Uuid>,
+    #[serde(default)]
+    pub native_session_id: Option<String>,
+    #[serde(default)]
+    pub worktree_path: Option<PathBuf>,
     pub token_in: u64,
     pub token_out: u64,
     pub cost_usd: f64,
@@ -135,6 +149,9 @@ impl Session {
             started_at: Utc::now(),
             ended_at: None,
             parent_session_ids: vec![],
+            worker_thread_id: None,
+            native_session_id: None,
+            worktree_path: None,
             token_in: 0,
             token_out: 0,
             cost_usd: 0.0,

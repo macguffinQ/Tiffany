@@ -1835,6 +1835,12 @@ async fn send_progress_update(
             )
             .await
         }
+        RunProgress::WorkerThreadReady { .. } => {
+            if let Some(text) = progress_text(event, capture) {
+                send_agent_chunk(writer, session_id, message_id, text).await?;
+            }
+            Ok(())
+        }
         RunProgress::WorkerOutput {
             task_id,
             agent,
@@ -2070,6 +2076,7 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
             agent_events::humanize_jsonish(msg, 1600)
         )),
         RunProgress::WorkerStarted { .. }
+        | RunProgress::WorkerThreadReady { .. }
         | RunProgress::WorkerOutput { .. }
         | RunProgress::WorkerDone { .. } => None,
     }

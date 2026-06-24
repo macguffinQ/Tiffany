@@ -87,6 +87,19 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
                 None,
             )))
         }
+        RunProgress::WorkerThreadReady {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            reused,
+        } => Some(success(format_worker_thread_line(
+            role,
+            task_id,
+            thread_id,
+            native_session_id.as_deref(),
+            *reused,
+        ))),
         RunProgress::WorkerDone {
             task_id,
             role,
@@ -258,6 +271,36 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
                 )),
             ))
         }
+        RunProgress::WorkerThreadReady {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            reused,
+        } => {
+            let id = short_task_id(task_id);
+            let native = native_session_id
+                .as_deref()
+                .map(short_str)
+                .unwrap_or_else(|| "none".to_string());
+            Some(status(
+                format!(
+                    "worker: {role} thread {} · {id}",
+                    if *reused { "reused" } else { "created" }
+                ),
+                format!("thread {} · native {native}", short_task_id(thread_id)),
+                Some(format!(
+                    "✓ worker  {}",
+                    format_worker_thread_line(
+                        role,
+                        task_id,
+                        thread_id,
+                        native_session_id.as_deref(),
+                        *reused
+                    )
+                )),
+            ))
+        }
         RunProgress::WorkerDone {
             task_id,
             agent,
@@ -404,6 +447,25 @@ fn runtime_with_cc_agent(runtime: &str, cc_agent: Option<&str>) -> String {
         .unwrap_or_else(|| runtime.to_string())
 }
 
+fn format_worker_thread_line(
+    role: &str,
+    task_id: &uuid::Uuid,
+    thread_id: &uuid::Uuid,
+    native_session_id: Option<&str>,
+    reused: bool,
+) -> String {
+    let native = native_session_id
+        .map(short_str)
+        .map(|id| format!(" · native {id}"))
+        .unwrap_or_default();
+    format!(
+        "{role} thread {} · {} · task {}{native}",
+        if reused { "reused" } else { "created" },
+        short_task_id(thread_id),
+        short_task_id(task_id)
+    )
+}
+
 fn format_review_lifecycle_line(
     action: &str,
     task_id: &uuid::Uuid,
@@ -498,6 +560,10 @@ fn provider_model_label(provider: Option<&str>, model: &str) -> String {
 
 fn short_task_id(task_id: &uuid::Uuid) -> String {
     task_id.to_string()[..8].to_string()
+}
+
+fn short_str(value: &str) -> String {
+    value.chars().take(8).collect()
 }
 
 #[cfg(test)]

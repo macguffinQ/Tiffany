@@ -239,6 +239,7 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
         | RunProgress::ControlFallback { .. }
         | RunProgress::DirectAnswer
         | RunProgress::Executing { .. }
+        | RunProgress::WorkerThreadReady { .. }
         | RunProgress::WorkerStarted { .. }
         | RunProgress::Reviewing { .. }
         | RunProgress::ReviewSkipped { .. } => {}

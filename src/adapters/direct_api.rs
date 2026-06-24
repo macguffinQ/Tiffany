@@ -53,6 +53,8 @@ impl WorkerAdapter for DirectAPIAdapter {
         let mut session = Session::new(task.id, self.name(), task.role);
         session.model = self.model.clone();
         session.parent_session_ids = task.parent_session_ids.clone();
+        session.worker_thread_id = task.worker_thread_id;
+        session.native_session_id = task.native_session_id.clone();
 
         // Allocate worktree (even though direct API may not write to it,
         // we keep the contract consistent).
@@ -61,7 +63,13 @@ impl WorkerAdapter for DirectAPIAdapter {
             .as_deref()
             .and_then(WorktreePool::detect_repo_root_from)
             .or_else(WorktreePool::detect_repo_root);
-        let worktree = self.worktree_pool.acquire(task.id, repo_root.as_deref())?;
+        let worktree = if let Some(thread_id) = task.worker_thread_id {
+            self.worktree_pool
+                .acquire_thread(thread_id, repo_root.as_deref())?
+        } else {
+            self.worktree_pool.acquire(task.id, repo_root.as_deref())?
+        };
+        session.worktree_path = Some(worktree.clone());
 
         let history = format_context(self.session_store.as_ref(), &task.parent_session_ids)
             .await

@@ -75,6 +75,8 @@ impl WorkerAdapter for ClaudeCodeAdapter {
         let mut session = Session::new(task.id, self.name(), task.role);
         session.model = model.clone();
         session.parent_session_ids = task.parent_session_ids.clone();
+        session.worker_thread_id = task.worker_thread_id;
+        session.native_session_id = task.native_session_id.clone();
 
         // Allocate a worktree
         let repo_root = task
@@ -82,7 +84,16 @@ impl WorkerAdapter for ClaudeCodeAdapter {
             .as_deref()
             .and_then(WorktreePool::detect_repo_root_from)
             .or_else(WorktreePool::detect_repo_root);
-        let worktree = self.worktree_pool.acquire(task.id, repo_root.as_deref())?;
+        let worktree = if let Some(thread_id) = task.worker_thread_id {
+            self.worktree_pool
+                .acquire_thread(thread_id, repo_root.as_deref())?
+        } else {
+            self.worktree_pool.acquire(task.id, repo_root.as_deref())?
+        };
+        session.worktree_path = Some(worktree.clone());
+        if session.native_session_id.is_none() {
+            session.native_session_id = task.worker_thread_id.map(|id| id.to_string());
+        }
 
         // Build context from parent sessions
         let conversational = is_conversational_task(task);
@@ -150,6 +161,7 @@ impl WorkerAdapter for ClaudeCodeAdapter {
             &worktree,
             task.cc_agent_hint.as_deref(),
             self.bypass_permissions,
+            session.native_session_id.as_deref(),
             (!full_system_prompt.is_empty()).then_some(full_system_prompt.as_str()),
             &task.prompt,
         ))
@@ -321,6 +333,12 @@ impl WorkerAdapter for ClaudeCodeAdapter {
     }
 
     async fn get_diff(&self, session: &Session) -> Result<String> {
+        if let Some(path) = session.worktree_path.as_deref() {
+            return self.worktree_pool.diff_path(path);
+        }
+        if let Some(thread_id) = session.worker_thread_id {
+            return self.worktree_pool.diff_thread(thread_id);
+        }
         self.worktree_pool.diff(session.task_id)
     }
 
@@ -338,6 +356,7 @@ fn claude_worker_args(
     worktree: &std::path::Path,
     cc_agent_hint: Option<&str>,
     bypass_permissions: bool,
+    native_session_id: Option<&str>,
     system_prompt: Option<&str>,
     prompt: &str,
 ) -> Vec<String> {
@@ -353,6 +372,13 @@ fn claude_worker_args(
         worktree.display().to_string(),
         "--verbose".to_string(),
     ];
+    if let Some(session_id) = native_session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        args.push("--session-id".to_string());
+        args.push(session_id.to_string());
+    }
     if let Some(agent) = cc_agent_hint
         .map(str::trim)
         .filter(|agent| !agent.is_empty())
@@ -432,6 +458,7 @@ mod tests {
             std::path::Path::new("/tmp/project"),
             Some("reviewer"),
             true,
+            Some("123e4567-e89b-42d3-a456-426614174000"),
             Some("system"),
             "do the work",
         );
@@ -443,6 +470,9 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == ["--append-system-prompt", "system"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--session-id", "123e4567-e89b-42d3-a456-426614174000"]));
         assert_eq!(args.last().map(String::as_str), Some("do the work"));
     }
 
@@ -453,6 +483,7 @@ mod tests {
             std::path::Path::new("/tmp/project"),
             Some("  "),
             false,
+            Some("  "),
             None,
             "do the work",
         );
@@ -460,5 +491,6 @@ mod tests {
         assert!(!args.iter().any(|arg| arg == "--agent"));
         assert!(!args.iter().any(|arg| arg == "--permission-mode"));
         assert!(!args.iter().any(|arg| arg == "--append-system-prompt"));
+        assert!(!args.iter().any(|arg| arg == "--session-id"));
     }
 }

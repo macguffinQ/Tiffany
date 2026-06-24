@@ -121,12 +121,29 @@ pub fn format_session_header(session: &Session, log_path: &Path) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let worker_thread = session
+        .worker_thread_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let native_session = session
+        .native_session_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or("none");
+    let worktree = session
+        .worktree_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "none".to_string());
 
     format!(
-        "Session {}\n  task: {}\n  parents: {}\n  state: {}\n  agent: {}\n  role: {}\n  model: {}\n  started: {}\n  ended: {}\n  tokens: in={} out={} total={}\n  cost: ${:.4}\n  files: {}\n  log: {}",
+        "Session {}\n  task: {}\n  parents: {}\n  worker thread: {}\n  native session: {}\n  worktree: {}\n  state: {}\n  agent: {}\n  role: {}\n  model: {}\n  started: {}\n  ended: {}\n  tokens: in={} out={} total={}\n  cost: ${:.4}\n  files: {}\n  log: {}",
         session.id,
         session.task_id,
         parents,
+        worker_thread,
+        native_session,
+        worktree,
         state,
         session.agent,
         session.role.as_str(),

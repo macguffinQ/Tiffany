@@ -27,6 +27,12 @@ pub struct TiffanyProgressEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub task_prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -148,6 +154,27 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 task_prompt: Some(prompt),
                 ..progress_event("worker", "running", format!("{role} started"))
             },
+            RunProgress::WorkerThreadReady {
+                task_id,
+                role,
+                thread_id,
+                native_session_id,
+                reused,
+            } => TiffanyProgressEvent {
+                task_id: Some(task_id.to_string()),
+                worker_role: Some(role.clone()),
+                worker_thread_id: Some(thread_id.to_string()),
+                native_session_id,
+                reused: Some(reused),
+                ..progress_event(
+                    "worker",
+                    "ready",
+                    format!(
+                        "{role} worker thread {}",
+                        if reused { "reused" } else { "created" }
+                    ),
+                )
+            },
             RunProgress::WorkerOutput {
                 task_id,
                 agent,
@@ -261,6 +288,9 @@ fn progress_event(
         cc_agent: None,
         model: None,
         provider: None,
+        worker_thread_id: None,
+        native_session_id: None,
+        reused: None,
         task_prompt: None,
         content: None,
         approved: None,
@@ -414,6 +444,24 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
                 short_id(task_id)
             ))
         }
+        RunProgress::WorkerThreadReady {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            reused,
+        } => {
+            let native = native_session_id
+                .as_deref()
+                .map(|id| format!(" · native {}", short_str(id)))
+                .unwrap_or_default();
+            Some(format!(
+                "✓ worker   {role} thread {} · {} · task {}{native}",
+                if *reused { "reused" } else { "created" },
+                short_id(thread_id),
+                short_id(task_id)
+            ))
+        }
         RunProgress::WorkerOutput {
             task_id,
             agent,
@@ -556,6 +604,24 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
                 short_id(task_id)
             ))
         }
+        RunProgress::WorkerThreadReady {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            reused,
+        } => {
+            let native = native_session_id
+                .as_deref()
+                .map(|id| format!(" · native {}", short_str(id)))
+                .unwrap_or_default();
+            Some(format!(
+                "worker  {role} thread {} · {} · {}{native}",
+                if *reused { "reused" } else { "created" },
+                short_id(thread_id),
+                short_id(task_id)
+            ))
+        }
         RunProgress::WorkerOutput {
             task_id,
             agent,
@@ -693,6 +759,10 @@ fn compact_role_label_from_control(role: &str) -> &'static str {
 
 fn short_id(id: &uuid::Uuid) -> String {
     id.to_string().chars().take(8).collect()
+}
+
+fn short_str(value: &str) -> String {
+    value.chars().take(8).collect()
 }
 
 fn format_duration_ms(duration_ms: u64) -> String {
