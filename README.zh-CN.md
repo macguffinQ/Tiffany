@@ -347,7 +347,7 @@ behavior:
       gpt: 80000
 ```
 
-`cc_bypass_permissions` 会给 tiffany-loop 启动的 Claude Code 子进程传 `--permission-mode bypassPermissions`。只有想让 Claude Code 手动停下来选择权限时才设为 `false`。Tiffany 编排模式里用 `/provider`、`/role`、`/roles`、`/doctor` 配置 runtime/provider 行为；Codex 原生 `/permissions` 已隐藏，因为它不控制这些 Claude 子进程。
+`cc_bypass_permissions` 会给 tiffany-loop 启动的 Claude Code 子进程传 `--permission-mode bypassPermissions`。只有想让 Claude Code 手动停下来选择权限时才设为 `false`。Tiffany 编排模式里用 `/provider`、`/role`、`/roles`、`/doctor` 配置 runtime/provider 行为；`/permissions` 已隐藏，因为它不控制这些 Claude 子进程。
 设置 `behavior.token_plan.enabled: true` 后，`orchestrator usage` 和 `/usage` 会显示每日 token、每月成本、provider 级 token 的预算告警。
 
 角色解析优先级：

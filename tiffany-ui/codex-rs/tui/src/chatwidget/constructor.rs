@@ -63,8 +63,7 @@ impl ChatWidget {
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(
-            &config,
-            /*show_model_hint*/ true,
+            &config, /*show_model_hint*/ true,
         ));
 
         let current_cwd = Some(config.cwd.to_path_buf());

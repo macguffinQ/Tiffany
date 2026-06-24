@@ -115,7 +115,7 @@ pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Op
             "Tiffany runs orchestrator workers through registered runtimes; use /doctor to inspect setup."
         }
         SlashCommand::Init => {
-            "Tiffany does not create Codex AGENTS.md from this shell; add project guidance manually when needed."
+            "Tiffany does not create project instruction files from this shell; add project guidance manually when needed."
         }
         SlashCommand::Compact => {
             "Tiffany keeps orchestration memory separately; use normal follow-up prompts or /doctor for diagnostics."
@@ -126,7 +126,9 @@ pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Op
         SlashCommand::Resume => {
             "Tiffany resumes worker sessions through stable roles; use /roles or /doctor to inspect them."
         }
-        SlashCommand::Logout => "Tiffany does not use Codex account login; configure providers with /provider.",
+        SlashCommand::Logout => {
+            "Tiffany uses provider settings instead of account login; configure providers with /provider."
+        }
         SlashCommand::Agent | SlashCommand::MultiAgents => {
             "Use /role and /roles to register or select Tiffany worker roles."
         }
@@ -134,7 +136,7 @@ pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Op
     };
 
     Some(format!(
-        "'/{command}' is a Codex command that is not available in Tiffany orchestrator mode. {hint}"
+        "'/{command}' is not available in Tiffany orchestrator mode. {hint}"
     ))
 }
 
@@ -381,8 +383,10 @@ mod tests {
             ..all_enabled_flags()
         };
 
-        assert!(!commands_for_input(flags, from_ref(&command))
-            .contains(&SlashCommandItem::ServiceTier(command.clone())));
+        assert!(
+            !commands_for_input(flags, from_ref(&command))
+                .contains(&SlashCommandItem::ServiceTier(command.clone()))
+        );
         assert_eq!(find_slash_command("fast", flags, from_ref(&command)), None);
     }
 
@@ -396,7 +400,7 @@ mod tests {
         assert!(
             tiffany_orchestrator_unsupported_command_message("init")
                 .expect("init should be known but hidden")
-                .contains("Codex AGENTS.md")
+                .contains("project instruction files")
         );
         assert!(tiffany_orchestrator_unsupported_command_message("provider").is_none());
         assert!(tiffany_orchestrator_unsupported_command_message("does-not-exist").is_none());

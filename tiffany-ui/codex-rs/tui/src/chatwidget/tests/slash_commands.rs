@@ -230,15 +230,13 @@ async fn slash_doctor_guides_when_not_in_orchestrator_mode() {
 #[tokio::test]
 async fn tiffany_orchestrator_shell_replaces_placeholder_header_hints() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.transcript.active_cell = Some(Box::new(
-        history_cell::SessionHeaderHistoryCell::new(
-            "gpt-5".to_string(),
-            /*reasoning_effort*/ None,
-            /*show_fast_status*/ false,
-            chat.config.cwd.to_path_buf(),
-            TIFFANY_LOOP_VERSION,
-        ),
-    ));
+    chat.transcript.active_cell = Some(Box::new(history_cell::SessionHeaderHistoryCell::new(
+        "gpt-5".to_string(),
+        /*reasoning_effort*/ None,
+        /*show_fast_status*/ false,
+        chat.config.cwd.to_path_buf(),
+        TIFFANY_LOOP_VERSION,
+    )));
 
     let before = chat
         .active_cell_transcript_lines(/*width*/ 80)
@@ -271,7 +269,7 @@ async fn tiffany_orchestrator_rejects_hidden_codex_command_submit() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("'/model' is a Codex command that is not available in Tiffany orchestrator mode"),
+        rendered.contains("'/model' is not available in Tiffany orchestrator mode"),
         "expected Tiffany unsupported-command message, got {rendered:?}"
     );
     assert_eq!(chat.bottom_pane.composer_text(), "/model");
@@ -297,7 +295,7 @@ async fn tiffany_orchestrator_rejects_hidden_codex_command_when_dequeued() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("'/init' is a Codex command that is not available in Tiffany orchestrator mode"),
+        rendered.contains("'/init' is not available in Tiffany orchestrator mode"),
         "expected Tiffany unsupported-command message, got {rendered:?}"
     );
     assert!(chat.input_queue.queued_user_messages.is_empty());

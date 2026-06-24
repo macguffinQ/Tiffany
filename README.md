@@ -467,7 +467,7 @@ behavior:
 ```
 
 Missing env vars → empty string (no error). You can run `orchestrator status` before setting any keys.
-`cc_bypass_permissions` passes `--permission-mode bypassPermissions` to spawned Claude Code processes. Set it to `false` only when you want Claude Code to stop for manual permission prompts. In Tiffany orchestrator mode, configure runtime/provider behavior with `/provider`, `/role`, `/roles`, and `/doctor`; Codex-native `/permissions` is hidden because it does not control these Claude subprocesses.
+`cc_bypass_permissions` passes `--permission-mode bypassPermissions` to spawned Claude Code processes. Set it to `false` only when you want Claude Code to stop for manual permission prompts. In Tiffany orchestrator mode, configure runtime/provider behavior with `/provider`, `/role`, `/roles`, and `/doctor`; `/permissions` is hidden because it does not control these Claude subprocesses.
 Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and per-provider budget alerts in `orchestrator usage` and `/usage`.
 
 ---

@@ -653,14 +653,7 @@ mod tests {
                 "expected '/{expected}' in Tiffany popup, got {cmds:?}"
             );
         }
-        for hidden in [
-            "model",
-            "permissions",
-            "init",
-            "compact",
-            "apps",
-            "fast",
-        ] {
+        for hidden in ["model", "permissions", "init", "compact", "apps", "fast"] {
             assert!(
                 !cmds.iter().any(|cmd| cmd == hidden),
                 "expected '/{hidden}' to be hidden in Tiffany popup, got {cmds:?}"
