@@ -239,8 +239,9 @@ strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v ti
 
 ```bash
 # 示例：安装下载好的 macOS Apple Silicon 压缩包
-tar -xzf tiffany-loop-v0.1.25-aarch64-apple-darwin.tar.gz
-cd tiffany-loop-v0.1.25-aarch64-apple-darwin
+# 把 vX.Y.Z 替换成你下载的 release tag。
+tar -xzf tiffany-loop-vX.Y.Z-aarch64-apple-darwin.tar.gz
+cd tiffany-loop-vX.Y.Z-aarch64-apple-darwin
 chmod +x orchestrator tiffany-loop tiffany
 ./tiffany-loop setup
 ./tiffany-loop doctor
@@ -595,7 +596,7 @@ cargo build --release
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-release-preflight --quick
-./scripts/tiffany-release-preflight --full --tag v0.1.25   # 打 tag 前
+./scripts/tiffany-release-preflight --full --tag vX.Y.Z     # 打 tag 前
 # 同日连续 tag 默认会被阻止；只在紧急修复时覆盖：
 # TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full --tag vX.Y.Z
 

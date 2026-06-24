@@ -111,6 +111,21 @@ else
   echo "ok"
 fi
 
+section "stale release examples"
+stale_release_examples="$(
+  git grep -nE 'v0\.[0-9]+\.[0-9]+' -- \
+    README.md \
+    README.zh-CN.md \
+    packaging/homebrew/tiffany-loop.rb \
+    || true
+)"
+if [[ -n "${stale_release_examples}" ]]; then
+  echo "${stale_release_examples}"
+  fail=1
+else
+  echo "ok"
+fi
+
 section "result"
 if [[ "${fail}" -ne 0 ]]; then
   echo "open-source audit failed"
