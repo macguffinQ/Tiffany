@@ -228,6 +228,36 @@ async fn slash_doctor_guides_when_not_in_orchestrator_mode() {
 }
 
 #[tokio::test]
+async fn tiffany_orchestrator_shell_replaces_placeholder_header_hints() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.transcript.active_cell = Some(Box::new(
+        history_cell::SessionHeaderHistoryCell::new(
+            "gpt-5".to_string(),
+            /*reasoning_effort*/ None,
+            /*show_fast_status*/ false,
+            chat.config.cwd.to_path_buf(),
+            TIFFANY_LOOP_VERSION,
+        ),
+    ));
+
+    let before = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .map(|lines| lines_to_single_string(&lines))
+        .expect("placeholder header before Tiffany mode");
+    assert!(before.contains("/model to change"));
+
+    chat.set_tiffany_orchestrator_shell(true);
+
+    let after = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .map(|lines| lines_to_single_string(&lines))
+        .expect("placeholder header after Tiffany mode");
+    assert!(!after.contains("/model to change"));
+    assert!(after.contains("model:"));
+    assert!(after.contains("directory:"));
+}
+
+#[tokio::test]
 async fn tiffany_orchestrator_rejects_hidden_codex_command_submit() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);
