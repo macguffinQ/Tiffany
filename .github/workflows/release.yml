@@ -217,17 +217,19 @@ jobs:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Require Homebrew tap token
+      - name: Check Homebrew tap token
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${HOMEBREW_TAP_TOKEN}" ]]; then
             {
-              echo "## Homebrew tap update required"
+              echo "## Homebrew tap update skipped"
               echo
-              echo "The GitHub Release was published, but \`HOMEBREW_TAP_TOKEN\` is not configured, so this workflow cannot update \`${HOMEBREW_TAP_REPO}\`."
+              echo "The GitHub Release was published. \`HOMEBREW_TAP_TOKEN\` is not configured, so this workflow skipped automatic updates to \`${HOMEBREW_TAP_REPO}\`."
               echo
-              echo "Configure a repository secret named \`HOMEBREW_TAP_TOKEN\` with contents write access to \`${HOMEBREW_TAP_REPO}\`, or update the tap manually:"
+              echo "To enable automatic tap updates, configure a repository secret named \`HOMEBREW_TAP_TOKEN\` with contents write access to \`${HOMEBREW_TAP_REPO}\`."
+              echo
+              echo "Manual tap update:"
               echo
               echo "\`\`\`bash"
               echo "git clone https://github.com/${HOMEBREW_TAP_REPO}.git ../homebrew-tap 2>/dev/null || git -C ../homebrew-tap pull --ff-only"
@@ -235,11 +237,11 @@ jobs:
               echo "./scripts/tiffany-post-release-check --tag ${GITHUB_REF_NAME}"
               echo "\`\`\`"
             } >> "${GITHUB_STEP_SUMMARY}"
-            echo "::error::HOMEBREW_TAP_TOKEN is not configured. GitHub Release was published, but Homebrew is not synchronized until ${HOMEBREW_TAP_REPO} is updated."
-            exit 1
+            echo "::warning::HOMEBREW_TAP_TOKEN is not configured. GitHub Release was published; automatic Homebrew tap update was skipped."
           fi
 
       - name: Checkout tap
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
         uses: actions/checkout@v5
         with:
           repository: ${{ env.HOMEBREW_TAP_REPO }}
@@ -247,6 +249,7 @@ jobs:
           path: homebrew-tap
 
       - name: Update formula
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
         shell: bash
         run: |
           set -euo pipefail

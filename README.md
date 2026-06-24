@@ -121,6 +121,8 @@ Development entrypoints:
 - `./scripts/tiffany-post-release-check --tag vX.Y.Z [--skip-install]` - verify the published GitHub Release asset, Homebrew tap checksums, installed versions, `doctor`, and `brew test`.
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small` - inspect build-cache size, find large artifacts, trim rebuildable caches while keeping compiled deps/final binaries, or remove larger build outputs when `target/` grows too large.
 
+The tag release workflow publishes GitHub Release assets first. It updates the Homebrew tap automatically only when the repository secret `HOMEBREW_TAP_TOKEN` is configured; otherwise the workflow leaves the Release green and prints the manual `tiffany-update-homebrew-tap` command in the Actions summary.
+
 Direct Cargo commands inside `tiffany-ui/codex-rs` are also redirected to the root `./target` through the fork's Cargo config. If an older checkout already has `tiffany-ui/codex-rs/target`, it is a legacy duplicate cache and can be removed with `./scripts/tiffany-clean-targets`.
 
 For source-checkout development, `./scripts/tiffany-dev` builds missing `dev-small` binaries once and then execs the cached binary directly for faster repeat startup and smaller local build caches. Set `TIFFANY_DEV_PROFILE=dev` when you need full debug symbols, or `TIFFANY_DEV_CARGO_RUN=1` only when you specifically want Cargo's `cargo run` wrapper.

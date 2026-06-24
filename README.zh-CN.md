@@ -123,7 +123,10 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-check-examples`：只运行仓库内示例项目测试。
 - `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]`：运行汇总后的发布前检查；打 tag 前使用 `--full --tag vX.Y.Z`。带 tag 的检查默认有 24 小时发版冷却；只有安装损坏、启动失败、安全修复等紧急情况才设置 `TIFFANY_RELEASE_ALLOW_FREQUENT=1` 覆盖。
 - `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]`：根据已发布 release asset 和源码包 checksum 生成 Homebrew tap 公式。
+- `./scripts/tiffany-post-release-check --tag vX.Y.Z [--skip-install]`：验证已发布 GitHub Release asset、Homebrew tap checksum、安装版本、`doctor` 和 `brew test`。
 - `./scripts/tiffany-clean-targets --sizes|--top|--top-deep|--trim|--incremental|--dist-cache|--dist|--debug|--small`：查看构建缓存大小、定位大文件，在保留已编译依赖和最终二进制的同时清理可重建缓存，或清理更大的 build 输出，避免 `target/` 膨胀。
+
+Tag 发布 workflow 会先发布 GitHub Release asset。只有配置了仓库 secret `HOMEBREW_TAP_TOKEN` 时才会自动更新 Homebrew tap；未配置时 Release 仍保持绿色，并在 Actions summary 里输出手动执行 `tiffany-update-homebrew-tap` 的命令。
 
 直接进入 `tiffany-ui/codex-rs` 执行 Cargo 命令时，也会通过 fork 的 Cargo 配置重定向到根目录 `./target`。旧 checkout 如果已经有 `tiffany-ui/codex-rs/target`，那是重复缓存，可以用 `./scripts/tiffany-clean-targets` 删除。
 
