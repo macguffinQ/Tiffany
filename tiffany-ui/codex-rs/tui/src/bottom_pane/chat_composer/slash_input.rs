@@ -15,6 +15,7 @@ use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::bottom_pane::slash_commands::has_slash_command_prefix;
+use crate::bottom_pane::slash_commands::tiffany_orchestrator_unsupported_command_message;
 use crate::slash_command::SlashCommand;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -35,6 +36,7 @@ pub(super) enum SlashValidation {
 pub(super) enum SubmissionValidation {
     Valid,
     UnknownCommand(String),
+    UnsupportedCommand(String),
 }
 
 pub(super) struct InlineCommand<'a> {
@@ -81,6 +83,10 @@ impl<'a> SlashInput<'a> {
         }
         if self.command(name).is_some() {
             SubmissionValidation::Valid
+        } else if self.command_flags.tiffany_orchestrator_shell
+            && let Some(message) = tiffany_orchestrator_unsupported_command_message(name)
+        {
+            SubmissionValidation::UnsupportedCommand(message)
         } else {
             SubmissionValidation::UnknownCommand(name.to_string())
         }

@@ -2671,13 +2671,18 @@ impl ChatComposer {
         text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
         if slash_validation == SlashValidation::Immediate
-            && let SubmissionValidation::UnknownCommand(name) = self
+            && let validation = self
                 .slash_input()
                 .validate_submission(&text, input_starts_with_space)
+            && !matches!(validation, SubmissionValidation::Valid)
         {
-            let message = format!(
-                r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-            );
+            let message = match validation {
+                SubmissionValidation::UnknownCommand(name) => format!(
+                    r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                ),
+                SubmissionValidation::UnsupportedCommand(message) => message,
+                SubmissionValidation::Valid => unreachable!(),
+            };
             self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                 history_cell::new_info_event(message, /*hint*/ None),
             )));

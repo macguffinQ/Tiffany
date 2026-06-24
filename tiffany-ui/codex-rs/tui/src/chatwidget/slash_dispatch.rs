@@ -16,6 +16,7 @@ use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
+use crate::bottom_pane::slash_commands::tiffany_orchestrator_unsupported_command_message;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
 
@@ -1074,12 +1075,17 @@ impl ChatWidget {
         let Some(command) =
             find_slash_command(name, self.builtin_command_flags(), &service_tier_commands)
         else {
-            self.add_info_message(
+            let message = if self.tiffany_orchestrator_shell {
+                tiffany_orchestrator_unsupported_command_message(name)
+            } else {
+                None
+            }
+            .unwrap_or_else(|| {
                 format!(
                     r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                ),
-                /*hint*/ None,
-            );
+                )
+            });
+            self.add_info_message(message, /*hint*/ None);
             return QueueDrain::Continue;
         };
 

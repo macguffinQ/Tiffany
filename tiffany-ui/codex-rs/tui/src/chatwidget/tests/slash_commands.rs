@@ -228,6 +228,53 @@ async fn slash_doctor_guides_when_not_in_orchestrator_mode() {
 }
 
 #[tokio::test]
+async fn tiffany_orchestrator_rejects_hidden_codex_command_submit() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    submit_composer_text(&mut chat, "/model");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("'/model' is a Codex command that is not available in Tiffany orchestrator mode"),
+        "expected Tiffany unsupported-command message, got {rendered:?}"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "/model");
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn tiffany_orchestrator_rejects_hidden_codex_command_when_dequeued() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+
+    queue_composer_text_with_tab(&mut chat, "/init");
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    complete_turn_with_message(&mut chat, "turn-1", Some("done"));
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("'/init' is a Codex command that is not available in Tiffany orchestrator mode"),
+        "expected Tiffany unsupported-command message, got {rendered:?}"
+    );
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn slash_role_bare_opens_registration_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);

@@ -102,6 +102,42 @@ fn tiffany_orchestrator_command_visible(cmd: SlashCommand) -> bool {
     )
 }
 
+pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Option<String> {
+    let cmd = SlashCommand::from_str(name).ok()?;
+    if tiffany_orchestrator_command_visible(cmd) {
+        return None;
+    }
+
+    let command = cmd.command();
+    let hint = match cmd {
+        SlashCommand::Model => "Use /provider and /role to configure provider/model routing.",
+        SlashCommand::Permissions => {
+            "Tiffany runs orchestrator workers through registered runtimes; use /doctor to inspect setup."
+        }
+        SlashCommand::Init => {
+            "Tiffany does not create Codex AGENTS.md from this shell; add project guidance manually when needed."
+        }
+        SlashCommand::Compact => {
+            "Tiffany keeps orchestration memory separately; use normal follow-up prompts or /doctor for diagnostics."
+        }
+        SlashCommand::Review => {
+            "Ask for review in the chat, or register a reviewer role with /role and /roles."
+        }
+        SlashCommand::Resume => {
+            "Tiffany resumes worker sessions through stable roles; use /roles or /doctor to inspect them."
+        }
+        SlashCommand::Logout => "Tiffany does not use Codex account login; configure providers with /provider.",
+        SlashCommand::Agent | SlashCommand::MultiAgents => {
+            "Use /role and /roles to register or select Tiffany worker roles."
+        }
+        _ => "Use /provider, /role, /roles, /doctor, /status, /diff, /copy, or plain chat prompts.",
+    };
+
+    Some(format!(
+        "'/{command}' is a Codex command that is not available in Tiffany orchestrator mode. {hint}"
+    ))
+}
+
 pub(crate) fn commands_for_input(
     flags: BuiltinCommandFlags,
     service_tier_commands: &[ServiceTierCommand],
@@ -348,6 +384,22 @@ mod tests {
         assert!(!commands_for_input(flags, from_ref(&command))
             .contains(&SlashCommandItem::ServiceTier(command.clone())));
         assert_eq!(find_slash_command("fast", flags, from_ref(&command)), None);
+    }
+
+    #[test]
+    fn tiffany_orchestrator_mode_explains_known_but_hidden_commands() {
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("model")
+                .expect("model should be known but hidden")
+                .contains("not available in Tiffany orchestrator mode")
+        );
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("init")
+                .expect("init should be known but hidden")
+                .contains("Codex AGENTS.md")
+        );
+        assert!(tiffany_orchestrator_unsupported_command_message("provider").is_none());
+        assert!(tiffany_orchestrator_unsupported_command_message("does-not-exist").is_none());
     }
 
     #[test]
