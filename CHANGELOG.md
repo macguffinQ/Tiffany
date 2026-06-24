@@ -6,9 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Added a release preflight guard that requires `CHANGELOG.md` to contain the
+  release section for the tag being checked.
+
 ### Changed
 
+- Made the GitHub Release workflow treat a missing `HOMEBREW_TAP_TOKEN` as a
+  warning with manual tap-update instructions instead of failing after the
+  release artifact has already been published.
+- Replaced fixed historical release tags in README archive-install examples and
+  the Homebrew formula template with `vX.Y.Z` placeholders.
+
 ### Fixed
+
+- Added an open-source audit check that fails when README files or the
+  Homebrew formula template contain stale concrete `v0.x.y` release examples.
 
 ## [0.1.26] - 2026-06-24
 
