@@ -1032,7 +1032,7 @@ fn enrich_worker_error(
     let native = native_session_id
         .unwrap_or_else(|| extract_occupied_session_id(raw).unwrap_or_else(|| "unknown".into()));
     format!(
-        "Claude native session is already in use; agent={agent}; role={role}; worker_thread={thread}; native_session={native}; wait for the current run to finish, inspect `/thread {role}`, or resume manually with `claude --resume {native}`. Raw error: {raw}"
+        "Claude native session is already in use; agent={agent}; role={role}; worker_thread={thread}; native_session={native}; wait for the current run to finish, inspect `/thread {role}`, clear it with `/thread clear {role}` for a fresh next run, or resume manually with `claude --resume {native}`. Raw error: {raw}"
     )
 }
 
@@ -1571,6 +1571,7 @@ mod tests {
         assert!(message.contains("role=worker-cc"));
         assert!(message.contains("native_session=native-123"));
         assert!(message.contains("/thread worker-cc"));
+        assert!(message.contains("/thread clear worker-cc"));
         assert!(message.contains("claude --resume native-123"));
     }
 

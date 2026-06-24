@@ -168,10 +168,7 @@ pub(super) fn handle_slash_command_with_runtime(
             push_system(input, format_sessions(store, limit));
         }
         "thread" | "threads" | "worker-thread" | "worker-threads" => {
-            push_system(
-                input,
-                format_worker_threads(store, config, input, args.first().copied()),
-            );
+            push_system(input, handle_thread_command(store, config, input, &args));
         }
         "import-cc" | "import-claude" => {
             let project = args.first().copied().map(PathBuf::from);
@@ -743,6 +740,15 @@ fn argument_candidates(
         "thread" | "threads" | "worker-thread" | "worker-threads" if ctx.current_index == 0 => {
             worker_thread_candidates(store, config, ctx)
         }
+        "thread" | "threads" | "worker-thread" | "worker-threads"
+            if ctx.current_index == 1
+                && matches!(
+                    ctx.args.first().map(String::as_str),
+                    Some("clear" | "reset" | "fresh")
+                ) =>
+        {
+            worker_thread_role_candidates(store, config, ctx)
+        }
         "doctor" | "diagnose" | "checkup" => choice_candidates(
             ctx,
             0,
@@ -1132,6 +1138,27 @@ fn worker_thread_candidates(
     config: &Config,
     ctx: &SlashArgContext,
 ) -> Vec<SlashArgCandidate> {
+    if ctx.current_index == 0 {
+        let mut candidates = choice_candidates(
+            ctx,
+            0,
+            &[
+                ("clear", "clear a stuck native CLI session for one role"),
+                ("reset", "alias for clear"),
+                ("fresh", "alias for clear"),
+            ],
+        );
+        candidates.extend(worker_thread_role_candidates(store, config, ctx));
+        return candidates;
+    }
+    worker_thread_role_candidates(store, config, ctx)
+}
+
+fn worker_thread_role_candidates(
+    store: &SessionStore,
+    config: &Config,
+    ctx: &SlashArgContext,
+) -> Vec<SlashArgCandidate> {
     let mut candidates = Vec::new();
     for role in
         ordered_worker_thread_roles(config, &store.list_worker_threads().unwrap_or_default())
@@ -1411,6 +1438,7 @@ fn help_text() -> String {
      /usage [today|week|month|all] Show token/cost usage\n\
      /sessions [n]                 List recent sessions with tree/log shortcuts\n\
      /thread [role]                Show worker thread/native CLI session state\n\
+     /thread clear <role>          Clear a stuck native CLI session for a role\n\
      /import-cc [project]          Import Claude Code sessions into chat history\n\
      /resume last                  Restore the last terminal chat conversation\n\
      /session [id|prefix|last]     Show one session summary\n\
@@ -3443,6 +3471,22 @@ pub(super) fn format_sessions(store: &SessionStore, limit: usize) -> String {
     }
 }
 
+fn handle_thread_command(
+    store: &SessionStore,
+    config: &Config,
+    input: &InputState,
+    args: &[&str],
+) -> String {
+    match args {
+        ["clear" | "reset" | "fresh", role, ..] => clear_worker_thread_native_session(store, config, role),
+        ["clear" | "reset" | "fresh"] => {
+            "Usage: /thread clear <role>\nThis clears only the native Claude/Codex session id; Tiffany keeps the worker thread and prior Tiffany session history.".into()
+        }
+        [selector, ..] => format_worker_threads(store, config, input, Some(selector)),
+        [] => format_worker_threads(store, config, input, None),
+    }
+}
+
 pub(super) fn format_worker_threads(
     store: &SessionStore,
     config: &Config,
@@ -3490,7 +3534,9 @@ pub(super) fn format_worker_threads(
             }
         }
     }
-    out.push_str("\n\nDetails: /thread <role>  Resume: /continue claude or /continue codex");
+    out.push_str(
+        "\n\nDetails: /thread <role>  Resume: /continue claude or /continue codex  Fresh start: /thread clear <role>",
+    );
     out
 }
 
@@ -3579,7 +3625,7 @@ fn format_worker_thread_detail(config: &Config, thread: &WorkerThread) -> String
         .map(uuid::Uuid::to_string)
         .unwrap_or_else(|| "none".into());
     format!(
-        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n  Tiffany thread: {}\n  native session: {}\n  native resume: {}\n  TUI resume: {}\n  last Tiffany session: {}\n  worktree: {}\n  created: {}\n  updated: {}\n\nStatus: {}",
+        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n  Tiffany thread: {}\n  native session: {}\n  native resume: {}\n  TUI resume: {}\n  last Tiffany session: {}\n  worktree: {}\n  created: {}\n  updated: {}\n\nStatus: {}\nAction: /thread clear {} resets only the native CLI session id for a fresh next run.",
         short_uuid(&thread.id),
         thread.role,
         thread.runtime,
@@ -3594,7 +3640,8 @@ fn format_worker_thread_detail(config: &Config, thread: &WorkerThread) -> String
         worktree,
         thread.created_at.to_rfc3339(),
         thread.updated_at.to_rfc3339(),
-        worker_thread_status_hint(thread)
+        worker_thread_status_hint(thread),
+        thread.role
     )
 }
 
@@ -3668,6 +3715,46 @@ fn available_worker_thread_roles(config: &Config, threads: &[WorkerThread]) -> S
         "(none)".into()
     } else {
         roles.join(", ")
+    }
+}
+
+fn clear_worker_thread_native_session(
+    store: &SessionStore,
+    config: &Config,
+    selector: &str,
+) -> String {
+    let threads = match store.list_worker_threads() {
+        Ok(threads) => threads,
+        Err(err) => return format!("Could not list worker threads: {err:#}"),
+    };
+    let Some(thread) = find_worker_thread(&threads, selector) else {
+        if config.roles.contains_key(selector) {
+            return format!(
+                "Worker thread {}\n  status: no worker thread yet\n  native session: none\n\nNothing to clear.",
+                selector
+            );
+        }
+        return format!(
+            "Worker thread not found: {}\nAvailable worker roles: {}",
+            selector,
+            available_worker_thread_roles(config, &threads)
+        );
+    };
+    let previous = thread
+        .native_session_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or("none")
+        .to_string();
+    match store.clear_worker_thread_native_session(thread.id) {
+        Ok(()) => format!(
+            "Worker thread reset\n  role: {}\n  Tiffany thread: {}\n  cleared native session: {}\n  next run: starts a fresh native {} session\n\nKept: worker thread id, last Tiffany session, and conversation context.",
+            thread.role,
+            thread.id,
+            previous,
+            thread.agent
+        ),
+        Err(err) => format!("Could not clear worker thread native session: {err:#}"),
     }
 }
 
@@ -4569,6 +4656,36 @@ mod tests {
     }
 
     #[test]
+    fn thread_clear_command_clears_only_native_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let cfg = test_config();
+        let input = InputState::default();
+        let thread = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        let session_id = uuid::Uuid::new_v4();
+        store
+            .update_worker_thread_after_session(thread.id, Some("native-abc"), session_id, None)
+            .unwrap();
+
+        let msg = handle_thread_command(&store, &cfg, &input, &["clear", "worker-cc"]);
+        let updated = store.worker_thread_by_role("worker-cc").unwrap().unwrap();
+
+        assert!(msg.contains("Worker thread reset"));
+        assert!(msg.contains("cleared native session: native-abc"));
+        assert!(updated.native_session_id.is_none());
+        assert_eq!(updated.last_session_id, Some(session_id));
+    }
+
+    #[test]
     fn completes_static_slash_arguments() {
         let tmp = tempfile::tempdir().unwrap();
         let store =
@@ -4766,6 +4883,11 @@ behavior:
         input.cursor = input.buffer.len();
         assert!(complete_slash_argument(&store, &cfg, &mut input));
         assert_eq!(input.buffer, "/thread worker-cc ");
+
+        input.buffer = "/thread clear worker-c".into();
+        input.cursor = input.buffer.len();
+        assert!(complete_slash_argument(&store, &cfg, &mut input));
+        assert_eq!(input.buffer, "/thread clear worker-cc ");
     }
 
     #[test]

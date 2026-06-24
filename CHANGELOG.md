@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-- Nothing yet.
+- Added `/thread clear <role>` to clear a stuck native Claude/Codex session id
+  while preserving the stable Tiffany worker thread and previous Tiffany
+  session history.
+- Improved Claude `Session ID ... is already in use` diagnostics with the new
+  `/thread clear <role>` recovery command.
 
 ## [0.1.33] - 2026-06-24
 
