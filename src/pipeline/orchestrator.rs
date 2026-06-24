@@ -961,7 +961,14 @@ impl Orchestrator {
                         });
                     }
                     Err(e) => {
-                        let error_message = format!("{:#}", e);
+                        let raw_error = format!("{:#}", e);
+                        let error_message = enrich_worker_error(
+                            &raw_error,
+                            &agent,
+                            &role,
+                            thread_id,
+                            &self.session_store,
+                        );
                         tracing::error!("task {} failed: {}", task_id, error_message);
                         if let Some(slot) = tasks.iter_mut().find(|t| t.id == task_id) {
                             slot.status = TaskStatus::Failed;
@@ -1003,6 +1010,46 @@ fn first_error_line(message: &str) -> String {
         .unwrap_or("reviewer unavailable")
         .to_string();
     agent_events::humanize_user_visible_text(&line, 240)
+}
+
+fn enrich_worker_error(
+    raw: &str,
+    agent: &str,
+    role: &str,
+    thread_id: Option<Uuid>,
+    session_store: &SessionStore,
+) -> String {
+    if !is_claude_native_session_occupied(raw) {
+        return raw.to_string();
+    }
+
+    let native_session_id = thread_id
+        .and_then(|id| session_store.worker_thread_by_id(id).ok().flatten())
+        .and_then(|thread| thread.native_session_id);
+    let thread = thread_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let native = native_session_id
+        .unwrap_or_else(|| extract_occupied_session_id(raw).unwrap_or_else(|| "unknown".into()));
+    format!(
+        "Claude native session is already in use; agent={agent}; role={role}; worker_thread={thread}; native_session={native}; wait for the current run to finish, inspect `/thread {role}`, or resume manually with `claude --resume {native}`. Raw error: {raw}"
+    )
+}
+
+fn is_claude_native_session_occupied(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("session id") && lower.contains("already in use")
+}
+
+fn extract_occupied_session_id(message: &str) -> Option<String> {
+    let marker = "Session ID ";
+    let start = message.find(marker)? + marker.len();
+    let rest = message.get(start..)?;
+    let id = rest
+        .split_whitespace()
+        .next()?
+        .trim_matches(|ch: char| ch == '\'' || ch == '"' || ch == ',' || ch == ';' || ch == '.');
+    (!id.is_empty()).then(|| id.to_string())
 }
 
 fn fallback_single_task_plan(top_task: &Task, rationale: impl Into<String>) -> PlanOutput {
@@ -1491,6 +1538,40 @@ mod tests {
             sub_tasks[1].worktree.as_deref(),
             Some(std::path::Path::new("/tmp/other"))
         );
+    }
+
+    #[test]
+    fn worker_error_explains_occupied_claude_native_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db")).unwrap();
+        let thread = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        store
+            .update_worker_thread_after_session(thread.id, Some("native-123"), Uuid::new_v4(), None)
+            .unwrap();
+
+        let message = enrich_worker_error(
+            "claude exited with status exit status: 1; stderr: Error: Session ID native-123 is already in use.",
+            "claude-code",
+            "worker-cc",
+            Some(thread.id),
+            &store,
+        );
+
+        assert!(message.contains("Claude native session is already in use"));
+        assert!(message.contains("agent=claude-code"));
+        assert!(message.contains("role=worker-cc"));
+        assert!(message.contains("native_session=native-123"));
+        assert!(message.contains("/thread worker-cc"));
+        assert!(message.contains("claude --resume native-123"));
     }
 
     #[test]

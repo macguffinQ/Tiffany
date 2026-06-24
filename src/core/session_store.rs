@@ -286,6 +286,11 @@ impl SessionStore {
         select_worker_thread_by_id(&db, thread_id)
     }
 
+    pub fn list_worker_threads(&self) -> Result<Vec<WorkerThread>> {
+        let db = self.inner.db.lock().unwrap();
+        select_worker_threads(&db)
+    }
+
     pub async fn acquire_worker_thread_lease(&self, thread_id: Uuid) -> Result<WorkerThreadLease> {
         let path = self.worker_thread_lock_path(thread_id)?;
         tokio::task::spawn_blocking(move || {
@@ -534,6 +539,17 @@ fn select_worker_thread_by_id(db: &Connection, id: Uuid) -> Result<Option<Worker
     Ok(None)
 }
 
+fn select_worker_threads(db: &Connection) -> Result<Vec<WorkerThread>> {
+    let mut stmt = db.prepare(
+        "SELECT id, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at
+         FROM worker_threads ORDER BY updated_at DESC, role ASC",
+    )?;
+    let rows = stmt
+        .query_map([], row_to_worker_thread)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 fn update_worker_thread_row(db: &Connection, thread: &WorkerThread) -> Result<()> {
     db.execute(
         r#"UPDATE worker_threads
@@ -717,6 +733,41 @@ mod tests {
         assert_eq!(updated.id, thread.id);
         assert!(updated.native_session_id.is_none());
         assert!(updated.last_session_id.is_some());
+    }
+
+    #[test]
+    fn worker_threads_can_be_listed_newest_first() {
+        let (_tmp, store) = test_store();
+        let first = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        let second = store
+            .get_or_create_worker_thread("worker-codex", "codex", "codex", "gpt-4o", Some("openai"))
+            .unwrap();
+        let session_id = Uuid::new_v4();
+        store
+            .update_worker_thread_after_session(
+                first.id,
+                Some("native-1"),
+                session_id,
+                Some(std::path::Path::new("/tmp/tiffany-worker")),
+            )
+            .unwrap();
+
+        let threads = store.list_worker_threads().unwrap();
+
+        assert_eq!(threads.len(), 2);
+        assert_eq!(threads[0].id, first.id);
+        assert_eq!(threads[0].role, "worker-cc");
+        assert_eq!(threads[0].native_session_id.as_deref(), Some("native-1"));
+        assert_eq!(threads[0].last_session_id, Some(session_id));
+        assert!(threads.iter().any(|thread| thread.id == second.id));
     }
 
     #[test]

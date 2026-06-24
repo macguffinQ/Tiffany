@@ -20,6 +20,8 @@ use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
+use super::StderrCapture;
+
 pub struct CodexCLIAdapter {
     binary: String,
     model: String,
@@ -117,16 +119,20 @@ impl WorkerAdapter for CodexCLIAdapter {
         let mut child = cmd.spawn()?;
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take();
+        let stderr_capture = StderrCapture::default();
+        let mut stderr_handle = None;
 
         if let Some(stderr) = stderr {
             let stderr_store = self.session_store.clone();
             let stderr_tx = event_tx.clone();
             let stderr_session_id = session.id;
             let stderr_task_id = task.id;
-            tokio::spawn(async move {
+            let stderr_capture = stderr_capture.clone();
+            stderr_handle = Some(tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     tracing::warn!(target = "codex", "{}", line);
+                    stderr_capture.push(line.clone());
                     let event = Event {
                         session_id: stderr_session_id,
                         task_id: stderr_task_id,
@@ -139,7 +145,7 @@ impl WorkerAdapter for CodexCLIAdapter {
                         let _ = tx.send(event);
                     }
                 }
-            });
+            }));
         }
 
         let mut reader = BufReader::new(stdout).lines();
@@ -164,6 +170,9 @@ impl WorkerAdapter for CodexCLIAdapter {
         }
 
         let status = child.wait().await?;
+        if let Some(handle) = stderr_handle {
+            let _ = handle.await;
+        }
         if !status.success() {
             let line = format!("codex exited with status {}", status);
             let event = Event {
@@ -184,7 +193,11 @@ impl WorkerAdapter for CodexCLIAdapter {
             self.session_store
                 .finalize(&session)
                 .with_context(|| format!("finalizing failed codex session {}", session.id))?;
-            anyhow::bail!("codex exited with status {}", status);
+            anyhow::bail!(
+                "codex exited with status {}{}",
+                status,
+                stderr_capture.error_suffix()
+            );
         }
 
         Ok(crate::core::worker::WorkerHandle {

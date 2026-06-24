@@ -11,7 +11,7 @@ use super::util::{
 };
 use crate::agent_events;
 use crate::config::{Config, ModelConfig, RoleConfig};
-use crate::core::session_store::SessionStore;
+use crate::core::session_store::{SessionStore, WorkerThread};
 use crate::core::types::Session;
 use crate::runtime::{self, AGENT_RUNTIME_ROUTES};
 use crate::usage::{compute_for_window, UsageWindow};
@@ -166,6 +166,12 @@ pub(super) fn handle_slash_command_with_runtime(
         "sessions" | "history" => {
             let limit = parse_count(args.first().copied(), 10, 1, 50);
             push_system(input, format_sessions(store, limit));
+        }
+        "thread" | "threads" | "worker-thread" | "worker-threads" => {
+            push_system(
+                input,
+                format_worker_threads(store, config, input, args.first().copied()),
+            );
         }
         "import-cc" | "import-claude" => {
             let project = args.first().copied().map(PathBuf::from);
@@ -562,6 +568,10 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
             description: "list recent sessions",
         },
         SlashCommandDef {
+            name: "thread",
+            description: "show worker thread/native CLI sessions",
+        },
+        SlashCommandDef {
             name: "import-cc",
             description: "import Claude Code sessions",
         },
@@ -730,6 +740,9 @@ fn argument_candidates(
                 ("50", "show 50 sessions"),
             ],
         ),
+        "thread" | "threads" | "worker-thread" | "worker-threads" if ctx.current_index == 0 => {
+            worker_thread_candidates(store, config, ctx)
+        }
         "doctor" | "diagnose" | "checkup" => choice_candidates(
             ctx,
             0,
@@ -1114,6 +1127,40 @@ fn session_candidates(store: &SessionStore, ctx: &SlashArgContext) -> Vec<SlashA
         .collect()
 }
 
+fn worker_thread_candidates(
+    store: &SessionStore,
+    config: &Config,
+    ctx: &SlashArgContext,
+) -> Vec<SlashArgCandidate> {
+    let mut candidates = Vec::new();
+    for role in
+        ordered_worker_thread_roles(config, &store.list_worker_threads().unwrap_or_default())
+    {
+        if let Some(role_cfg) = config.roles.get(&role) {
+            candidates.push(SlashArgCandidate {
+                value: role.clone(),
+                label: role,
+                description: format!(
+                    "{} · {}",
+                    role_cfg.runtime,
+                    model_label(config, &role_cfg.model)
+                ),
+            });
+        } else {
+            candidates.push(SlashArgCandidate {
+                value: role.clone(),
+                label: role,
+                description: "stored worker thread".into(),
+            });
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|candidate| candidate_matches(&candidate.value, &ctx.current_prefix))
+        .take(12)
+        .collect()
+}
+
 fn choice_candidates(
     ctx: &SlashArgContext,
     arg_index: usize,
@@ -1363,6 +1410,7 @@ fn help_text() -> String {
      /cc-agent [name|clear]        Use a Claude Code subagent for Claude workers\n\
      /usage [today|week|month|all] Show token/cost usage\n\
      /sessions [n]                 List recent sessions with tree/log shortcuts\n\
+     /thread [role]                Show worker thread/native CLI session state\n\
      /import-cc [project]          Import Claude Code sessions into chat history\n\
      /resume last                  Restore the last terminal chat conversation\n\
      /session [id|prefix|last]     Show one session summary\n\
@@ -3395,6 +3443,242 @@ pub(super) fn format_sessions(store: &SessionStore, limit: usize) -> String {
     }
 }
 
+pub(super) fn format_worker_threads(
+    store: &SessionStore,
+    config: &Config,
+    input: &InputState,
+    selector: Option<&str>,
+) -> String {
+    let threads = match store.list_worker_threads() {
+        Ok(threads) => threads,
+        Err(err) => return format!("Could not list worker threads: {err:#}"),
+    };
+
+    if let Some(selector) = selector
+        .map(str::trim)
+        .filter(|selector| !selector.is_empty())
+    {
+        if let Some(thread) = find_worker_thread(&threads, selector) {
+            return format_worker_thread_detail(config, thread);
+        }
+        if config.roles.contains_key(selector) {
+            return format_missing_worker_thread(config, selector);
+        }
+        return format!(
+            "Worker thread not found: {}\nAvailable worker roles: {}",
+            selector,
+            available_worker_thread_roles(config, &threads)
+        );
+    }
+
+    let selected = selected_worker_role(config, input).unwrap_or_else(|| "auto".into());
+    let mut out = format!(
+        "Worker threads\n  selected worker: {}\n  stored threads: {}\n\nRoles:",
+        selected,
+        threads.len()
+    );
+    let roles = ordered_worker_thread_roles(config, &threads);
+    if roles.is_empty() {
+        out.push_str("\n  no worker roles configured");
+    } else {
+        for role in roles {
+            out.push('\n');
+            if let Some(thread) = threads.iter().find(|thread| thread.role == role) {
+                out.push_str(&format_worker_thread_summary(config, thread));
+            } else {
+                out.push_str(&format_missing_worker_thread_summary(config, &role));
+            }
+        }
+    }
+    out.push_str("\n\nDetails: /thread <role>  Resume: /continue claude or /continue codex");
+    out
+}
+
+fn ordered_worker_thread_roles(config: &Config, threads: &[WorkerThread]) -> Vec<String> {
+    let mut roles = worker_role_names(config);
+    for thread in threads {
+        if !roles.iter().any(|role| role == &thread.role) {
+            roles.push(thread.role.clone());
+        }
+    }
+    roles
+}
+
+fn selected_worker_role(config: &Config, input: &InputState) -> Option<String> {
+    input
+        .agent_hint
+        .as_deref()
+        .filter(|role| config.roles.contains_key(*role))
+        .map(str::to_string)
+        .or_else(|| runtime::default_worker_role(&config.roles))
+}
+
+fn find_worker_thread<'a>(threads: &'a [WorkerThread], selector: &str) -> Option<&'a WorkerThread> {
+    threads
+        .iter()
+        .find(|thread| thread.role == selector)
+        .or_else(|| {
+            threads
+                .iter()
+                .find(|thread| thread.id.to_string().starts_with(selector))
+        })
+        .or_else(|| {
+            threads.iter().find(|thread| {
+                thread
+                    .native_session_id
+                    .as_deref()
+                    .is_some_and(|id| id.starts_with(selector))
+            })
+        })
+}
+
+fn format_worker_thread_summary(config: &Config, thread: &WorkerThread) -> String {
+    let native = thread
+        .native_session_id
+        .as_deref()
+        .map(short_text_id)
+        .unwrap_or_else(|| "none".into());
+    let last = thread
+        .last_session_id
+        .as_ref()
+        .map(short_uuid)
+        .unwrap_or_else(|| "none".into());
+    format!(
+        "  ● {:<18} {} · {} · thread {} · native {} · last {}",
+        thread.role,
+        thread.runtime,
+        worker_thread_model_label(config, thread),
+        short_uuid(&thread.id),
+        native,
+        last
+    )
+}
+
+fn format_missing_worker_thread_summary(config: &Config, role: &str) -> String {
+    let role_cfg = config.roles.get(role);
+    let detail = role_cfg
+        .map(|cfg| format!("{} · {}", cfg.runtime, model_label(config, &cfg.model)))
+        .unwrap_or_else(|| "not configured".into());
+    format!("  ○ {:<18} {} · no worker thread yet", role, detail)
+}
+
+fn format_worker_thread_detail(config: &Config, thread: &WorkerThread) -> String {
+    let worktree = thread
+        .worktree_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "none".into());
+    let native_session = thread
+        .native_session_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or("none");
+    let last_session = thread
+        .last_session_id
+        .as_ref()
+        .map(uuid::Uuid::to_string)
+        .unwrap_or_else(|| "none".into());
+    format!(
+        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n  Tiffany thread: {}\n  native session: {}\n  native resume: {}\n  TUI resume: {}\n  last Tiffany session: {}\n  worktree: {}\n  created: {}\n  updated: {}\n\nStatus: {}",
+        short_uuid(&thread.id),
+        thread.role,
+        thread.runtime,
+        thread.agent,
+        worker_thread_model_label(config, thread),
+        thread.provider.as_deref().unwrap_or("none"),
+        thread.id,
+        native_session,
+        native_thread_resume_command(thread),
+        tui_continue_command(thread),
+        last_session,
+        worktree,
+        thread.created_at.to_rfc3339(),
+        thread.updated_at.to_rfc3339(),
+        worker_thread_status_hint(thread)
+    )
+}
+
+fn format_missing_worker_thread(config: &Config, role: &str) -> String {
+    let detail = config
+        .roles
+        .get(role)
+        .map(|cfg| format!("{} · {}", cfg.runtime, model_label(config, &cfg.model)))
+        .unwrap_or_else(|| "configured role".into());
+    format!(
+        "Worker thread {}\n  role: {}\n  configured: {}\n  native session: none\n  status: no worker thread yet\n\nNext: run a task with /agent {} or /roles use {} to create and persist one.",
+        role, role, detail, role, role
+    )
+}
+
+fn worker_thread_model_label(config: &Config, thread: &WorkerThread) -> String {
+    if let Some(provider) = thread
+        .provider
+        .as_deref()
+        .filter(|provider| !provider.is_empty())
+    {
+        return format!("{provider}/{}", thread.model);
+    }
+    config
+        .models
+        .iter()
+        .find(|model| model.id == thread.model)
+        .map(|model| format!("{}/{}", model.provider, model.name))
+        .unwrap_or_else(|| thread.model.clone())
+}
+
+fn native_thread_resume_command(thread: &WorkerThread) -> String {
+    let Some(native_session_id) = thread
+        .native_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return "none".into();
+    };
+    if thread.agent == "claude-code" || thread.runtime == "claude-code" {
+        return format!("claude --resume {native_session_id}");
+    }
+    if thread.agent == "codex" || thread.runtime == "codex" {
+        return format!("codex exec resume {native_session_id}");
+    }
+    "none".into()
+}
+
+fn tui_continue_command(thread: &WorkerThread) -> String {
+    if thread.agent == "claude-code" || thread.runtime == "claude-code" {
+        "/continue claude".into()
+    } else if thread.agent == "codex" || thread.runtime == "codex" {
+        "/continue codex".into()
+    } else {
+        "none".into()
+    }
+}
+
+fn worker_thread_status_hint(thread: &WorkerThread) -> &'static str {
+    if thread.native_session_id.is_some() {
+        "ready for native resume; Tiffany will reuse this session for the same role"
+    } else {
+        "no native session captured yet; next successful worker run starts fresh"
+    }
+}
+
+fn available_worker_thread_roles(config: &Config, threads: &[WorkerThread]) -> String {
+    let roles = ordered_worker_thread_roles(config, threads);
+    if roles.is_empty() {
+        "(none)".into()
+    } else {
+        roles.join(", ")
+    }
+}
+
+fn short_uuid(id: &uuid::Uuid) -> String {
+    id.to_string().chars().take(8).collect()
+}
+
+fn short_text_id(value: &str) -> String {
+    truncate_chars(value, 16)
+}
+
 const IMPORT_CHAT_EVENT_LIMIT: usize = 80;
 const IMPORT_CHAT_TEXT_MAX_CHARS: usize = 8_000;
 
@@ -4238,6 +4522,53 @@ mod tests {
     }
 
     #[test]
+    fn thread_command_shows_native_session_and_resume_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let cfg = test_config();
+        let input = InputState::default();
+        let thread = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        let session_id = uuid::Uuid::new_v4();
+        store
+            .update_worker_thread_after_session(thread.id, Some("native-abc"), session_id, None)
+            .unwrap();
+
+        let list = format_worker_threads(&store, &cfg, &input, None);
+        assert!(list.contains("Worker threads"));
+        assert!(list.contains("worker-cc"));
+        assert!(list.contains("native native-abc"));
+
+        let detail = format_worker_threads(&store, &cfg, &input, Some("worker-cc"));
+        assert!(detail.contains("native session: native-abc"));
+        assert!(detail.contains("native resume: claude --resume native-abc"));
+        assert!(detail.contains("/continue claude"));
+        assert!(detail.contains(&session_id.to_string()));
+    }
+
+    #[test]
+    fn thread_command_reports_missing_configured_worker_thread() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let cfg = test_config();
+        let input = InputState::default();
+
+        let msg = format_worker_threads(&store, &cfg, &input, Some("worker-cc"));
+
+        assert!(msg.contains("no worker thread yet"));
+        assert!(msg.contains("/agent worker-cc"));
+    }
+
+    #[test]
     fn completes_static_slash_arguments() {
         let tmp = tempfile::tempdir().unwrap();
         let store =
@@ -4264,6 +4595,9 @@ mod tests {
         assert!(candidates
             .iter()
             .any(|candidate| candidate.label == "/queue"));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.label == "/thread"));
         assert!(!candidates
             .iter()
             .any(|candidate| candidate.label.contains('{')));
@@ -4427,6 +4761,11 @@ behavior:
         input.cursor = input.buffer.len();
         assert!(complete_slash_argument(&store, &cfg, &mut input));
         assert_eq!(input.buffer, "/usage week ");
+
+        input.buffer = "/thread worker-c".into();
+        input.cursor = input.buffer.len();
+        assert!(complete_slash_argument(&store, &cfg, &mut input));
+        assert_eq!(input.buffer, "/thread worker-cc ");
     }
 
     #[test]
