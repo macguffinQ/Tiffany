@@ -1,6 +1,6 @@
 [package]
 name = "tiffany-loop"
-version = "0.1.25"
+version = "0.1.26"
 edition = "2021"
 description = "tiffany-loop: a lightweight multi-agent orchestration shell for Claude Code, Codex CLI, and other LLM CLIs"
 license = "MIT"

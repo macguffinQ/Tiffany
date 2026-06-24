@@ -293,8 +293,6 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
                     "{completion_detail}, {} review unavailable",
                     review_unavailable
                 )
-            } else if worker_failures > 0 && task_count == 0 {
-                format!("{completion_detail}, {worker_failures} worker failure(s)")
             } else if worker_failures > 0 {
                 format!("{completion_detail}, {worker_failures} worker failure(s)")
             } else {

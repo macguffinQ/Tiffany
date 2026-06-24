@@ -23,6 +23,8 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
+type WorkerJoinOutput = (Uuid, Option<Uuid>, String, String, u64, Result<Session>);
+
 /// Progress events emitted by the orchestrator for live terminal chat display.
 /// (Borrowed from Claude Code's terminal pattern: background task + mpsc channel.)
 #[derive(Clone, Debug)]
@@ -645,8 +647,7 @@ impl Orchestrator {
         let mut terminal_ids: HashSet<Uuid> = HashSet::new();
         let mut results: Vec<Task> = Vec::new();
         let mut active_thread_ids: HashSet<Uuid> = HashSet::new();
-        let mut joinset: JoinSet<(Uuid, Option<Uuid>, String, String, u64, Result<Session>)> =
-            JoinSet::new();
+        let mut joinset: JoinSet<WorkerJoinOutput> = JoinSet::new();
         let mut thread_locks: HashMap<Uuid, Arc<Mutex<()>>> = HashMap::new();
 
         loop {
