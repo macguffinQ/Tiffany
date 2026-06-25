@@ -327,6 +327,51 @@ async fn tiffany_orchestrator_rejects_hidden_codex_command_submit() {
 }
 
 #[tokio::test]
+async fn tiffany_orchestrator_rejects_hidden_codex_command_direct_dispatch() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command(SlashCommand::Model);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("'/model' is not available in Tiffany orchestrator mode"),
+        "expected Tiffany unsupported-command message, got {rendered:?}"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn tiffany_orchestrator_rejects_hidden_codex_command_direct_inline_dispatch() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Review,
+        "check this diff".to_string(),
+        Vec::new(),
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("'/review' is not available in Tiffany orchestrator mode"),
+        "expected Tiffany unsupported-command message, got {rendered:?}"
+    );
+    assert!(rendered.contains("Ask for review in the chat"));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn tiffany_orchestrator_rejects_legacy_terminal_command_submit() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);

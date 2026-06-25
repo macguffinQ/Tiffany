@@ -16,6 +16,7 @@ use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
+use crate::bottom_pane::slash_commands::tiffany_orchestrator_command_visible;
 use crate::bottom_pane::slash_commands::tiffany_orchestrator_help_text;
 use crate::bottom_pane::slash_commands::tiffany_orchestrator_unsupported_command_message;
 use crate::goal_display::GOAL_USAGE;
@@ -55,6 +56,10 @@ impl ChatWidget {
     /// that staged entry after dispatch so slash-command recall follows the same "submitted input"
     /// rule as normal text.
     pub(super) fn handle_slash_command_dispatch(&mut self, cmd: SlashCommand) {
+        if !self.ensure_tiffany_orchestrator_command_visible(cmd) {
+            self.bottom_pane.record_pending_slash_command_history();
+            return;
+        }
         self.dispatch_command(cmd);
         if cmd == SlashCommand::Goal {
             self.bottom_pane.drain_pending_submission_state();
@@ -87,8 +92,30 @@ impl ChatWidget {
         args: String,
         text_elements: Vec<TextElement>,
     ) {
+        if !self.ensure_tiffany_orchestrator_command_visible(cmd) {
+            self.bottom_pane.record_pending_slash_command_history();
+            return;
+        }
         self.dispatch_command_with_args(cmd, args, text_elements);
         self.bottom_pane.record_pending_slash_command_history();
+    }
+
+    fn ensure_tiffany_orchestrator_command_visible(&mut self, cmd: SlashCommand) -> bool {
+        if !self.tiffany_orchestrator_shell || tiffany_orchestrator_command_visible(cmd) {
+            return true;
+        }
+
+        let message = tiffany_orchestrator_unsupported_command_message(cmd.command())
+            .unwrap_or_else(|| {
+                format!(
+                    "'/{}' is not available in Tiffany orchestrator mode.",
+                    cmd.command()
+                )
+            });
+        self.add_info_message(message, /*hint*/ None);
+        self.bottom_pane.drain_pending_submission_state();
+        self.request_redraw();
+        false
     }
 
     fn apply_plan_slash_command(&mut self) -> bool {
@@ -253,6 +280,9 @@ impl ChatWidget {
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if !self.ensure_tiffany_orchestrator_command_visible(cmd) {
+            return;
+        }
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
         }
@@ -744,6 +774,9 @@ impl ChatWidget {
         args: String,
         text_elements: Vec<TextElement>,
     ) {
+        if !self.ensure_tiffany_orchestrator_command_visible(cmd) {
+            return;
+        }
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
         }

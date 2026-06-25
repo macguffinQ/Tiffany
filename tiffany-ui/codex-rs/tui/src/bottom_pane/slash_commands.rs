@@ -113,7 +113,7 @@ fn tiffany_orchestrator_commands() -> Vec<(&'static str, SlashCommand)> {
         .collect()
 }
 
-fn tiffany_orchestrator_command_visible(cmd: SlashCommand) -> bool {
+pub(crate) fn tiffany_orchestrator_command_visible(cmd: SlashCommand) -> bool {
     TIFFANY_ORCHESTRATOR_COMMANDS.contains(&cmd)
 }
 
