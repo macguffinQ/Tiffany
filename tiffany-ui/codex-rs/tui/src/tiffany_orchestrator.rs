@@ -2773,6 +2773,10 @@ fn thread_list_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
         "write full selectable history for handoff",
     ));
     lines.push(next_line(
+        "/history role <role>",
+        "show native events for one worker role",
+    ));
+    lines.push(next_line(
         "/thread clear <role>",
         "start the next run with a fresh native session",
     ));
@@ -2815,6 +2819,20 @@ fn thread_detail_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
     push_thread_meta(&mut lines, "thread", fields.get("tiffany thread"));
     push_thread_meta(&mut lines, "last", fields.get("last tiffany session"));
     push_thread_meta(&mut lines, "work", fields.get("worktree"));
+
+    next_line_into(
+        &mut lines,
+        &format!("/history role {role}"),
+        "show this role's native event stream",
+    );
+    if let Some(thread_id) = fields.get("tiffany thread").and_then(|value| nonempty_trimmed(value))
+    {
+        next_line_into(
+            &mut lines,
+            &format!("/history thread {}", short_task_id(Some(thread_id)).unwrap_or(thread_id)),
+            "show events for this Tiffany worker thread",
+        );
+    }
 
     if native == "none" {
         next_line_into(
@@ -3032,7 +3050,7 @@ fn thread_summary_line(thread: &ThreadSummary) -> Line<'static> {
     };
     let actions = if thread.active {
         format!(
-            "inspect /thread {}  export /thread export {}  clear /thread clear {}",
+            "inspect /thread {}  history /history role {}  export /thread export {}",
             thread.role, thread.role, thread.role
         )
     } else {
@@ -6247,10 +6265,11 @@ mod tests {
         assert!(text.contains("codex-native-session"));
         assert!(text.contains("last 11111111"));
         assert!(text.contains("inspect /thread worker-codex"));
+        assert!(text.contains("history /history role worker-codex"));
         assert!(text.contains("export /thread export worker-codex"));
-        assert!(text.contains("clear /thread clear worker-codex"));
         assert!(text.contains("run task to create session"));
         assert!(text.contains("next  /thread <role>"));
+        assert!(text.contains("next  /history role <role>"));
         assert!(text.contains("next  /thread clear <role>"));
         assert!(!text.contains("Worker threads"));
         assert!(!text.contains("orchestrator thread show"));
@@ -6285,6 +6304,8 @@ mod tests {
         assert!(text.contains("native  codex-native-session"));
         assert!(text.contains("resume  codex exec resume codex-native-session"));
         assert!(text.contains("last  00000000-0000-0000-0000-000000000456"));
+        assert!(text.contains("next  /history role worker-codex"));
+        assert!(text.contains("next  /history thread 00000000"));
         assert!(text.contains("next  /thread clear worker-codex"));
         assert!(!text.contains("Worker thread 00000000"));
         assert!(!text.contains("Action: orchestrator"));
