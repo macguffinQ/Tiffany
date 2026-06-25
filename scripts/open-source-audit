@@ -85,7 +85,7 @@ fi
 section "misleading upstream user docs"
 upstream_user_docs="$(
   git grep -nE \
-    'developers\.openai\.com/codex|@openai/codex|brew install --cask codex|brew upgrade --cask codex|npm install -g @openai/codex|github\.com/openai/codex/issues/new|bugcrowd\.com/engagements/openai|security@openai\.com|Codex open source fund|Codex team does not accept' \
+    'developers\.openai\.com/codex|@openai/codex|brew install --cask codex|brew upgrade --cask codex|npm install -g @openai/codex|github\.com/openai/codex/(issues|releases)|bugcrowd\.com/engagements/openai|security@openai\.com|Codex open source fund|Codex team does not accept' \
     -- \
     tiffany-ui/docs \
     tiffany-ui/SECURITY.md \
