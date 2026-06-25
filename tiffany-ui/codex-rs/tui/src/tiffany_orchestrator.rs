@@ -955,7 +955,10 @@ pub(crate) fn native_history_lines(codex_home: &Path, cwd: &Path, args: &str) ->
         Err(err) => {
             return vec![
                 status_line("✗", Color::Red, "history", &err),
-                body_line("Usage: /history [last|full|<count>|export [--out path]]", true),
+                body_line(
+                    "Usage: /history [last|full|<count>|search <text>|export [--out path]]",
+                    true,
+                ),
             ];
         }
     };
@@ -964,6 +967,9 @@ pub(crate) fn native_history_lines(codex_home: &Path, cwd: &Path, args: &str) ->
             NativeHistoryCommand::Show(opts) => native_history_conversation_lines(&conversation, opts),
             NativeHistoryCommand::Export { out } => {
                 native_history_export_lines(codex_home, cwd, &conversation, out)
+            }
+            NativeHistoryCommand::Search { pattern } => {
+                native_history_search_lines(&conversation, &pattern)
             }
         },
         Ok(None) => vec![
@@ -1038,6 +1044,7 @@ struct NativeHistoryOptions {
 enum NativeHistoryCommand {
     Show(NativeHistoryOptions),
     Export { out: Option<PathBuf> },
+    Search { pattern: String },
 }
 
 impl NativeHistoryCommand {
@@ -1070,6 +1077,13 @@ impl NativeHistoryCommand {
                 Err("history export --out needs a file path".to_string())
             }
             ["export", flag, ..] => Err(format!("unknown /history export option '{flag}'")),
+            ["search" | "grep" | "find", pattern @ ..] => {
+                let pattern = pattern.join(" ").trim().to_string();
+                if pattern.is_empty() {
+                    return Err("history search needs text".to_string());
+                }
+                Ok(Self::Search { pattern })
+            }
             [unknown, ..] => Err(format!("unknown /history option '{unknown}'")),
         }
     }
@@ -1163,6 +1177,107 @@ fn native_history_export_lines(
             body_line(&format!("{err:#}"), true),
         ],
     }
+}
+
+fn native_history_search_lines(
+    conversation: &TiffanyNativeChatConversation,
+    pattern: &str,
+) -> Vec<Line<'static>> {
+    let hits = native_history_search_hits(conversation, pattern, 20);
+    if hits.is_empty() {
+        return vec![
+            status_line(
+                "⚠",
+                Color::Yellow,
+                "history",
+                &format!("no matches for '{}'", truncate_text(pattern, 80)),
+            ),
+            next_line("/history full", "inspect recent native events"),
+        ];
+    }
+
+    let mut lines = vec![status_line(
+        "✓",
+        TIFFANY_BLUE,
+        "history",
+        &format!("{} match(es) for '{}'", hits.len(), truncate_text(pattern, 80)),
+    )];
+    for hit in hits {
+        lines.push(body_line(
+            &format!(
+                "turn {} · {} · {}",
+                hit.turn_number,
+                hit.kind,
+                truncate_text(&one_line(&hit.preview), 160)
+            ),
+            false,
+        ));
+    }
+    lines.push(next_line("/history export", "write full Markdown handoff"));
+    lines
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct NativeHistorySearchHit {
+    turn_number: usize,
+    kind: &'static str,
+    preview: String,
+}
+
+fn native_history_search_hits(
+    conversation: &TiffanyNativeChatConversation,
+    pattern: &str,
+    limit: usize,
+) -> Vec<NativeHistorySearchHit> {
+    let needle = pattern.to_ascii_lowercase();
+    let mut hits = Vec::new();
+    for (turn_idx, turn) in conversation.turns.iter().enumerate() {
+        let turn_number = turn_idx + 1;
+        push_history_hit(
+            &mut hits,
+            limit,
+            turn_number,
+            "user",
+            &turn.user_prompt,
+            &needle,
+        );
+        push_history_hit(
+            &mut hits,
+            limit,
+            turn_number,
+            "answer",
+            &turn.result,
+            &needle,
+        );
+        for event in &turn.events {
+            push_history_hit(&mut hits, limit, turn_number, "event", &event.title, &needle);
+            if let Some(content) = event.content.as_deref() {
+                push_history_hit(&mut hits, limit, turn_number, "event", content, &needle);
+            }
+        }
+        if hits.len() >= limit {
+            break;
+        }
+    }
+    hits
+}
+
+fn push_history_hit(
+    hits: &mut Vec<NativeHistorySearchHit>,
+    limit: usize,
+    turn_number: usize,
+    kind: &'static str,
+    haystack: &str,
+    needle: &str,
+) {
+    if hits.len() >= limit || !haystack.to_ascii_lowercase().contains(needle) {
+        return;
+    }
+    hits.push(NativeHistorySearchHit {
+        turn_number,
+        kind,
+        preview: haystack.trim().to_string(),
+    });
 }
 
 fn default_native_history_export_path(codex_home: &Path, cwd: &Path) -> PathBuf {
@@ -5427,6 +5542,44 @@ mod tests {
     }
 
     #[test]
+    fn native_history_search_finds_turns_and_events() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "修复登录按钮".into(),
+                result: "登录按钮已修复".into(),
+            },
+            vec![TiffanyNativeChatEvent {
+                role: "worker".into(),
+                status: "output".into(),
+                title: "worker diff · worker-cc · claude-code".into(),
+                content: Some("diff --git a/src/login.rs b/src/login.rs".into()),
+                agent: Some("claude-code".into()),
+                worker_role: Some("worker-cc".into()),
+                model: None,
+                provider: None,
+                task_id: Some("abc12345".into()),
+                native_session_id: Some("native-1".into()),
+            }],
+        )
+        .expect("append");
+
+        let lines = native_history_lines(home.path(), cwd.path(), "search login.rs");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("history  1 match(es) for 'login.rs'"));
+        assert!(text.contains("turn 1 · event"));
+        assert!(text.contains("diff --git a/src/login.rs b/src/login.rs"));
+
+        let misses = native_history_lines(home.path(), cwd.path(), "search missing");
+        let miss_text = misses.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(miss_text.contains("no matches for 'missing'"));
+    }
+
+    #[test]
     fn native_history_lines_report_empty_and_bad_args() {
         let home = tempfile::tempdir().expect("home");
         let cwd = tempfile::tempdir().expect("cwd");
@@ -5438,7 +5591,9 @@ mod tests {
         let bad = native_history_lines(home.path(), cwd.path(), "wat");
         let bad_text = bad.iter().map(line_text).collect::<Vec<_>>().join("\n");
         assert!(bad_text.contains("unknown /history option 'wat'"));
-        assert!(bad_text.contains("Usage: /history [last|full|<count>|export [--out path]]"));
+        assert!(
+            bad_text.contains("Usage: /history [last|full|<count>|search <text>|export [--out path]]")
+        );
     }
 
     #[test]
