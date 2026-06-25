@@ -454,6 +454,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `/thread`：查看 worker/native CLI 会话复用状态；`/thread clear <role>` 可清掉卡住的 native session id。
 - `/doctor`：诊断配置、runtime、API key、角色绑定、本地工具和安装状态。
 - `/status`：显示当前会话和配置状态。
+- `/help`：显示 Tiffany 命令帮助。
 - `/copy`：复制最后一条 assistant 回复为 Markdown。
 - `/raw`：切换便于系统选中复制的 raw scrollback 模式。
 - `/diff`：显示当前 git 改动。

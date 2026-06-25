@@ -557,6 +557,7 @@ Default native TUI slash commands:
 - `/thread` - inspect worker/native CLI session reuse; `/thread clear <role>` resets a stuck native session id
 - `/doctor` - diagnose config, runtimes, API keys, role wiring, local tools, and install surface
 - `/status` - show current session/config status
+- `/help` - show Tiffany command help
 - `/copy` - copy the last assistant response as markdown
 - `/raw` - toggle copy-friendly raw scrollback mode
 - `/diff` - show current git changes

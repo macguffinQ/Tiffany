@@ -84,6 +84,7 @@ for expected in \
   '/thread       inspect or clear stable worker sessions' \
   '/doctor       diagnose provider/model/key/runtime problems' \
   '/status       show current orchestration status' \
+  '/help         show Tiffany command help' \
   '/copy         copy the last assistant answer' \
   '/raw          toggle copy-friendly raw scrollback mode' \
   '/diff         show git changes' \
