@@ -44,10 +44,8 @@ const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 const PROVIDER_USAGE: &str = "Usage: /provider [setup|list|delete <provider>|key <provider> <key-or-$ENV>|endpoint <provider> <url>]";
-const ROLE_USAGE: &str =
-    "Usage: /role [<role>|register <role> --model <model-id> --runtime <runtime-id>]";
-const ROLES_USAGE: &str =
-    "Usage: /roles [list|show <role>|register <role> --model <model-id> --runtime <runtime-id>]";
+const ROLE_USAGE: &str = "Usage: /role [<role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]";
+const ROLES_USAGE: &str = "Usage: /roles [list|show <role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]";
 const THREAD_USAGE: &str = "Usage: /thread [list|show <role>|clear <role>]";
 const DOCTOR_USAGE: &str = "Usage: /doctor [run]";
 impl ChatWidget {

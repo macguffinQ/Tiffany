@@ -132,6 +132,8 @@ struct WorkerMeta {
     reused: Option<bool>,
 }
 
+const TIFFANY_ROLE_USAGE: &str = "Usage: /roles [list|show <role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]";
+
 pub(crate) fn spawn_event_bridge(app_event_tx: AppEventSender, launch: TiffanyOrchestratorLaunch) {
     tokio::spawn(async move {
         emit_intro(&app_event_tx, &launch);
@@ -163,10 +165,7 @@ pub(crate) fn spawn_roles_command(
                     &app_event_tx,
                     vec![
                         status_line("✗", Color::Red, "roles", &err),
-                        body_line(
-                            "Usage: /roles [list|show <role>|register <role> --model <model-id> --runtime <runtime-id>]",
-                            true,
-                        ),
+                        body_line(TIFFANY_ROLE_USAGE, true),
                     ],
                 );
                 return;
@@ -1866,7 +1865,7 @@ fn diagnostic_hint(error: &str) -> Option<&'static str> {
         || lower.contains("1211")
     {
         return Some(
-            "hint: check `/role <role>`: model id must point to the provider API model name; then run `/doctor`",
+            "hint: open `/role <role>` and set the provider API model name, or run `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`; then run `/doctor`",
         );
     }
     if lower.contains("unauthorized")
@@ -3691,7 +3690,7 @@ mod tests {
                worker-cc      model=minimax-m3-claude provider=minimax api_model=MiniMax-M3 runtime=claude-code teams=true health=ready\n\
                worker-codex   model=minimax-m3-codex provider=minimax api_model=MiniMax-M3 runtime=codex teams=false health=runtime-missing:codex\n\
              \n\
-             Register: orchestrator roles register <role> --model <model-id> --runtime <runtime-id>\n",
+             Register: orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>\n",
             "roles",
         )
         .expect("role summary lines");
@@ -5022,7 +5021,8 @@ mod tests {
         assert!(text.contains("worker context"));
         assert!(text.contains("worker-codex · codex · minimax/MiniMax-M3"));
         assert!(text.contains("模型不存在"));
-        assert!(text.contains("model id must point to the provider API model name"));
+        assert!(text.contains("provider API model name"));
+        assert!(text.contains("--model-name <api-model>"));
         assert!(text.contains("/doctor"));
     }
 
