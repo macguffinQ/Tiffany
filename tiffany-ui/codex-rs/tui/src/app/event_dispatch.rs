@@ -2434,7 +2434,7 @@ impl App {
     }
 
     fn handle_tiffany_orchestrator_history_command(&mut self, tui: &mut tui::Tui, args: String) {
-        if self.tiffany_orchestrator.is_none() {
+        let Some(config) = self.tiffany_orchestrator.clone() else {
             self.insert_history_cell(
                 tui,
                 Box::new(history_cell::PlainHistoryCell::new(vec![
@@ -2444,15 +2444,13 @@ impl App {
                 ])),
             );
             return;
-        }
-        let lines = crate::tiffany_orchestrator::native_history_lines(
-            self.config.codex_home.as_path(),
-            self.config.cwd.as_path(),
-            &args,
-        );
-        self.insert_history_cell(
-            tui,
-            Box::new(history_cell::PlainHistoryCell::new(lines)),
+        };
+        crate::tiffany_orchestrator::spawn_history_command(
+            self.app_event_tx.clone(),
+            config,
+            self.config.codex_home.to_path_buf(),
+            self.config.cwd.to_path_buf(),
+            args,
         );
         tui.frame_requester().schedule_frame();
     }

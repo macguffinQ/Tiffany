@@ -5,6 +5,7 @@ use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -42,7 +43,7 @@ pub struct WorkerThread {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NativeConversation {
     pub id: String,
     pub cwd: String,
@@ -51,7 +52,7 @@ pub struct NativeConversation {
     pub turns: Vec<NativeTurn>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NativeTurn {
     pub turn_index: u32,
     pub user_prompt: String,
@@ -60,7 +61,7 @@ pub struct NativeTurn {
     pub events: Vec<NativeEvent>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NativeEvent {
     pub event_index: u32,
     pub role: String,

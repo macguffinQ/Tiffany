@@ -483,6 +483,29 @@ pub(crate) fn spawn_thread_command(
     });
 }
 
+pub(crate) fn spawn_history_command(
+    app_event_tx: AppEventSender,
+    config: TiffanyOrchestratorConfig,
+    codex_home: PathBuf,
+    cwd: PathBuf,
+    args: String,
+) {
+    tokio::spawn(async move {
+        let loaded = match load_native_history_from_store(&config, &cwd).await {
+            Ok(Some(conversation)) => Ok(Some(conversation)),
+            Ok(None) => load_native_chat_conversation(&codex_home, &cwd),
+            Err(err) => {
+                tracing::warn!("failed to load Tiffany native history from session store: {err:#}");
+                load_native_chat_conversation(&codex_home, &cwd)
+            }
+        };
+        emit_lines(
+            &app_event_tx,
+            native_history_lines_from_conversation(loaded, &codex_home, &cwd, &args),
+        );
+    });
+}
+
 pub(crate) fn idle_intro_lines_with_readiness(
     context_turn_count: usize,
     readiness: Option<&TiffanyStartupReadiness>,
@@ -961,7 +984,22 @@ pub(crate) fn load_native_memory_turns(
     Ok(turns)
 }
 
-pub(crate) fn native_history_lines(
+#[cfg(test)]
+fn native_history_lines(
+    codex_home: &Path,
+    cwd: &Path,
+    args: &str,
+) -> Vec<Line<'static>> {
+    native_history_lines_from_conversation(
+        load_native_chat_conversation(codex_home, cwd),
+        codex_home,
+        cwd,
+        args,
+    )
+}
+
+fn native_history_lines_from_conversation(
+    loaded: anyhow::Result<Option<TiffanyNativeChatConversation>>,
     codex_home: &Path,
     cwd: &Path,
     args: &str,
@@ -978,7 +1016,7 @@ pub(crate) fn native_history_lines(
             ];
         }
     };
-    match load_native_chat_conversation(codex_home, cwd) {
+    match loaded {
         Ok(Some(conversation)) => match command {
             NativeHistoryCommand::Show(opts) => {
                 native_history_conversation_lines(&conversation, opts)
@@ -1950,12 +1988,46 @@ async fn import_native_history(
     )
 }
 
+async fn load_native_history_from_store(
+    config: &TiffanyOrchestratorConfig,
+    cwd: &Path,
+) -> anyhow::Result<Option<TiffanyNativeChatConversation>> {
+    let output = run_orchestrator_command(config, &native_history_store_args(cwd)).await?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "sessions native-history exited with {}; stdout: {}; stderr: {}",
+            output.status,
+            stdout.trim(),
+            stderr.trim()
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() || trimmed == "null" {
+        return Ok(None);
+    }
+    serde_json::from_str::<TiffanyNativeChatConversation>(trimmed)
+        .map(Some)
+        .context("parsing sessions native-history JSON")
+}
+
 fn native_history_import_args(native_sessions_path: &Path) -> Vec<String> {
     vec![
         "sessions".to_string(),
         "import-native".to_string(),
         "--path".to_string(),
         native_sessions_path.display().to_string(),
+    ]
+}
+
+fn native_history_store_args(cwd: &Path) -> Vec<String> {
+    vec![
+        "sessions".to_string(),
+        "native-history".to_string(),
+        "--cwd".to_string(),
+        cwd_key(cwd),
     ]
 }
 
@@ -6248,6 +6320,69 @@ mod tests {
         assert!(bad_text.contains(
             "Usage: /history [last|full|<count>|role <role>|thread <id>|search <text>|export [role <role>|thread <id>] [--out path]]"
         ));
+    }
+
+    #[test]
+    fn native_history_store_args_reads_current_cwd_from_session_store() {
+        let cwd = Path::new("/tmp/tiffany project");
+
+        assert_eq!(
+            native_history_store_args(cwd),
+            strings(&[
+                "sessions",
+                "native-history",
+                "--cwd",
+                "/tmp/tiffany project",
+            ])
+        );
+    }
+
+    #[test]
+    fn native_history_lines_can_render_loaded_store_conversation() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let conversation = TiffanyNativeChatConversation {
+            id: "db-conversation".into(),
+            cwd: cwd_key(cwd.path()),
+            created_at_unix: 1,
+            updated_at_unix: 2,
+            turns: vec![TiffanyNativeChatTurn {
+                user_prompt: "修改登录逻辑".into(),
+                result: "已同步 diff".into(),
+                captured_at_unix: 2,
+                events: vec![TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker diff · worker-cc · claude-code".into(),
+                    kind: Some("diff".into()),
+                    content: Some(
+                        "diff --git a/src/login.rs b/src/login.rs\n+native sync".into(),
+                    ),
+                    agent: Some("claude-code".into()),
+                    worker_role: Some("worker-cc".into()),
+                    model: Some("claude-sonnet-4-6".into()),
+                    provider: Some("anthropic".into()),
+                    task_id: Some("task-1".into()),
+                    worker_thread_id: Some("thread-1".into()),
+                    native_session_id: Some("claude-session-1".into()),
+                }],
+            }],
+        };
+
+        let lines = native_history_lines_from_conversation(
+            Ok(Some(conversation)),
+            home.path(),
+            cwd.path(),
+            "full",
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("session  db-conversation"));
+        assert!(text.contains("user  修改登录逻辑"));
+        assert!(text.contains("kind: diff"));
+        assert!(text.contains("diff --git a/src/login.rs b/src/login.rs"));
+        assert!(text.contains("native claude-s"));
+        assert!(text.contains("thread thread-1"));
     }
 
     #[test]

@@ -388,6 +388,17 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                         report.events
                     );
                 }
+                crate::SessionsCmd::NativeHistory { cwd } => {
+                    let cwd = match cwd {
+                        Some(cwd) => cwd,
+                        None => {
+                            let cwd = std::env::current_dir()?;
+                            cwd.canonicalize().unwrap_or(cwd).to_string_lossy().to_string()
+                        }
+                    };
+                    let conversation = store.native_conversation_by_cwd(&cwd)?;
+                    println!("{}", serde_json::to_string_pretty(&conversation)?);
+                }
             }
             Ok(())
         }

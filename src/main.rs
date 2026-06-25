@@ -548,6 +548,12 @@ enum SessionsCmd {
         #[arg(long)]
         path: Option<PathBuf>,
     },
+    /// Print one tiffany-loop native TUI conversation from the SQLite session store as JSON
+    NativeHistory {
+        /// Conversation cwd key (default: current directory)
+        #[arg(long)]
+        cwd: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -835,6 +841,26 @@ mod tests {
                 assert_eq!(path, Some(PathBuf::from("/tmp/native-sessions.json")));
             }
             _ => panic!("unexpected sessions import-native command"),
+        }
+    }
+
+    #[test]
+    fn sessions_native_history_accepts_cwd() {
+        let cli = Cli::parse_from([
+            "orchestrator",
+            "sessions",
+            "native-history",
+            "--cwd",
+            "/tmp/project",
+        ]);
+
+        match cli.cmd {
+            Cmd::Sessions {
+                action: SessionsCmd::NativeHistory { cwd },
+            } => {
+                assert_eq!(cwd.as_deref(), Some("/tmp/project"));
+            }
+            _ => panic!("unexpected sessions native-history command"),
         }
     }
 
