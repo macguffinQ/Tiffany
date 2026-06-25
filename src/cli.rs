@@ -1885,75 +1885,264 @@ fn handle_thread(config_path: &Path, action: crate::ThreadCmd) -> Result<()> {
     match action {
         crate::ThreadCmd::List => {
             let threads = store.list_worker_threads()?;
-            println!("Worker threads:");
-            if threads.is_empty() {
-                println!("  (none)");
-            }
-            for thread in threads {
-                println!("  {}", worker_thread_summary(&thread));
-            }
-            println!("\nReset native session: orchestrator thread clear <role>");
+            println!("{}", worker_thread_list(&cfg, &threads));
             Ok(())
         }
         crate::ThreadCmd::Show { role } => {
-            let Some(thread) = store.worker_thread_by_role(&role)? else {
-                anyhow::bail!("worker thread not found for role '{role}'");
+            let threads = store.list_worker_threads()?;
+            let Some(thread) = find_worker_thread(&threads, &role) else {
+                if cfg.roles.contains_key(&role) {
+                    println!("{}", missing_worker_thread_detail(&cfg, &role));
+                    return Ok(());
+                }
+                anyhow::bail!(
+                    "worker thread not found for role '{role}'. Available worker roles: {}",
+                    available_worker_thread_roles(&cfg, &threads)
+                );
             };
-            println!("{}", worker_thread_detail(&thread));
+            println!("{}", worker_thread_detail(&cfg, thread));
             Ok(())
         }
         crate::ThreadCmd::Clear { role } => {
-            let Some(thread) = store.worker_thread_by_role(&role)? else {
-                anyhow::bail!("worker thread not found for role '{role}'");
+            let threads = store.list_worker_threads()?;
+            let Some(thread) = find_worker_thread(&threads, &role) else {
+                if cfg.roles.contains_key(&role) {
+                    println!(
+                        "Worker thread {}\n  status: no worker thread yet\n  native session: none\n\nNothing to clear.",
+                        role
+                    );
+                    return Ok(());
+                }
+                anyhow::bail!(
+                    "worker thread not found for role '{role}'. Available worker roles: {}",
+                    available_worker_thread_roles(&cfg, &threads)
+                );
             };
+            let previous = thread
+                .native_session_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or("none")
+                .to_string();
             store.clear_worker_thread_native_session(thread.id)?;
             println!(
-                "✓ cleared native session for {role}\n  worker_thread: {}\n  previous_native_session: {}",
+                "Worker thread reset\n  role: {}\n  Tiffany thread: {}\n  cleared native session: {}\n  next run: starts a fresh native {} session\n\nKept: worker thread id, last Tiffany session, and conversation context.",
+                thread.role,
                 thread.id,
-                thread.native_session_id.as_deref().unwrap_or("(none)")
+                previous,
+                thread.agent
             );
             Ok(())
         }
     }
 }
 
-fn worker_thread_summary(thread: &WorkerThread) -> String {
+fn worker_thread_list(cfg: &Config, threads: &[WorkerThread]) -> String {
+    let mut out = format!(
+        "Worker threads\n  stored threads: {}\n\nRoles:",
+        threads.len()
+    );
+    let roles = ordered_worker_thread_roles(cfg, threads);
+    if roles.is_empty() {
+        out.push_str("\n  no worker roles configured");
+    } else {
+        for role in roles {
+            out.push('\n');
+            if let Some(thread) = threads.iter().find(|thread| thread.role == role) {
+                out.push_str(&worker_thread_summary(cfg, thread));
+            } else {
+                out.push_str(&missing_worker_thread_summary(cfg, &role));
+            }
+        }
+    }
+    out.push_str(
+        "\n\nDetails: orchestrator thread show <role>  Fresh start: orchestrator thread clear <role>",
+    );
+    out
+}
+
+fn ordered_worker_thread_roles(cfg: &Config, threads: &[WorkerThread]) -> Vec<String> {
+    let mut roles = cfg
+        .roles
+        .keys()
+        .filter(|role| role.contains("worker"))
+        .cloned()
+        .collect::<Vec<_>>();
+    roles.sort_by_key(|role| worker_role_sort_key(role));
+    for thread in threads {
+        if !roles.iter().any(|role| role == &thread.role) {
+            roles.push(thread.role.clone());
+        }
+    }
+    roles
+}
+
+fn worker_role_sort_key(role: &str) -> (u8, String) {
+    match role {
+        "worker-cc" => (0, role.to_string()),
+        "worker-codex" => (1, role.to_string()),
+        _ => (2, role.to_string()),
+    }
+}
+
+fn find_worker_thread<'a>(threads: &'a [WorkerThread], selector: &str) -> Option<&'a WorkerThread> {
+    threads
+        .iter()
+        .find(|thread| thread.role == selector)
+        .or_else(|| {
+            threads
+                .iter()
+                .find(|thread| thread.id.to_string().starts_with(selector))
+        })
+        .or_else(|| {
+            threads.iter().find(|thread| {
+                thread
+                    .native_session_id
+                    .as_deref()
+                    .is_some_and(|id| id.starts_with(selector))
+            })
+        })
+}
+
+fn worker_thread_summary(cfg: &Config, thread: &WorkerThread) -> String {
+    let native = thread
+        .native_session_id
+        .as_deref()
+        .map(short_text_id)
+        .unwrap_or_else(|| "none".to_string());
+    let last = thread
+        .last_session_id
+        .as_ref()
+        .map(short_uuid)
+        .unwrap_or_else(|| "none".to_string());
     format!(
-        "{} · {} · {} · model {} · native {} · last {}",
+        "  ● {:<18} {} · {} · thread {} · native {} · last {}",
         thread.role,
         thread.runtime,
-        thread.agent,
-        thread.model,
-        thread.native_session_id.as_deref().unwrap_or("(none)"),
-        thread
-            .last_session_id
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| "(none)".to_string())
+        worker_thread_model_label(cfg, thread),
+        short_uuid(&thread.id),
+        native,
+        last
     )
 }
 
-fn worker_thread_detail(thread: &WorkerThread) -> String {
+fn missing_worker_thread_summary(cfg: &Config, role: &str) -> String {
+    let detail = cfg
+        .roles
+        .get(role)
+        .map(|role_cfg| format!("{} · {}", role_cfg.runtime, role_cfg.model))
+        .unwrap_or_else(|| "not configured".to_string());
+    format!("  ○ {:<18} {} · no worker thread yet", role, detail)
+}
+
+fn worker_thread_detail(cfg: &Config, thread: &WorkerThread) -> String {
+    let native_session = thread
+        .native_session_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or("none");
+    let last_session = thread
+        .last_session_id
+        .as_ref()
+        .map(uuid::Uuid::to_string)
+        .unwrap_or_else(|| "none".to_string());
     format!(
-        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  provider: {}\n  model: {}\n  native session: {}\n  last session: {}\n  worktree: {}\n  updated: {}\n\nReset native session: orchestrator thread clear {}",
-        thread.id,
+        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n  Tiffany thread: {}\n  native session: {}\n  native resume: {}\n  last Tiffany session: {}\n  worktree: {}\n  created: {}\n  updated: {}\n\nStatus: {}\nAction: orchestrator thread clear {} resets only the native CLI session id for a fresh next run.",
+        short_uuid(&thread.id),
         thread.role,
         thread.runtime,
         thread.agent,
-        thread.provider.as_deref().unwrap_or("(none)"),
-        thread.model,
-        thread.native_session_id.as_deref().unwrap_or("(none)"),
-        thread
-            .last_session_id
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| "(none)".to_string()),
+        worker_thread_model_label(cfg, thread),
+        thread.provider.as_deref().unwrap_or("none"),
+        thread.id,
+        native_session,
+        native_thread_resume_command(thread),
+        last_session,
         thread
             .worktree_path
             .as_ref()
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "(none)".to_string()),
+            .unwrap_or_else(|| "none".to_string()),
+        thread.created_at.to_rfc3339(),
         thread.updated_at.to_rfc3339(),
+        worker_thread_status_hint(thread),
         thread.role
     )
+}
+
+fn missing_worker_thread_detail(cfg: &Config, role: &str) -> String {
+    let detail = cfg
+        .roles
+        .get(role)
+        .map(|role_cfg| format!("{} · {}", role_cfg.runtime, role_cfg.model))
+        .unwrap_or_else(|| "configured role".to_string());
+    format!(
+        "Worker thread {}\n  role: {}\n  configured: {}\n  native session: none\n  status: no worker thread yet\n\nNext: run a task with this role to create and persist one.",
+        role, role, detail
+    )
+}
+
+fn worker_thread_model_label(cfg: &Config, thread: &WorkerThread) -> String {
+    if let Some(provider) = thread
+        .provider
+        .as_deref()
+        .filter(|provider| !provider.is_empty())
+    {
+        return format!("{provider}/{}", thread.model);
+    }
+    cfg.models
+        .iter()
+        .find(|model| model.id == thread.model)
+        .map(|model| format!("{}/{}", model.provider, model.name))
+        .unwrap_or_else(|| thread.model.clone())
+}
+
+fn native_thread_resume_command(thread: &WorkerThread) -> String {
+    let Some(native_session_id) = thread
+        .native_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return "none".to_string();
+    };
+    if thread.agent == "claude-code" || thread.runtime == "claude-code" {
+        return format!("claude --resume {native_session_id}");
+    }
+    if thread.agent == "codex" || thread.runtime == "codex" {
+        return format!("codex exec resume {native_session_id}");
+    }
+    "none".to_string()
+}
+
+fn worker_thread_status_hint(thread: &WorkerThread) -> &'static str {
+    if thread.native_session_id.is_some() {
+        "ready for native resume; Tiffany will reuse this session for the same role"
+    } else {
+        "no native session captured yet; next successful worker run starts fresh"
+    }
+}
+
+fn available_worker_thread_roles(cfg: &Config, threads: &[WorkerThread]) -> String {
+    let roles = ordered_worker_thread_roles(cfg, threads);
+    if roles.is_empty() {
+        "(none)".to_string()
+    } else {
+        roles.join(", ")
+    }
+}
+
+fn short_uuid(id: &uuid::Uuid) -> String {
+    id.to_string().chars().take(8).collect()
+}
+
+fn short_text_id(id: &str) -> String {
+    let trimmed = id.trim();
+    if trimmed.chars().count() <= 12 {
+        trimmed.to_string()
+    } else {
+        format!("{}...", trimmed.chars().take(12).collect::<String>())
+    }
 }
 
 fn print_roles(config_path: &Path, selected_role: Option<&str>) -> Result<()> {
@@ -5009,6 +5198,89 @@ mod tests {
             "TIFFANY_MINIMAX_API_KEY".to_string()
         )));
         assert!(!format!("{spec:?}").contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn worker_thread_cli_list_includes_roles_resume_state_and_actions() {
+        let mut cfg = config_with_models();
+        cfg.roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "sonnet".to_string(),
+                runtime: "claude-code".to_string(),
+                agent_teams: true,
+            },
+        );
+        cfg.roles.insert(
+            "worker-codex".to_string(),
+            RoleConfig {
+                model: "gpt4o".to_string(),
+                runtime: "codex".to_string(),
+                agent_teams: false,
+            },
+        );
+        let thread = WorkerThread {
+            id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap(),
+            role: "worker-codex".to_string(),
+            runtime: "codex".to_string(),
+            agent: "codex".to_string(),
+            model: "gpt-4o".to_string(),
+            provider: Some("openai".to_string()),
+            worktree_path: None,
+            native_session_id: Some("codex-native-session-123456".to_string()),
+            last_session_id: Some(
+                uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000456").unwrap(),
+            ),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let rendered = worker_thread_list(&cfg, &[thread]);
+
+        assert!(rendered.contains("Worker threads"));
+        assert!(rendered.contains("worker-cc"));
+        assert!(rendered.contains("no worker thread yet"));
+        assert!(rendered.contains("worker-codex"));
+        assert!(rendered.contains("openai/gpt-4o"));
+        assert!(rendered.contains("native codex-native..."));
+        assert!(rendered.contains("orchestrator thread show <role>"));
+        assert!(rendered.contains("orchestrator thread clear <role>"));
+    }
+
+    #[test]
+    fn worker_thread_cli_detail_shows_native_resume_command() {
+        let mut cfg = config_with_models();
+        cfg.roles.insert(
+            "worker-codex".to_string(),
+            RoleConfig {
+                model: "gpt4o".to_string(),
+                runtime: "codex".to_string(),
+                agent_teams: false,
+            },
+        );
+        let thread = WorkerThread {
+            id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap(),
+            role: "worker-codex".to_string(),
+            runtime: "codex".to_string(),
+            agent: "codex".to_string(),
+            model: "gpt-4o".to_string(),
+            provider: Some("openai".to_string()),
+            worktree_path: Some(std::path::PathBuf::from("/tmp/tiffany-worker")),
+            native_session_id: Some("codex-native-session".to_string()),
+            last_session_id: Some(
+                uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000456").unwrap(),
+            ),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let detail = worker_thread_detail(&cfg, &thread);
+
+        assert!(detail.contains("native session: codex-native-session"));
+        assert!(detail.contains("native resume: codex exec resume codex-native-session"));
+        assert!(detail.contains("Status: ready for native resume"));
+        assert!(detail.contains("Action: orchestrator thread clear worker-codex"));
+        assert!(detail.contains("/tmp/tiffany-worker"));
     }
 
     #[test]

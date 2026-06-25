@@ -7,6 +7,8 @@ All notable changes to this project will be documented in this file.
 - Added `/thread clear <role>` to clear a stuck native Claude/Codex session id
   while preserving the stable Tiffany worker thread and previous Tiffany
   session history.
+- Expanded `orchestrator thread list|show|clear` output with configured worker
+  roles, native resume commands, status hints, and safer reset wording.
 - Improved Claude/Codex `Session ID ... is already in use` diagnostics with
   the new `/thread clear <role>` recovery command.
 - Automatically clears a saved busy native session id and retries the worker
