@@ -542,6 +542,7 @@ async fn tiffany_orchestrator_help_lists_supported_commands() {
         "/role",
         "/roles",
         "/thread",
+        "/history",
         "/doctor",
         "/status",
         "/help",
@@ -583,7 +584,7 @@ async fn tiffany_orchestrator_status_uses_native_orchestration_summary() {
     assert!(rendered.contains("runtime"));
     assert!(rendered.contains("orchestrator"));
     assert!(rendered.contains(
-        "/provider  /role  /roles  /thread  /doctor  /status  /help  /copy  /raw  /diff  /clear  /exit"
+        "/provider  /role  /roles  /thread  /history  /doctor  /status  /help  /copy  /raw  /diff  /clear  /exit"
     ));
     assert!(!rendered.contains("ChatGPT"));
     assert!(!rendered.contains("Reasoning"));
