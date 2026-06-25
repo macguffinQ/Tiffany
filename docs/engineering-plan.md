@@ -23,6 +23,8 @@ storage, roles, providers, and diagnostics.
   `/thread`.
 - Worker session history can be exported from the native TUI with
   `/thread export <role>` for handoff or manual continuation.
+- Orchestration control events are grouped into compact run timeline cells,
+  while worker/tool/stderr output remains visible as waterfall text.
 - `tiffany-loop` checks that the `orchestrator` runtime is launchable before
   entering the native TUI, and reports concrete repair commands when it is not.
 
@@ -39,7 +41,8 @@ storage, roles, providers, and diagnostics.
    - Route simple chat to direct worker answers.
    - Route links, research, diagnostics, and scaffolding to single-worker runs.
    - Reserve planner, critic, and reviewer for implementation work.
-   - Collapse planner/critic/reviewer JSON into compact human summaries.
+   - Collapse planner/critic/reviewer JSON and control events into compact human
+     timeline summaries.
 
 3. **Session continuity**
    - Reuse the same worker thread for the same role.
@@ -56,8 +59,6 @@ storage, roles, providers, and diagnostics.
 
 ## Near-Term Backlog
 
-- Add a compact run timeline cell that groups route, worker, tool calls, and
-  result without hiding raw details from `/raw`.
 - Add a role/provider preset editor that can save a complete planner, critic,
   worker, reviewer profile in one flow.
 - Add upstream sync notes for each pulled Codex UI update.

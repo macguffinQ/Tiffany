@@ -239,6 +239,7 @@ struct BridgeState {
     malformed_stdout: VecDeque<String>,
     final_output: Option<String>,
     worker_metadata: HashMap<String, WorkerMeta>,
+    pending_timeline: Vec<TiffanyProgressEvent>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -964,6 +965,7 @@ async fn run_event_bridge(
 
     let status = child.wait().await?;
     let stderr = stderr_task.await.unwrap_or_default();
+    state.flush_timeline(&app_event_tx);
     if status.success() {
         if let Some(result) = state.final_output.take() {
             app_event_tx.send(AppEvent::TiffanyOrchestratorTurnCaptured {
@@ -2666,6 +2668,13 @@ impl BridgeState {
             return;
         }
 
+        let captured_result = event.role == "orchestrator"
+            && event.status == "done"
+            && self
+                .final_output
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty());
+
         if event.status == "output"
             && let Some(content) = visible.as_deref()
         {
@@ -2688,16 +2697,27 @@ impl BridgeState {
             }
         }
 
-        let captured_result = event.role == "orchestrator"
-            && event.status == "done"
-            && self
-                .final_output
-                .as_deref()
-                .is_some_and(|text| !text.trim().is_empty());
-        emit_event_lines(app_event_tx, &event, visible);
+        if event.status == "output" {
+            self.flush_timeline(app_event_tx);
+            emit_event_lines(app_event_tx, &event, visible);
+        } else {
+            self.pending_timeline.push(event);
+            if should_flush_timeline_now(self.pending_timeline.last().expect("event just pushed")) {
+                self.flush_timeline(app_event_tx);
+            }
+        }
         if captured_result {
+            self.flush_timeline(app_event_tx);
             emit_lines(app_event_tx, vec![memory_capture_line()]);
         }
+    }
+
+    fn flush_timeline(&mut self, app_event_tx: &AppEventSender) {
+        if self.pending_timeline.is_empty() {
+            return;
+        }
+        let events = std::mem::take(&mut self.pending_timeline);
+        emit_lines(app_event_tx, timeline_event_lines(&events));
     }
 
     fn remember_malformed_stdout(&mut self, line: &str) {
@@ -3138,6 +3158,91 @@ fn emit_event_lines(
     lines.extend(event_detail_lines(event));
 
     emit_lines(app_event_tx, lines);
+}
+
+fn should_flush_timeline_now(event: &TiffanyProgressEvent) -> bool {
+    matches!(event.status.as_str(), "failed" | "warning")
+        || (event.role == "orchestrator" && event.status == "done")
+}
+
+fn timeline_event_lines(events: &[TiffanyProgressEvent]) -> Vec<Line<'static>> {
+    if events.len() == 1 {
+        return event_timeline_detail_lines(&events[0]);
+    }
+
+    let mut lines = vec![timeline_header_line(events)];
+    for event in events {
+        for line in event_timeline_detail_lines(event) {
+            lines.push(timeline_body_line(line));
+        }
+    }
+    lines
+}
+
+fn event_timeline_detail_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>> {
+    let mut lines = vec![waterfall_status_line(event)];
+    lines.extend(event_detail_lines(event));
+    lines
+}
+
+fn timeline_header_line(events: &[TiffanyProgressEvent]) -> Line<'static> {
+    let (symbol, color) = timeline_header_symbol(events);
+    let mut spans = vec![
+        Span::styled(
+            symbol,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            "flow",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled("run timeline", Style::default()),
+    ];
+    if let Some(flow) = timeline_flow_label(events) {
+        spans.push(Span::styled(" · ", Style::default().fg(TIFFANY_DARK)));
+        spans.push(Span::styled(flow, Style::default().fg(TIFFANY_SOFT)));
+    }
+    spans.push(Span::styled(" · ", Style::default().fg(TIFFANY_DARK)));
+    spans.push(Span::styled(
+        format!("{} updates", events.len()),
+        Style::default().fg(Color::DarkGray),
+    ));
+    Line::from(spans)
+}
+
+fn timeline_header_symbol(events: &[TiffanyProgressEvent]) -> (&'static str, Color) {
+    if events.iter().any(|event| event.status == "failed") {
+        return ("✗", Color::Red);
+    }
+    if events.iter().any(|event| event.status == "warning") {
+        return ("⚠", Color::Yellow);
+    }
+    if events
+        .last()
+        .is_some_and(|event| matches!(event.status.as_str(), "done" | "ready" | "skipped"))
+    {
+        return ("✓", TIFFANY_BLUE);
+    }
+    ("●", TIFFANY_BLUE)
+}
+
+fn timeline_flow_label(events: &[TiffanyProgressEvent]) -> Option<String> {
+    for event in events {
+        if let Some(flow) = event.flow_steps.as_deref().and_then(nonempty_trimmed) {
+            return Some(flow.to_string());
+        }
+    }
+    None
+}
+
+fn timeline_body_line(line: Line<'static>) -> Line<'static> {
+    let mut spans = vec![Span::styled("  ", Style::default().fg(TIFFANY_DARK))];
+    spans.extend(line.spans);
+    Line::from(spans)
 }
 
 fn output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec<Line<'static>> {
@@ -4904,6 +5009,111 @@ mod tests {
             line_text(&waterfall_status_line(&reviewer)),
             "⚠ review  needs fixes · 87654321 · 2 issue(s)"
         );
+    }
+
+    #[test]
+    fn timeline_groups_control_events_without_hiding_details() {
+        let route = TiffanyProgressEvent {
+            role: "orchestrator".to_string(),
+            status: "running".to_string(),
+            message: "route selected - direct-answer".to_string(),
+            route: Some("direct-answer".to_string()),
+            route_label: Some("direct".to_string()),
+            route_reason_label: Some("chat/explain".to_string()),
+            flow_steps: Some("worker -> answer".to_string()),
+            ..TiffanyProgressEvent::default()
+        };
+        let worker = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "running".to_string(),
+            message: "worker-cc started".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: Some("claude-code".to_string()),
+            model: Some("claude-sonnet-4-6".to_string()),
+            provider: Some("anthropic".to_string()),
+            task_prompt: Some("Current user request:\n你好".to_string()),
+            ..TiffanyProgressEvent::default()
+        };
+        let lines = timeline_event_lines(&[route, worker]);
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert_eq!(
+            line_text(&lines[0]),
+            "● flow  run timeline · worker -> answer · 2 updates"
+        );
+        assert!(text.contains("  ● route  selected · direct · chat/explain · worker -> answer"));
+        assert!(text.contains(
+            "  ● worker  worker-cc started · claude-code · anthropic/claude-sonnet-4-6 · 12345678"
+        ));
+        assert!(text.contains("  task  你好"));
+    }
+
+    #[test]
+    fn timeline_single_event_keeps_original_status_shape() {
+        let event = TiffanyProgressEvent {
+            role: "planner".to_string(),
+            status: "running".to_string(),
+            message: "planning".to_string(),
+            ..TiffanyProgressEvent::default()
+        };
+        let lines = timeline_event_lines(&[event]);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(line_text(&lines[0]), "● step  01 planner  planning");
+    }
+
+    #[test]
+    fn timeline_header_reflects_warning_or_failure() {
+        let warning = TiffanyProgressEvent {
+            role: "critic".to_string(),
+            status: "warning".to_string(),
+            message: "plan needs fixes - 2 issue(s)".to_string(),
+            issues: Some(2),
+            ..TiffanyProgressEvent::default()
+        };
+        let failed = TiffanyProgressEvent {
+            role: "orchestrator".to_string(),
+            status: "failed".to_string(),
+            message: "planner returned no sub_tasks".to_string(),
+            ..TiffanyProgressEvent::default()
+        };
+
+        assert!(
+            line_text(
+                &timeline_event_lines(&[test_event("planner", "running", "planning"), warning,])[0]
+            )
+            .starts_with("⚠ flow")
+        );
+        assert!(
+            line_text(
+                &timeline_event_lines(&[test_event("planner", "running", "planning"), failed,])[0]
+            )
+            .starts_with("✗ flow")
+        );
+    }
+
+    #[test]
+    fn timeline_flushes_immediately_for_warnings_failures_and_done() {
+        assert!(!should_flush_timeline_now(&test_event(
+            "planner", "running", "planning"
+        )));
+        assert!(should_flush_timeline_now(&test_event(
+            "critic",
+            "warning",
+            "plan needs fixes"
+        )));
+        assert!(should_flush_timeline_now(&test_event(
+            "orchestrator",
+            "failed",
+            "planner failed"
+        )));
+        assert!(should_flush_timeline_now(&test_event(
+            "orchestrator",
+            "done",
+            "done"
+        )));
     }
 
     #[test]
