@@ -584,7 +584,7 @@ Troubleshooting first:
 - On macOS, doctor also calls out Xcode beta selections and gives the `xcode-select` command to switch to stable Xcode or Command Line Tools when source builds fail.
 - For model errors, confirm the role points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`. Use `--model <id>` only when binding to an existing internal model id.
 - When a run fails with `model not found`, `模型不存在`, or `[1211]`, the failure summary includes a copyable repair template such as `/roles save worker-codex --provider openai --model-name <api-model> --runtime codex`.
-- When Claude Code reports `Session ID ... is already in use`, run `/thread <role>` to inspect the stored native session and `/thread clear <role>` to start the next run fresh.
+- When Claude Code or Codex CLI reports `Session ID ... is already in use`, Tiffany retries once with a fresh native session. If it still fails, run `/thread <role>` to inspect the stored native session and `/thread clear <role>` to start the next run fresh.
 
 `orchestrator run "..." --ab` runs the task through two configured worker roles, for example `worker-cc` and `worker-codex`. If `--worker <role>` is supplied, that route becomes side A and Tiffany picks another configured worker for side B. The built-in judge prefers a successful side; when both succeed or both fail, it prefers the smaller diff, falling back to session-log size when a diff is unavailable.
 

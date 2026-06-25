@@ -467,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_exec_command_resumes_native_session_after_exec_options() {
+    fn codex_exec_command_resumes_native_session_with_prompt_after_exec_options() {
         let mut cmd = codex_exec_command("codex", "gpt-5.1", std::path::Path::new("/tmp/repo"));
         apply_codex_provider_config(
             &mut cmd,
@@ -479,6 +479,7 @@ mod tests {
             },
         );
         append_codex_resume_args(&mut cmd, Some("123e4567-e89b-42d3-a456-426614174000"));
+        cmd.arg("continue the work");
         let args = cmd
             .as_std()
             .get_args()
@@ -500,6 +501,12 @@ mod tests {
             resume_pos > config_pos,
             "resume must follow provider config overrides"
         );
+        assert_eq!(
+            args.get(resume_pos + 2).map(String::as_str),
+            Some("continue the work"),
+            "prompt must be passed to `codex exec resume <session> <prompt>`"
+        );
+        assert_eq!(args.last().map(String::as_str), Some("continue the work"));
     }
 
     #[test]
