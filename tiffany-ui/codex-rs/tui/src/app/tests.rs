@@ -120,6 +120,16 @@ fn test_absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
 }
 
+#[test]
+fn tiffany_orchestrator_skips_startup_environment_warnings() {
+    assert!(!should_emit_startup_environment_warnings(
+        /*tiffany_orchestrator_mode*/ true
+    ));
+    assert!(should_emit_startup_environment_warnings(
+        /*tiffany_orchestrator_mode*/ false
+    ));
+}
+
 async fn next_thread_settings_updated(
     app_server: &mut AppServerSession,
     thread_id: ThreadId,

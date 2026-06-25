@@ -783,8 +783,10 @@ impl App {
         let startup_started_at = Instant::now();
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        emit_project_config_warnings(&app_event_tx, &config);
-        emit_system_bwrap_warning(&app_event_tx, &config);
+        if should_emit_startup_environment_warnings(tiffany_orchestrator_mode) {
+            emit_project_config_warnings(&app_event_tx, &config);
+            emit_system_bwrap_warning(&app_event_tx, &config);
+        }
         tui.set_notification_settings(
             config.tui_notifications.method,
             config.tui_notifications.condition,
@@ -1389,6 +1391,10 @@ See the Codex keymap documentation for supported actions and examples."
         })?;
         Ok(rendered_area)
     }
+}
+
+fn should_emit_startup_environment_warnings(tiffany_orchestrator_mode: bool) -> bool {
+    !tiffany_orchestrator_mode
 }
 
 impl Drop for App {
