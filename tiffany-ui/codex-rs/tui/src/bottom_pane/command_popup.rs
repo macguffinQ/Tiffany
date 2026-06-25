@@ -647,7 +647,9 @@ mod tests {
             })
             .collect();
 
-        for expected in ["provider", "role", "roles", "doctor", "status", "exit"] {
+        for expected in [
+            "provider", "role", "roles", "thread", "doctor", "status", "exit",
+        ] {
             assert!(
                 cmds.iter().any(|cmd| cmd == expected),
                 "expected '/{expected}' in Tiffany popup, got {cmds:?}"

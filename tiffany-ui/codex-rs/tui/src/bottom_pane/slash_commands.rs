@@ -91,6 +91,7 @@ fn tiffany_orchestrator_command_visible(cmd: SlashCommand) -> bool {
         SlashCommand::Provider
             | SlashCommand::Role
             | SlashCommand::Roles
+            | SlashCommand::Thread
             | SlashCommand::Doctor
             | SlashCommand::Copy
             | SlashCommand::Raw
@@ -146,19 +147,18 @@ pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Op
 }
 
 fn tiffany_native_command_hint() -> &'static str {
-    "Use /provider, /role, /roles, /doctor, /status, /diff, /copy, /raw, or plain chat prompts."
+    "Use /provider, /role, /roles, /thread, /doctor, /status, /diff, /copy, /raw, or plain chat prompts."
 }
 
 fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> {
     let hint = match name {
         "workflow" | "flow" | "process" | "trace" | "queue" | "tests" | "test" | "context"
         | "ctx" | "handoff" | "continue" | "graph" | "acp" | "result" | "final" | "usage"
-        | "thread" | "threads" | "sessions" | "history" | "checkpoint" | "rollback" | "retry"
-        | "cancel" | "o" => {
+        | "sessions" | "history" | "checkpoint" | "rollback" | "retry" | "cancel" | "o" => {
             "This is a legacy terminal chat command; the native Tiffany TUI currently exposes setup and local utility commands only."
         }
         "help" | "h" | "commands" => {
-            "Type / to open the native command menu: /provider, /role, /roles, /doctor, /status, /diff, /copy, /raw."
+            "Type / to open the native command menu: /provider, /role, /roles, /thread, /doctor, /status, /diff, /copy, /raw."
         }
         _ => return None,
     };
@@ -387,6 +387,7 @@ mod tests {
         assert!(commands.contains(&SlashCommand::Provider));
         assert!(commands.contains(&SlashCommand::Role));
         assert!(commands.contains(&SlashCommand::Roles));
+        assert!(commands.contains(&SlashCommand::Thread));
         assert!(commands.contains(&SlashCommand::Doctor));
         assert!(commands.contains(&SlashCommand::Exit));
         assert!(!commands.contains(&SlashCommand::Model));

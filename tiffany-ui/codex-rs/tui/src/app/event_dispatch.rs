@@ -349,6 +349,9 @@ impl App {
             AppEvent::TiffanyOrchestratorDoctorCommand { args } => {
                 self.handle_tiffany_orchestrator_doctor_command(tui, args);
             }
+            AppEvent::TiffanyOrchestratorThreadCommand { args } => {
+                self.handle_tiffany_orchestrator_thread_command(tui, args);
+            }
             AppEvent::RestoreCancelledTurn(prompt) => {
                 self.apply_cancelled_turn_edit(prompt);
             }
@@ -2359,6 +2362,22 @@ impl App {
             return;
         };
         crate::tiffany_orchestrator::spawn_doctor_command(self.app_event_tx.clone(), config, args);
+        tui.frame_requester().schedule_frame();
+    }
+
+    fn handle_tiffany_orchestrator_thread_command(&mut self, tui: &mut tui::Tui, args: String) {
+        let Some(config) = self.tiffany_orchestrator.clone() else {
+            self.insert_history_cell(
+                tui,
+                Box::new(history_cell::PlainHistoryCell::new(vec![
+                    "✗ tiffany-loop orchestrator mode is not active"
+                        .red()
+                        .into(),
+                ])),
+            );
+            return;
+        };
+        crate::tiffany_orchestrator::spawn_thread_command(self.app_event_tx.clone(), config, args);
         tui.frame_requester().schedule_frame();
     }
 

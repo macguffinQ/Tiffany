@@ -47,6 +47,7 @@ const ROLE_USAGE: &str =
     "Usage: /role [<role>|register <role> --model <model-id> --runtime <runtime-id>]";
 const ROLES_USAGE: &str =
     "Usage: /roles [list|show <role>|register <role> --model <model-id> --runtime <runtime-id>]";
+const THREAD_USAGE: &str = "Usage: /thread [list|show <role>|clear <role>]";
 const DOCTOR_USAGE: &str = "Usage: /doctor [run]";
 
 impl ChatWidget {
@@ -186,6 +187,17 @@ impl ChatWidget {
         }
         self.app_event_tx
             .send(AppEvent::TiffanyOrchestratorDoctorCommand { args: args.into() });
+    }
+
+    fn dispatch_tiffany_thread_command(&mut self, args: impl Into<String>) {
+        if !self.tiffany_orchestrator_shell {
+            self.add_error_message(format!(
+                "'/thread' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{THREAD_USAGE}"
+            ));
+            return;
+        }
+        self.app_event_tx
+            .send(AppEvent::TiffanyOrchestratorThreadCommand { args: args.into() });
     }
 
     fn open_tiffany_provider_setup_prompt(&mut self, provider: Option<&str>) {
@@ -398,6 +410,9 @@ impl ChatWidget {
             }
             SlashCommand::Roles => {
                 self.dispatch_tiffany_roles_command("list".to_string());
+            }
+            SlashCommand::Thread => {
+                self.dispatch_tiffany_thread_command("list".to_string());
             }
             SlashCommand::Role => {
                 self.open_tiffany_role_setup_prompt(None);
@@ -984,6 +999,9 @@ impl ChatWidget {
             SlashCommand::Doctor if !trimmed.is_empty() => {
                 self.dispatch_tiffany_doctor_command(args);
             }
+            SlashCommand::Thread if !trimmed.is_empty() => {
+                self.dispatch_tiffany_thread_command(args);
+            }
             SlashCommand::Side | SlashCommand::Btw if !trimmed.is_empty() => {
                 let Some(parent_thread_id) = self.thread_id else {
                     let command = cmd.command();
@@ -1203,6 +1221,7 @@ impl ChatWidget {
             | SlashCommand::Provider
             | SlashCommand::Role
             | SlashCommand::Roles
+            | SlashCommand::Thread
             | SlashCommand::Doctor
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Feedback

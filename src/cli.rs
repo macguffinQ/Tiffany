@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use orchestrator::config::Config;
+use orchestrator::core::session_store::WorkerThread;
 use orchestrator::core::types::{Role, Session, Task, TaskStatus};
 use orchestrator::pipeline::orchestrator::Orchestrator;
 use orchestrator::roles::ab_judge::AbJudge;
@@ -373,6 +374,8 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
         }
 
         crate::Cmd::Roles { action } => handle_roles(config_path, action),
+
+        crate::Cmd::Thread { action } => handle_thread(config_path, action),
 
         crate::Cmd::Status => {
             print_status(config_path)?;
@@ -1870,6 +1873,87 @@ fn handle_roles(config_path: &Path, action: crate::RolesCmd) -> Result<()> {
             no_agent_teams,
         ),
     }
+}
+
+fn handle_thread(config_path: &Path, action: crate::ThreadCmd) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    let store = orchestrator::core::session_store::SessionStore::open(
+        &cfg.behavior.session_log_dir,
+        &cfg.behavior.session_log_dir.join("db.sqlite"),
+    )?;
+
+    match action {
+        crate::ThreadCmd::List => {
+            let threads = store.list_worker_threads()?;
+            println!("Worker threads:");
+            if threads.is_empty() {
+                println!("  (none)");
+            }
+            for thread in threads {
+                println!("  {}", worker_thread_summary(&thread));
+            }
+            println!("\nReset native session: orchestrator thread clear <role>");
+            Ok(())
+        }
+        crate::ThreadCmd::Show { role } => {
+            let Some(thread) = store.worker_thread_by_role(&role)? else {
+                anyhow::bail!("worker thread not found for role '{role}'");
+            };
+            println!("{}", worker_thread_detail(&thread));
+            Ok(())
+        }
+        crate::ThreadCmd::Clear { role } => {
+            let Some(thread) = store.worker_thread_by_role(&role)? else {
+                anyhow::bail!("worker thread not found for role '{role}'");
+            };
+            store.clear_worker_thread_native_session(thread.id)?;
+            println!(
+                "✓ cleared native session for {role}\n  worker_thread: {}\n  previous_native_session: {}",
+                thread.id,
+                thread.native_session_id.as_deref().unwrap_or("(none)")
+            );
+            Ok(())
+        }
+    }
+}
+
+fn worker_thread_summary(thread: &WorkerThread) -> String {
+    format!(
+        "{} · {} · {} · model {} · native {} · last {}",
+        thread.role,
+        thread.runtime,
+        thread.agent,
+        thread.model,
+        thread.native_session_id.as_deref().unwrap_or("(none)"),
+        thread
+            .last_session_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "(none)".to_string())
+    )
+}
+
+fn worker_thread_detail(thread: &WorkerThread) -> String {
+    format!(
+        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  provider: {}\n  model: {}\n  native session: {}\n  last session: {}\n  worktree: {}\n  updated: {}\n\nReset native session: orchestrator thread clear {}",
+        thread.id,
+        thread.role,
+        thread.runtime,
+        thread.agent,
+        thread.provider.as_deref().unwrap_or("(none)"),
+        thread.model,
+        thread.native_session_id.as_deref().unwrap_or("(none)"),
+        thread
+            .last_session_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "(none)".to_string()),
+        thread
+            .worktree_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "(none)".to_string()),
+        thread.updated_at.to_rfc3339(),
+        thread.role
+    )
 }
 
 fn print_roles(config_path: &Path, selected_role: Option<&str>) -> Result<()> {

@@ -173,6 +173,13 @@ enum Cmd {
         action: RolesCmd,
     },
 
+    /// Inspect and reset stable worker/native CLI sessions
+    #[command(alias = "threads")]
+    Thread {
+        #[command(subcommand)]
+        action: ThreadCmd,
+    },
+
     /// Show orchestrator status
     Status,
 
@@ -418,6 +425,24 @@ enum RolesCmd {
         /// Disable agent teams for this role
         #[arg(long)]
         no_agent_teams: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ThreadCmd {
+    /// List stable worker threads
+    List,
+
+    /// Show one stable worker thread by role
+    Show {
+        /// Role name, for example worker-cc
+        role: String,
+    },
+
+    /// Clear the stored native CLI session id for a role
+    Clear {
+        /// Role name, for example worker-cc
+        role: String,
     },
 }
 
@@ -770,5 +795,24 @@ mod tests {
             Cmd::Doctor { format } => assert_eq!(format, DoctorFormat::Json),
             _ => panic!("unexpected doctor command"),
         }
+    }
+
+    #[test]
+    fn thread_commands_parse() {
+        let cli = Cli::parse_from(["orchestrator", "thread", "clear", "worker-cc"]);
+        match cli.cmd {
+            Cmd::Thread {
+                action: ThreadCmd::Clear { role },
+            } => assert_eq!(role, "worker-cc"),
+            _ => panic!("unexpected thread command"),
+        }
+
+        let cli = Cli::parse_from(["orchestrator", "threads", "list"]);
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Thread {
+                action: ThreadCmd::List
+            }
+        ));
     }
 }

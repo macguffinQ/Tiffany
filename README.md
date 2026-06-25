@@ -555,6 +555,7 @@ Default native TUI slash commands:
 - `/provider` - open provider setup; supports `list`, `edit <provider>`, `delete <provider>`, `env <provider> <ENV>`, `key <provider> <value>`, and `endpoint <provider> <url>`
 - `/role` - open the role-registration form or register one role with `register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`
 - `/roles` - inspect role wiring, select the active worker route, or save role/provider/model/runtime bindings
+- `/thread` - inspect worker/native CLI session reuse; `/thread clear <role>` resets a stuck native session id
 - `/doctor` - diagnose config, runtimes, API keys, role wiring, local tools, and install surface
 - `/status` - show current session/config status
 - `/diff` - show current git changes
@@ -582,7 +583,8 @@ Troubleshooting first:
 - Use `orchestrator doctor --format json` from scripts, CI, or UI bridges that need stable `status`, `issue_count`, `issue_summary`, `next_steps`, and diagnostic lines without parsing human text.
 - On macOS, doctor also calls out Xcode beta selections and gives the `xcode-select` command to switch to stable Xcode or Command Line Tools when source builds fail.
 - For model errors, confirm the role points to the intended provider API model name: `/role <role>` or `orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`. Use `--model <id>` only when binding to an existing internal model id.
-- When a run fails with `model not found`, `模型不存在`, or `[1211]`, `/process` and the failure summary include a copyable repair template such as `/roles save worker-codex --provider openai --model-name <api-model> --runtime codex`.
+- When a run fails with `model not found`, `模型不存在`, or `[1211]`, the failure summary includes a copyable repair template such as `/roles save worker-codex --provider openai --model-name <api-model> --runtime codex`.
+- When Claude Code reports `Session ID ... is already in use`, run `/thread <role>` to inspect the stored native session and `/thread clear <role>` to start the next run fresh.
 
 `orchestrator run "..." --ab` runs the task through two configured worker roles, for example `worker-cc` and `worker-codex`. If `--worker <role>` is supplied, that route becomes side A and Tiffany picks another configured worker for side B. The built-in judge prefers a successful side; when both succeed or both fail, it prefers the smaller diff, falling back to session-log size when a diff is unavailable.
 
@@ -591,8 +593,7 @@ Input behavior:
 - Press `Enter` to send.
 - In `tiffany-loop "..."`, pressing `Enter` starts another orchestrator run from the same tiffany-loop TUI session.
 - While a run is active, normal messages are queued at the bottom, merged into the next batch, and run together when the current task finishes.
-- The bottom queue previews the next 4 items; `/queue show` prints the full queued batch.
-- Use `/queue pause` to hold queued messages after the current run; `/queue resume` or `/queue run` starts them when idle.
+- The bottom queue previews the next 4 items. The native TUI drains queued follow-ups automatically when the current run finishes.
 - Use `Up`/`Down` to recall prompt history.
 - Type `/` to open the command menu. Use `Up`/`Down` to select and `Enter` to confirm; continuing to type filters the menu.
 - Use `Ctrl+C` to cancel an active run; with no active run, it exits.

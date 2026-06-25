@@ -182,6 +182,56 @@ async fn slash_roles_dispatches_to_tiffany_orchestrator() {
 }
 
 #[tokio::test]
+async fn slash_thread_bare_dispatches_list_to_tiffany_orchestrator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.handle_slash_command_dispatch(SlashCommand::Thread);
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorThreadCommand { args }) => {
+            assert_eq!(args, "list");
+        }
+        other => panic!("expected TiffanyOrchestratorThreadCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_thread_inline_args_dispatch_to_tiffany_orchestrator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Thread,
+        "clear worker-cc".to_string(),
+        Vec::new(),
+    );
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorThreadCommand { args }) => {
+            assert_eq!(args, "clear worker-cc");
+        }
+        other => panic!("expected TiffanyOrchestratorThreadCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_thread_guides_when_not_in_orchestrator_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_slash_command_dispatch(SlashCommand::Thread);
+
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("tiffany-loop orchestrator mode"));
+            assert!(rendered.contains("Usage: /thread [list|show <role>|clear <role>]"));
+        }
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_doctor_dispatches_to_tiffany_orchestrator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);

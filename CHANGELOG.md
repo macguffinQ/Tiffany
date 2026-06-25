@@ -19,6 +19,9 @@ All notable changes to this project will be documented in this file.
 - Clarified README command docs so the default native Tiffany TUI only lists
   currently wired commands, with legacy terminal chat commands called out
   separately.
+- Added the native Tiffany `/thread` command and the matching
+  `orchestrator thread list|show|clear` CLI surface so Claude Code native
+  session recovery works without switching to the legacy terminal chat.
 
 ## [0.1.33] - 2026-06-24
 

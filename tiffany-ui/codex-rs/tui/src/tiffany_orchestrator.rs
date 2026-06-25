@@ -256,12 +256,51 @@ pub(crate) fn spawn_doctor_command(
     });
 }
 
+pub(crate) fn spawn_thread_command(
+    app_event_tx: AppEventSender,
+    config: TiffanyOrchestratorConfig,
+    args: String,
+) {
+    tokio::spawn(async move {
+        let command_args = match thread_command_args(&args) {
+            Ok(command_args) => command_args,
+            Err(err) => {
+                emit_lines(
+                    &app_event_tx,
+                    vec![
+                        status_line("✗", Color::Red, "thread", &err),
+                        body_line("Usage: /thread [list|show <role>|clear <role>]", true),
+                    ],
+                );
+                return;
+            }
+        };
+
+        match run_orchestrator_command(&config, &command_args).await {
+            Ok(output) => emit_command_output(&app_event_tx, "thread", &command_args, output),
+            Err(err) => emit_lines(
+                &app_event_tx,
+                spawn_error_lines(
+                    "thread",
+                    "✗",
+                    Color::Red,
+                    &format!("failed to run thread command - {err}"),
+                    &err.to_string(),
+                ),
+            ),
+        }
+    });
+}
+
 pub(crate) fn idle_intro_lines() -> Vec<Line<'static>> {
     vec![
         brand_line("orchestration shell"),
         idle_status_line(),
         workflow_line(),
-        command_hint_line("setup", &["/provider", "/role", "/roles", "/doctor"]),
+        command_hint_line(
+            "setup",
+            &["/provider", "/role", "/roles", "/thread", "/doctor"],
+        ),
         command_hint_line("tools", &["/status", "/diff", "/copy", "/raw"]),
     ]
 }
@@ -524,6 +563,42 @@ fn doctor_command_args(args: &str) -> Result<Vec<String>, String> {
         [arg] if matches!(arg.as_str(), "run" | "check" | "now") => Ok(vec!["doctor".to_string()]),
         [arg] => Err(format!("unknown /doctor command '{arg}'")),
         _ => Err("doctor accepts at most one argument".to_string()),
+    }
+}
+
+fn thread_command_args(args: &str) -> Result<Vec<String>, String> {
+    let parts = args
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        [] => Ok(vec!["thread".to_string(), "list".to_string()]),
+        [cmd] if matches!(cmd.as_str(), "list" | "ls" | "show" | "status") => {
+            Ok(vec!["thread".to_string(), "list".to_string()])
+        }
+        [role] => Ok(vec![
+            "thread".to_string(),
+            "show".to_string(),
+            role.to_string(),
+        ]),
+        [cmd, role]
+            if matches!(
+                cmd.as_str(),
+                "show" | "status" | "clear" | "reset" | "fresh"
+            ) =>
+        {
+            let subcommand = if matches!(cmd.as_str(), "clear" | "reset" | "fresh") {
+                "clear"
+            } else {
+                "show"
+            };
+            Ok(vec![
+                "thread".to_string(),
+                subcommand.to_string(),
+                role.to_string(),
+            ])
+        }
+        [cmd, ..] => Err(format!("unknown /thread command '{cmd}'")),
     }
 }
 
@@ -2834,7 +2909,7 @@ mod tests {
         assert!(text.contains("status ready"));
         assert!(text.contains("flow  direct / single / full  →  selected per prompt"));
         assert!(!text.contains("status ready\nflow  planner → critic"));
-        assert!(text.contains("setup  /provider  /role  /roles  /doctor"));
+        assert!(text.contains("setup  /provider  /role  /roles  /thread  /doctor"));
         assert!(text.contains("tools  /status  /diff  /copy  /raw"));
         assert_eq!(lines[0].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[0].spans[2].style.fg, Some(TIFFANY_BLUE));
@@ -2842,6 +2917,32 @@ mod tests {
         assert_eq!(lines[2].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[3].spans[2].style.fg, Some(TIFFANY_SOFT));
         assert_eq!(lines[4].spans[2].style.fg, Some(TIFFANY_SOFT));
+    }
+
+    #[test]
+    fn thread_command_args_maps_native_tui_shortcuts() {
+        assert_eq!(thread_command_args("").unwrap(), strings(&["thread", "list"]));
+        assert_eq!(
+            thread_command_args("list").unwrap(),
+            strings(&["thread", "list"])
+        );
+        assert_eq!(
+            thread_command_args("worker-cc").unwrap(),
+            strings(&["thread", "show", "worker-cc"])
+        );
+        assert_eq!(
+            thread_command_args("status worker-cc").unwrap(),
+            strings(&["thread", "show", "worker-cc"])
+        );
+        assert_eq!(
+            thread_command_args("clear worker-cc").unwrap(),
+            strings(&["thread", "clear", "worker-cc"])
+        );
+        assert_eq!(
+            thread_command_args("fresh worker-cc").unwrap(),
+            strings(&["thread", "clear", "worker-cc"])
+        );
+        assert!(thread_command_args("clear worker-cc extra").is_err());
     }
 
     #[test]
