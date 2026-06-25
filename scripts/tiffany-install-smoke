@@ -221,6 +221,10 @@ assert_log_contains "$log" "orchestrator"
 log="$(run_log tiffany-alias-help "$tiffany_alias_bin" --help)"
 assert_log_contains "$log" "Tiffany Loop"
 
+log="$(run_log tiffany-alias-orchestrator-help "$tiffany_alias_bin" orchestrator --help)"
+assert_log_contains "$log" "--orchestrator-config"
+assert_log_contains "$log" "--worker"
+
 log="$(run_log tiffany-orchestrator-help "$tiffany_bin" orchestrator --help)"
 assert_log_contains "$log" "--orchestrator-config"
 assert_log_contains "$log" "--worker"

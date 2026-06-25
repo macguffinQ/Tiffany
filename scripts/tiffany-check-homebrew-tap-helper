@@ -80,7 +80,9 @@ assert_contains 'brew tap example/tools'
 assert_contains 'brew reinstall example/tools/tiffany-loop'
 assert_contains 'tiffany-loop is the primary command'
 assert_contains 'assert_match "orchestrator", shell_output("#{bin}/orchestrator --help")'
+assert_contains 'assert_match "Tiffany Loop", shell_output("#{bin}/tiffany --help 2>/dev/null")'
 assert_contains 'assert_match "orchestrator", shell_output("#{bin}/tiffany-loop orchestrator --help 2>/dev/null")'
+assert_contains 'assert_match "orchestrator", shell_output("#{bin}/tiffany orchestrator --help 2>/dev/null")'
 assert_contains 'assert_match "orchestrator status", shell_output("#{bin}/tiffany-loop status --help 2>/dev/null")'
 
 if command -v ruby >/dev/null 2>&1; then
