@@ -135,7 +135,7 @@ impl SlashCommand {
             SlashCommand::Role => "register one tiffany-loop orchestrator role",
             SlashCommand::Roles => "inspect or register tiffany-loop orchestrator roles",
             SlashCommand::Thread => "inspect or clear stable worker thread sessions",
-            SlashCommand::History => "inspect native Tiffany conversation history",
+            SlashCommand::History => "inspect or export native Tiffany conversation history",
             SlashCommand::Doctor => "diagnose tiffany-loop orchestrator setup",
             SlashCommand::Help => "show Tiffany orchestrator commands",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",

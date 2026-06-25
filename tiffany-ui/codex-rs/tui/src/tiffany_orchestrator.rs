@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::process::Stdio;
 use std::time::SystemTime;
@@ -949,17 +950,22 @@ pub(crate) fn load_native_memory_turns(
 }
 
 pub(crate) fn native_history_lines(codex_home: &Path, cwd: &Path, args: &str) -> Vec<Line<'static>> {
-    let opts = match NativeHistoryOptions::parse(args) {
-        Ok(opts) => opts,
+    let command = match NativeHistoryCommand::parse(args) {
+        Ok(command) => command,
         Err(err) => {
             return vec![
                 status_line("✗", Color::Red, "history", &err),
-                body_line("Usage: /history [last|full|<count>]", true),
+                body_line("Usage: /history [last|full|<count>|export [--out path]]", true),
             ];
         }
     };
     match load_native_chat_conversation(codex_home, cwd) {
-        Ok(Some(conversation)) => native_history_conversation_lines(&conversation, opts),
+        Ok(Some(conversation)) => match command {
+            NativeHistoryCommand::Show(opts) => native_history_conversation_lines(&conversation, opts),
+            NativeHistoryCommand::Export { out } => {
+                native_history_export_lines(codex_home, cwd, &conversation, out)
+            }
+        },
         Ok(None) => vec![
             status_line(
                 "⚠",
@@ -1028,31 +1034,44 @@ struct NativeHistoryOptions {
     event_limit_per_turn: usize,
 }
 
-impl NativeHistoryOptions {
+#[derive(Clone, Debug)]
+enum NativeHistoryCommand {
+    Show(NativeHistoryOptions),
+    Export { out: Option<PathBuf> },
+}
+
+impl NativeHistoryCommand {
     fn parse(args: &str) -> Result<Self, String> {
-        let trimmed = args.trim();
-        if trimmed.is_empty() || matches!(trimmed, "last" | "summary") {
-            return Ok(Self {
+        let parts = args.split_whitespace().collect::<Vec<_>>();
+        match parts.as_slice() {
+            [] | ["last"] | ["summary"] => Ok(Self::Show(NativeHistoryOptions {
                 turn_limit: 5,
                 event_limit_per_turn: 6,
-            });
-        }
-        if trimmed == "full" || trimmed == "all" {
-            return Ok(Self {
+            })),
+            ["full"] | ["all"] => Ok(Self::Show(NativeHistoryOptions {
                 turn_limit: 10,
                 event_limit_per_turn: 20,
-            });
-        }
-        if let Ok(count) = trimmed.parse::<usize>() {
-            if count == 0 {
-                return Err("history count must be greater than zero".to_string());
+            })),
+            [count] if count.parse::<usize>().is_ok() => {
+                let count = count.parse::<usize>().unwrap_or_default();
+                if count == 0 {
+                    return Err("history count must be greater than zero".to_string());
+                }
+                Ok(Self::Show(NativeHistoryOptions {
+                    turn_limit: count.min(50),
+                    event_limit_per_turn: 10,
+                }))
             }
-            return Ok(Self {
-                turn_limit: count.min(50),
-                event_limit_per_turn: 10,
-            });
+            ["export"] => Ok(Self::Export { out: None }),
+            ["export", "--out" | "-o", path] => Ok(Self::Export {
+                out: Some(PathBuf::from(path)),
+            }),
+            ["export", flag, ..] if matches!(*flag, "--out" | "-o") => {
+                Err("history export --out needs a file path".to_string())
+            }
+            ["export", flag, ..] => Err(format!("unknown /history export option '{flag}'")),
+            [unknown, ..] => Err(format!("unknown /history option '{unknown}'")),
         }
-        Err(format!("unknown /history option '{trimmed}'"))
     }
 }
 
@@ -1109,6 +1128,114 @@ fn native_history_conversation_lines(
     lines.push(next_line("/history full", "show more native process events"));
     lines.push(next_line("/thread <role>", "inspect native CLI resume command"));
     lines
+}
+
+fn native_history_export_lines(
+    codex_home: &Path,
+    cwd: &Path,
+    conversation: &TiffanyNativeChatConversation,
+    out: Option<PathBuf>,
+) -> Vec<Line<'static>> {
+    let path = out.unwrap_or_else(|| default_native_history_export_path(codex_home, cwd));
+    let body = render_native_history_markdown(conversation);
+    if let Some(parent) = path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        return vec![
+            status_line("✗", Color::Red, "history", "could not create export directory"),
+            body_line(&format!("{err:#}"), true),
+        ];
+    }
+    match std::fs::write(&path, body.as_bytes()) {
+        Ok(()) => vec![
+            status_line(
+                "✓",
+                TIFFANY_BLUE,
+                "history",
+                &format!("exported {} turn(s)", conversation.turns.len()),
+            ),
+            thread_meta_line("target", &path.display().to_string()),
+            thread_meta_line("bytes", &body.len().to_string()),
+            next_line("open export", &path.display().to_string()),
+        ],
+        Err(err) => vec![
+            status_line("✗", Color::Red, "history", "could not write export"),
+            body_line(&format!("{err:#}"), true),
+        ],
+    }
+}
+
+fn default_native_history_export_path(codex_home: &Path, cwd: &Path) -> PathBuf {
+    codex_home
+        .join("tiffany-orchestrator")
+        .join("history-exports")
+        .join(format!("{}.md", native_conversation_id(&cwd_key(cwd))))
+}
+
+fn render_native_history_markdown(conversation: &TiffanyNativeChatConversation) -> String {
+    let mut out = String::new();
+    out.push_str("# Tiffany Native Conversation History\n\n");
+    out.push_str(&format!("- Conversation: `{}`\n", conversation.id));
+    out.push_str(&format!("- CWD: `{}`\n", conversation.cwd));
+    out.push_str(&format!("- Turns: {}\n", conversation.turns.len()));
+    out.push_str(&format!("- Created: {}\n", conversation.created_at_unix));
+    out.push_str(&format!("- Updated: {}\n\n", conversation.updated_at_unix));
+
+    for (idx, turn) in conversation.turns.iter().enumerate() {
+        out.push_str(&format!("## Turn {}\n\n", idx + 1));
+        out.push_str("### User\n\n");
+        out.push_str(turn.user_prompt.trim());
+        out.push_str("\n\n### Assistant Result\n\n");
+        out.push_str(turn.result.trim());
+        out.push_str("\n\n### Native Events\n\n");
+        if turn.events.is_empty() {
+            out.push_str("_No native events captured._\n\n");
+            continue;
+        }
+        for event in &turn.events {
+            out.push_str(&format!(
+                "- **{} {}**",
+                status_glyph(&event.status),
+                markdown_escape_inline(&event.title)
+            ));
+            let meta = native_event_markdown_meta(event);
+            if !meta.is_empty() {
+                out.push_str(&format!("  \n  {}", meta.join(" · ")));
+            }
+            out.push('\n');
+            if let Some(content) = event.content.as_deref().and_then(nonempty_trimmed) {
+                out.push_str("\n```text\n");
+                out.push_str(content.trim_end());
+                out.push_str("\n```\n");
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn native_event_markdown_meta(event: &TiffanyNativeChatEvent) -> Vec<String> {
+    let mut meta = Vec::new();
+    if let Some(role) = event.worker_role.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("role `{}`", markdown_escape_inline(role)));
+    }
+    if let Some(agent) = event.agent.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("agent `{}`", markdown_escape_inline(agent)));
+    }
+    if let Some(provider) = event.provider.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("provider `{}`", markdown_escape_inline(provider)));
+    }
+    if let Some(model) = event.model.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("model `{}`", markdown_escape_inline(model)));
+    }
+    if let Some(native) = event.native_session_id.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("native `{}`", markdown_escape_inline(native)));
+    }
+    meta
+}
+
+fn markdown_escape_inline(value: &str) -> String {
+    value.replace('`', "\\`")
 }
 
 fn append_native_history_event_lines(
@@ -5254,6 +5381,52 @@ mod tests {
     }
 
     #[test]
+    fn native_history_export_writes_markdown() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let out = home.path().join("handoff.md");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "写测试".into(),
+                result: "测试已通过".into(),
+            },
+            vec![TiffanyNativeChatEvent {
+                role: "worker".into(),
+                status: "output".into(),
+                title: "worker tool result · worker-cc · claude-code".into(),
+                content: Some("cargo test -q\n\nok".into()),
+                agent: Some("claude-code".into()),
+                worker_role: Some("worker-cc".into()),
+                model: Some("claude-sonnet-4-6".into()),
+                provider: Some("anthropic".into()),
+                task_id: Some("abc12345".into()),
+                native_session_id: Some("native-1".into()),
+            }],
+        )
+        .expect("append");
+
+        let lines = native_history_lines(
+            home.path(),
+            cwd.path(),
+            &format!("export --out {}", out.display()),
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("history  exported 1 turn(s)"));
+        assert!(text.contains(out.to_string_lossy().as_ref()));
+
+        let markdown = std::fs::read_to_string(&out).expect("export body");
+        assert!(markdown.contains("# Tiffany Native Conversation History"));
+        assert!(markdown.contains("## Turn 1"));
+        assert!(markdown.contains("写测试"));
+        assert!(markdown.contains("测试已通过"));
+        assert!(markdown.contains("worker tool result"));
+        assert!(markdown.contains("```text\ncargo test -q"));
+    }
+
+    #[test]
     fn native_history_lines_report_empty_and_bad_args() {
         let home = tempfile::tempdir().expect("home");
         let cwd = tempfile::tempdir().expect("cwd");
@@ -5265,7 +5438,7 @@ mod tests {
         let bad = native_history_lines(home.path(), cwd.path(), "wat");
         let bad_text = bad.iter().map(line_text).collect::<Vec<_>>().join("\n");
         assert!(bad_text.contains("unknown /history option 'wat'"));
-        assert!(bad_text.contains("Usage: /history [last|full|<count>]"));
+        assert!(bad_text.contains("Usage: /history [last|full|<count>|export [--out path]]"));
     }
 
     #[test]
