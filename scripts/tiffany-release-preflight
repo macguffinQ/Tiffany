@@ -229,6 +229,12 @@ step "tiffany-loop orchestrator targeted tests"
 step "tiffany slash command targeted tests"
 (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" test -p codex-tui slash_commands)
 
+step "tiffany update action targeted tests"
+(cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" test -p codex-tui update_action)
+
+step "tiffany runtime update guard targeted tests"
+(cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" test -p codex-tui tiffany_runtime_marker_disables_upstream_update_checks)
+
 if [[ "$mode" == "full" ]]; then
   step "tiffany dist preflight"
   "$repo_dir/scripts/tiffany-check" --dist

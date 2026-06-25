@@ -1,4 +1,5 @@
-#![cfg(not(debug_assertions))]
+#![cfg(any(not(debug_assertions), test))]
+#![cfg_attr(test, allow(dead_code))]
 
 use crate::history_cell::padded_emoji;
 use crate::key_hint;
@@ -107,10 +108,24 @@ impl UpdatePromptScreen {
         latest_version: String,
         update_action: UpdateAction,
     ) -> Self {
+        Self::new_with_current_version(
+            request_frame,
+            latest_version,
+            update_action,
+            env!("CARGO_PKG_VERSION").to_string(),
+        )
+    }
+
+    fn new_with_current_version(
+        request_frame: FrameRequester,
+        latest_version: String,
+        update_action: UpdateAction,
+        current_version: String,
+    ) -> Self {
         Self {
             request_frame,
             latest_version,
-            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            current_version,
             update_action,
             highlighted: UpdateSelection::UpdateNow,
             selection: None,
@@ -250,10 +265,11 @@ mod tests {
     use ratatui::Terminal;
 
     fn new_prompt() -> UpdatePromptScreen {
-        UpdatePromptScreen::new(
+        UpdatePromptScreen::new_with_current_version(
             FrameRequester::test_dummy(),
             "9.9.9".into(),
             UpdateAction::NpmGlobalLatest,
+            "0.1.18".into(),
         )
     }
 
@@ -264,7 +280,14 @@ mod tests {
         terminal
             .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
             .expect("render update prompt");
-        insta::assert_snapshot!("update_prompt_modal", terminal.backend());
+        let rendered = terminal
+            .backend()
+            .to_string()
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!("update_prompt_modal", rendered);
     }
 
     #[test]
