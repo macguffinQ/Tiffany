@@ -362,10 +362,29 @@ async fn tiffany_orchestrator_help_lists_supported_commands() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(rendered.contains("Tiffany orchestrator commands:"));
-    assert!(rendered.contains("/provider"));
-    assert!(rendered.contains("/role"));
-    assert!(rendered.contains("/thread"));
-    assert!(rendered.contains("/doctor"));
+    let expected = [
+        "/provider",
+        "/role",
+        "/roles",
+        "/thread",
+        "/doctor",
+        "/status",
+        "/help",
+        "/copy",
+        "/raw",
+        "/diff",
+        "/clear",
+        "/exit",
+    ];
+    for command in expected {
+        assert!(
+            rendered.contains(command),
+            "expected {command} in Tiffany help, got {rendered:?}"
+        );
+    }
+    assert!(!rendered.contains("/quit"));
+    assert!(!rendered.contains("/model"));
+    assert!(!rendered.contains("/permissions"));
     assert!(!rendered.contains("not available in Tiffany orchestrator mode"));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }

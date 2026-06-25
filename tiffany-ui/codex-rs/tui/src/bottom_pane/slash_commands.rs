@@ -67,6 +67,22 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) tiffany_orchestrator_shell: bool,
 }
 
+pub(crate) const TIFFANY_ORCHESTRATOR_COMMANDS: &[SlashCommand] = &[
+    SlashCommand::Provider,
+    SlashCommand::Role,
+    SlashCommand::Roles,
+    SlashCommand::Thread,
+    SlashCommand::Doctor,
+    SlashCommand::Status,
+    SlashCommand::Help,
+    SlashCommand::Copy,
+    SlashCommand::Raw,
+    SlashCommand::Diff,
+    SlashCommand::Clear,
+    SlashCommand::Quit,
+    SlashCommand::Exit,
+];
+
 /// Return the built-ins that should be visible/usable for the current input.
 pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static str, SlashCommand)> {
     let commands = if flags.tiffany_orchestrator_shell {
@@ -92,43 +108,15 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
 }
 
 fn tiffany_orchestrator_commands() -> Vec<(&'static str, SlashCommand)> {
-    [
-        SlashCommand::Provider,
-        SlashCommand::Role,
-        SlashCommand::Roles,
-        SlashCommand::Thread,
-        SlashCommand::Doctor,
-        SlashCommand::Status,
-        SlashCommand::Help,
-        SlashCommand::Copy,
-        SlashCommand::Raw,
-        SlashCommand::Diff,
-        SlashCommand::Clear,
-        SlashCommand::Quit,
-        SlashCommand::Exit,
-    ]
-    .into_iter()
-    .map(|cmd| (cmd.command(), cmd))
-    .collect()
+    TIFFANY_ORCHESTRATOR_COMMANDS
+        .iter()
+        .copied()
+        .map(|cmd| (cmd.command(), cmd))
+        .collect()
 }
 
 fn tiffany_orchestrator_command_visible(cmd: SlashCommand) -> bool {
-    matches!(
-        cmd,
-        SlashCommand::Provider
-            | SlashCommand::Role
-            | SlashCommand::Roles
-            | SlashCommand::Thread
-            | SlashCommand::Doctor
-            | SlashCommand::Copy
-            | SlashCommand::Raw
-            | SlashCommand::Diff
-            | SlashCommand::Status
-            | SlashCommand::Help
-            | SlashCommand::Clear
-            | SlashCommand::Quit
-            | SlashCommand::Exit
-    )
+    TIFFANY_ORCHESTRATOR_COMMANDS.contains(&cmd)
 }
 
 pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Option<String> {
@@ -158,9 +146,15 @@ pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Op
                 "Tiffany uses provider settings instead of account login; configure providers with /provider."
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
-                "Use /role and /roles to register or select Tiffany worker roles."
+                "Use /role and /roles to register or inspect Tiffany worker roles."
             }
-            _ => tiffany_native_command_hint(),
+            _ => {
+                return Some(format!(
+                    "'/{}' is not available in Tiffany orchestrator mode. {}",
+                    cmd.command(),
+                    tiffany_native_command_hint()
+                ));
+            }
         };
         (cmd.command(), hint)
     } else if let Some(hint) = tiffany_orchestrator_legacy_command_hint(name) {
@@ -174,8 +168,51 @@ pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Op
     ))
 }
 
-fn tiffany_native_command_hint() -> &'static str {
-    "Use /provider, /role, /roles, /thread, /doctor, /status, /diff, /copy, /raw, or plain chat prompts."
+fn tiffany_native_command_hint() -> String {
+    let commands = TIFFANY_ORCHESTRATOR_COMMANDS
+        .iter()
+        .copied()
+        .filter(|cmd| *cmd != SlashCommand::Quit)
+        .map(|cmd| format!("/{}", cmd.command()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Use {commands}, or plain chat prompts.")
+}
+
+pub(crate) fn tiffany_orchestrator_help_text() -> String {
+    let mut text = String::from("Tiffany orchestrator commands:");
+    for cmd in TIFFANY_ORCHESTRATOR_COMMANDS
+        .iter()
+        .copied()
+        .filter(|cmd| *cmd != SlashCommand::Quit)
+    {
+        text.push('\n');
+        text.push_str(&format!(
+            "/{:<10} {}",
+            cmd.command(),
+            tiffany_orchestrator_help_description(cmd)
+        ));
+    }
+    text
+}
+
+fn tiffany_orchestrator_help_description(cmd: SlashCommand) -> &'static str {
+    match cmd {
+        SlashCommand::Provider => "configure providers and API keys",
+        SlashCommand::Role => "register one role with provider, model, and runtime",
+        SlashCommand::Roles => "inspect registered roles",
+        SlashCommand::Thread => "inspect or clear stable worker sessions",
+        SlashCommand::Doctor => "diagnose setup",
+        SlashCommand::Status => "show Tiffany orchestration status",
+        SlashCommand::Help => "show this command list",
+        SlashCommand::Copy => "copy the last assistant answer",
+        SlashCommand::Raw => "toggle raw scrollback for native selection",
+        SlashCommand::Diff => "show git diff",
+        SlashCommand::Clear => "clear the visible UI",
+        SlashCommand::Exit => "exit tiffany-loop",
+        SlashCommand::Quit => "alias for /exit",
+        _ => "not available in Tiffany orchestrator mode",
+    }
 }
 
 fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> {
@@ -482,6 +519,30 @@ mod tests {
         );
         assert!(tiffany_orchestrator_unsupported_command_message("provider").is_none());
         assert!(tiffany_orchestrator_unsupported_command_message("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn tiffany_orchestrator_help_matches_visible_commands() {
+        let commands = builtins_for_input(BuiltinCommandFlags {
+            tiffany_orchestrator_shell: true,
+            ..all_enabled_flags()
+        })
+        .into_iter()
+        .map(|(_, command)| command)
+        .filter(|command| *command != SlashCommand::Quit)
+        .collect::<Vec<_>>();
+        let help = tiffany_orchestrator_help_text();
+
+        for command in commands {
+            assert!(
+                help.contains(&format!("/{}", command.command())),
+                "expected /{} in Tiffany help: {help}",
+                command.command()
+            );
+        }
+        assert!(!help.contains("/quit"));
+        assert!(!help.contains("/model"));
+        assert!(!help.contains("/permissions"));
     }
 
     #[test]

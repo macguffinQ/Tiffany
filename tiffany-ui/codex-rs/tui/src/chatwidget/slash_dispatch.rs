@@ -16,6 +16,7 @@ use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
+use crate::bottom_pane::slash_commands::tiffany_orchestrator_help_text;
 use crate::bottom_pane::slash_commands::tiffany_orchestrator_unsupported_command_message;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
@@ -49,20 +50,6 @@ const ROLES_USAGE: &str =
     "Usage: /roles [list|show <role>|register <role> --model <model-id> --runtime <runtime-id>]";
 const THREAD_USAGE: &str = "Usage: /thread [list|show <role>|clear <role>]";
 const DOCTOR_USAGE: &str = "Usage: /doctor [run]";
-const TIFFANY_HELP: &str = "\
-Tiffany orchestrator commands:
-/provider   configure providers and API keys
-/role       register one role with provider/model/runtime
-/roles      inspect registered roles
-/thread     inspect or clear stable worker sessions
-/doctor     diagnose setup
-/status     show Tiffany orchestration status
-/copy       copy the last assistant answer
-/raw        toggle raw scrollback for native selection
-/diff       show git diff
-/clear      clear the visible UI
-/exit       exit tiffany-loop";
-
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -437,7 +424,7 @@ impl ChatWidget {
                 self.dispatch_tiffany_doctor_command("");
             }
             SlashCommand::Help => {
-                self.add_info_message(TIFFANY_HELP.to_string(), /*hint*/ None);
+                self.add_info_message(tiffany_orchestrator_help_text(), /*hint*/ None);
             }
             SlashCommand::Side | SlashCommand::Btw => {
                 self.request_empty_side_conversation(cmd);
