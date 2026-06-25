@@ -167,6 +167,8 @@ pub(crate) struct TiffanyNativeChatEvent {
     pub(crate) model: Option<String>,
     pub(crate) provider: Option<String>,
     pub(crate) task_id: Option<String>,
+    #[serde(default)]
+    pub(crate) worker_thread_id: Option<String>,
     pub(crate) native_session_id: Option<String>,
 }
 
@@ -1343,6 +1345,13 @@ fn native_event_markdown_meta(event: &TiffanyNativeChatEvent) -> Vec<String> {
     if let Some(model) = event.model.as_deref().and_then(nonempty_trimmed) {
         meta.push(format!("model `{}`", markdown_escape_inline(model)));
     }
+    if let Some(thread) = event
+        .worker_thread_id
+        .as_deref()
+        .and_then(nonempty_trimmed)
+    {
+        meta.push(format!("thread `{}`", markdown_escape_inline(thread)));
+    }
     if let Some(native) = event.native_session_id.as_deref().and_then(nonempty_trimmed) {
         meta.push(format!("native `{}`", markdown_escape_inline(native)));
     }
@@ -1367,6 +1376,14 @@ fn append_native_history_event_lines(
         if let Some(native) = event.native_session_id.as_deref().and_then(nonempty_trimmed) {
             label.push_str(" · native ");
             label.push_str(short_task_id(Some(native)).unwrap_or(native));
+        }
+        if let Some(thread) = event
+            .worker_thread_id
+            .as_deref()
+            .and_then(nonempty_trimmed)
+        {
+            label.push_str(" · thread ");
+            label.push_str(short_task_id(Some(thread)).unwrap_or(thread));
         }
         lines.push(body_line(&truncate_text(&label, 180), true));
         if let Some(content) = event.content.as_deref().and_then(nonempty_trimmed) {
@@ -1520,6 +1537,7 @@ fn normalize_native_event(event: TiffanyNativeChatEvent) -> Option<TiffanyNative
         model: event.model.and_then(trimmed_string),
         provider: event.provider.and_then(trimmed_string),
         task_id: event.task_id.and_then(trimmed_string),
+        worker_thread_id: event.worker_thread_id.and_then(trimmed_string),
         native_session_id: event.native_session_id.and_then(trimmed_string),
     })
 }
@@ -3663,6 +3681,7 @@ fn native_chat_event_from_progress(
         model: event.model.clone(),
         provider: event.provider.clone(),
         task_id: event.task_id.clone(),
+        worker_thread_id: event.worker_thread_id.clone(),
         native_session_id: event.native_session_id.clone(),
     })
 }
@@ -5457,6 +5476,7 @@ mod tests {
                 model: Some("claude-sonnet-4-6".into()),
                 provider: Some("anthropic".into()),
                 task_id: Some("abc12345".into()),
+                worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
                 native_session_id: Some("native-1".into()),
             }],
         )
@@ -5470,6 +5490,10 @@ mod tests {
         assert_eq!(events[0].title, "worker diff · worker-cc · claude-code · abc12345");
         assert!(events[0].content.as_deref().unwrap().contains("diff --git"));
         assert_eq!(events[0].agent.as_deref(), Some("claude-code"));
+        assert_eq!(
+            events[0].worker_thread_id.as_deref(),
+            Some("abcdef12-0000-0000-0000-000000000000")
+        );
         assert_eq!(events[0].native_session_id.as_deref(), Some("native-1"));
     }
 
@@ -5499,6 +5523,7 @@ mod tests {
                     model: Some("claude-sonnet-4-6".into()),
                     provider: Some("anthropic".into()),
                     task_id: Some("abc12345".into()),
+                    worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
                     native_session_id: Some("native-1".into()),
                 },
                 TiffanyNativeChatEvent {
@@ -5511,6 +5536,7 @@ mod tests {
                     model: None,
                     provider: None,
                     task_id: Some("abc12345".into()),
+                    worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
                     native_session_id: Some("native-1".into()),
                 },
             ],
@@ -5525,6 +5551,7 @@ mod tests {
         assert!(text.contains("answer 已更新 README"));
         assert!(text.contains("worker diff"));
         assert!(text.contains("diff --git a/README.md b/README.md"));
+        assert!(text.contains("thread abcdef12"));
         assert!(text.contains("/history full"));
         assert!(text.contains("/thread <role>"));
     }
@@ -5552,6 +5579,7 @@ mod tests {
                 model: Some("claude-sonnet-4-6".into()),
                 provider: Some("anthropic".into()),
                 task_id: Some("abc12345".into()),
+                worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
                 native_session_id: Some("native-1".into()),
             }],
         )
@@ -5572,6 +5600,7 @@ mod tests {
         assert!(markdown.contains("写测试"));
         assert!(markdown.contains("测试已通过"));
         assert!(markdown.contains("worker tool result"));
+        assert!(markdown.contains("thread `abcdef12-0000-0000-0000-000000000000`"));
         assert!(markdown.contains("```text\ncargo test -q"));
     }
 
@@ -5597,6 +5626,7 @@ mod tests {
                 model: None,
                 provider: None,
                 task_id: Some("abc12345".into()),
+                worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
                 native_session_id: Some("native-1".into()),
             }],
         )
