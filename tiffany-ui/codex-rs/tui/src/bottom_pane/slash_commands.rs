@@ -76,8 +76,6 @@ pub(crate) const TIFFANY_ORCHESTRATOR_COMMANDS: &[SlashCommand] = &[
     SlashCommand::Status,
     SlashCommand::Help,
     SlashCommand::Copy,
-    SlashCommand::Raw,
-    SlashCommand::Diff,
     SlashCommand::Clear,
     SlashCommand::Quit,
     SlashCommand::Exit,
@@ -206,8 +204,6 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
         SlashCommand::Status => "show Tiffany orchestration status",
         SlashCommand::Help => "show this command list",
         SlashCommand::Copy => "copy the last assistant answer",
-        SlashCommand::Raw => "toggle raw scrollback for native selection",
-        SlashCommand::Diff => "show git diff",
         SlashCommand::Clear => "clear the visible UI",
         SlashCommand::Exit => "exit tiffany-loop",
         SlashCommand::Quit => "alias for /exit",
@@ -218,7 +214,7 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
 fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> {
     let hint = match name {
         "workflow" | "flow" | "process" | "trace" => {
-            "The native TUI shows the run waterfall inline. Use /status for current state, /raw for copy-friendly scrollback, or ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui for the legacy process commands."
+            "The native TUI shows the run waterfall inline. Use /status for current state, or ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui for the legacy process commands."
         }
         "queue" => {
             "Queued follow-up prompts are shown in the bottom pane and run automatically after the active task finishes."
@@ -486,8 +482,6 @@ mod tests {
                 SlashCommand::Status,
                 SlashCommand::Help,
                 SlashCommand::Copy,
-                SlashCommand::Raw,
-                SlashCommand::Diff,
                 SlashCommand::Clear,
                 SlashCommand::Quit,
                 SlashCommand::Exit,
@@ -495,6 +489,8 @@ mod tests {
         );
         assert!(!commands.contains(&SlashCommand::Model));
         assert!(!commands.contains(&SlashCommand::Permissions));
+        assert!(!commands.contains(&SlashCommand::Raw));
+        assert!(!commands.contains(&SlashCommand::Diff));
         assert!(!commands.contains(&SlashCommand::Init));
         assert!(!commands.contains(&SlashCommand::Compact));
         assert_eq!(
@@ -552,6 +548,16 @@ mod tests {
                 .contains("/copy")
         );
         assert!(
+            tiffany_orchestrator_unsupported_command_message("raw")
+                .expect("raw should be known but hidden")
+                .contains("not available in Tiffany orchestrator mode")
+        );
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("diff")
+                .expect("diff should be known but hidden")
+                .contains("not available in Tiffany orchestrator mode")
+        );
+        assert!(
             tiffany_orchestrator_unsupported_command_message("o")
                 .expect("legacy folding command should be explained")
                 .contains("legacy terminal chat fallback")
@@ -580,6 +586,8 @@ mod tests {
             );
         }
         assert!(!help.contains("/quit"));
+        assert!(!help.contains("/raw"));
+        assert!(!help.contains("/diff"));
         assert!(!help.contains("/model"));
         assert!(!help.contains("/permissions"));
     }

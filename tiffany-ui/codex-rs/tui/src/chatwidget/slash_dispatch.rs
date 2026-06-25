@@ -674,7 +674,6 @@ impl ChatWidget {
         } else {
             "ready"
         };
-        let raw_mode = if self.raw_output_mode { "on" } else { "off" };
         let queued = self.input_queue.queued_user_messages.len()
             + self.input_queue.rejected_steers_queue.len();
         let bin = self
@@ -701,8 +700,6 @@ impl ChatWidget {
                 mode.into(),
                 "  queue ".dim(),
                 queued.to_string().into(),
-                "  raw ".dim(),
-                raw_mode.into(),
             ]
             .into(),
             vec![
@@ -719,7 +716,7 @@ impl ChatWidget {
             vec!["config  ".dim(), config.to_string().into()].into(),
             vec![
                 "cmd     ".dim(),
-                "/provider  /role  /roles  /thread  /doctor".into(),
+                "/provider  /role  /roles  /thread  /doctor  /copy  /clear".into(),
             ]
             .into(),
         ];

@@ -345,7 +345,7 @@ async fn tiffany_orchestrator_rejects_legacy_terminal_command_submit() {
     );
     assert!(rendered.contains("run waterfall"));
     assert!(rendered.contains("/status"));
-    assert!(rendered.contains("/raw"));
+    assert!(!rendered.contains("/raw"));
     assert_eq!(chat.bottom_pane.composer_text(), "/process 200");
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
@@ -373,8 +373,6 @@ async fn tiffany_orchestrator_help_lists_supported_commands() {
         "/status",
         "/help",
         "/copy",
-        "/raw",
-        "/diff",
         "/clear",
         "/exit",
     ];
@@ -385,6 +383,8 @@ async fn tiffany_orchestrator_help_lists_supported_commands() {
         );
     }
     assert!(!rendered.contains("/quit"));
+    assert!(!rendered.contains("/raw"));
+    assert!(!rendered.contains("/diff"));
     assert!(!rendered.contains("/model"));
     assert!(!rendered.contains("/permissions"));
     assert!(!rendered.contains("not available in Tiffany orchestrator mode"));
@@ -407,7 +407,8 @@ async fn tiffany_orchestrator_status_uses_native_orchestration_summary() {
     assert!(rendered.contains("tiffany-loop orchestrator"));
     assert!(rendered.contains("status"));
     assert!(rendered.contains("direct / single / full"));
-    assert!(rendered.contains("/provider  /role  /roles  /thread  /doctor"));
+    assert!(rendered.contains("/provider  /role  /roles  /thread  /doctor  /copy  /clear"));
+    assert!(!rendered.contains("raw"));
     assert!(!rendered.contains("ChatGPT"));
     assert!(!rendered.contains("Reasoning"));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
