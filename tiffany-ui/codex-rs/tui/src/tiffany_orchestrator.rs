@@ -400,7 +400,10 @@ pub(crate) fn spawn_thread_command(
                     &app_event_tx,
                     vec![
                         status_line("✗", Color::Red, "thread", &err),
-                        body_line("Usage: /thread [list|show <role>|clear <role>]", true),
+                        body_line(
+                            "Usage: /thread [list|show <role>|clear <role>|export <role>]",
+                            true,
+                        ),
                     ],
                 );
                 return;
@@ -1203,6 +1206,13 @@ fn thread_command_args(args: &str) -> Result<Vec<String>, String> {
         [cmd] if matches!(cmd.as_str(), "list" | "ls" | "show" | "status") => {
             Ok(vec!["thread".to_string(), "list".to_string()])
         }
+        [cmd] if cmd.as_str() == "export" => Err("thread export needs <role>".to_string()),
+        [cmd, role, rest @ ..] if cmd.as_str() == "export" => {
+            if role.trim().is_empty() {
+                return Err("thread export needs <role>".to_string());
+            }
+            thread_export_command_args(role, rest)
+        }
         [role] => Ok(vec![
             "thread".to_string(),
             "show".to_string(),
@@ -1227,6 +1237,42 @@ fn thread_command_args(args: &str) -> Result<Vec<String>, String> {
         }
         [cmd, ..] => Err(format!("unknown /thread command '{cmd}'")),
     }
+}
+
+fn thread_export_command_args(role: &str, rest: &[String]) -> Result<Vec<String>, String> {
+    let mut command_args = vec!["thread".to_string(), "export".to_string(), role.to_string()];
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--format" | "-f" => {
+                let Some(value) = rest.get(i + 1) else {
+                    return Err("thread export --format needs markdown or html".to_string());
+                };
+                match value.as_str() {
+                    "markdown" | "html" => {
+                        command_args.push("--format".to_string());
+                        command_args.push(value.clone());
+                    }
+                    _ => return Err("thread export --format accepts markdown or html".to_string()),
+                }
+                i += 2;
+            }
+            "--out" | "-o" => {
+                let Some(value) = rest.get(i + 1) else {
+                    return Err("thread export --out needs a file path".to_string());
+                };
+                command_args.push("--out".to_string());
+                command_args.push(value.clone());
+                i += 2;
+            }
+            "--clipboard" | "--copy" => {
+                command_args.push("--clipboard".to_string());
+                i += 1;
+            }
+            value => return Err(format!("unknown /thread export option '{value}'")),
+        }
+    }
+    Ok(command_args)
 }
 
 fn provider_delete_args(parts: &[String]) -> Result<Vec<Vec<String>>, String> {
@@ -1781,6 +1827,7 @@ fn concise_thread_success(
         Some("list") => thread_list_summary_lines(&stdout),
         Some("show") => thread_detail_summary_lines(&stdout),
         Some("clear") => thread_clear_summary_lines(&stdout),
+        Some("export") => thread_export_summary_lines(&stdout),
         _ => None,
     }
 }
@@ -1813,6 +1860,10 @@ fn thread_list_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
     lines.push(next_line(
         "/thread <role>",
         "inspect native session and manual resume command",
+    ));
+    lines.push(next_line(
+        "/thread export <role>",
+        "write full selectable history for handoff",
     ));
     lines.push(next_line(
         "/thread clear <role>",
@@ -1867,6 +1918,11 @@ fn thread_detail_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
     } else {
         next_line_into(
             &mut lines,
+            &format!("/thread export {role}"),
+            "write last Tiffany session for handoff",
+        );
+        next_line_into(
+            &mut lines,
             &format!("/thread clear {role}"),
             "clear only native CLI session id",
         );
@@ -1893,6 +1949,34 @@ fn thread_clear_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
     lines.push(next_line(
         &format!("/thread {role}"),
         "confirm the next run will start fresh",
+    ));
+    Some(lines)
+}
+
+fn thread_export_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
+    let fields = parse_thread_fields(text);
+    let role = fields.get("role")?.clone();
+    let mut lines = vec![status_line(
+        "✓",
+        TIFFANY_BLUE,
+        "thread",
+        &format!("{role} session exported"),
+    )];
+    push_thread_meta(&mut lines, "thread", fields.get("tiffany thread"));
+    push_thread_meta(&mut lines, "session", fields.get("session"));
+    push_thread_meta(&mut lines, "target", fields.get("target"));
+    push_thread_meta(&mut lines, "bytes", fields.get("bytes"));
+    if let Some(target) = fields
+        .get("target")
+        .and_then(|value| nonempty_trimmed(value))
+    {
+        if target != "clipboard" {
+            lines.push(next_line("open export", target));
+        }
+    }
+    lines.push(next_line(
+        "/thread <role>",
+        "inspect the native resume command for this worker",
     ));
     Some(lines)
 }
@@ -4258,6 +4342,28 @@ mod tests {
             thread_command_args("fresh worker-cc").unwrap(),
             strings(&["thread", "clear", "worker-cc"])
         );
+        assert_eq!(
+            thread_command_args("export worker-cc").unwrap(),
+            strings(&["thread", "export", "worker-cc"])
+        );
+        assert_eq!(
+            thread_command_args("export worker-cc --format html --out /tmp/session.html").unwrap(),
+            strings(&[
+                "thread",
+                "export",
+                "worker-cc",
+                "--format",
+                "html",
+                "--out",
+                "/tmp/session.html"
+            ])
+        );
+        assert_eq!(
+            thread_command_args("export worker-cc --clipboard").unwrap(),
+            strings(&["thread", "export", "worker-cc", "--clipboard"])
+        );
+        assert!(thread_command_args("export").is_err());
+        assert!(thread_command_args("export worker-cc --format pdf").is_err());
         assert!(thread_command_args("clear worker-cc extra").is_err());
     }
 
@@ -4665,6 +4771,28 @@ mod tests {
         assert!(text.contains("next  /thread worker-cc"));
         assert!(!text.contains("Worker thread reset"));
         assert!(!text.contains("Kept: worker thread id"));
+    }
+
+    #[test]
+    fn thread_export_summary_lines_render_export_target() {
+        let lines = thread_export_summary_lines(
+            "Worker thread session exported\n\
+               role: worker-cc\n\
+               Tiffany thread: 00000000-0000-0000-0000-000000000123\n\
+               session: 11111111\n\
+               target: /tmp/tiffany-session.md\n\
+             \n\
+             Action: open the export for full selectable history.\n",
+        )
+        .expect("thread export summary lines");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("✓ thread  worker-cc session exported"));
+        assert!(text.contains("thread  00000000-0000-0000-0000-000000000123"));
+        assert!(text.contains("session  11111111"));
+        assert!(text.contains("target  /tmp/tiffany-session.md"));
+        assert!(text.contains("next  open export"));
+        assert!(text.contains("next  /thread <role>"));
     }
 
     #[test]

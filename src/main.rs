@@ -444,6 +444,21 @@ pub(crate) enum ThreadCmd {
         /// Role name, for example worker-cc
         role: String,
     },
+
+    /// Export the last Tiffany session for a stable worker thread
+    Export {
+        /// Role name, for example worker-cc
+        role: String,
+        /// Output format
+        #[arg(long, value_enum, default_value_t = SessionExportFormatArg::Markdown)]
+        format: SessionExportFormatArg,
+        /// Write to this file instead of the default exports directory
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Copy Markdown to the clipboard instead of writing a file
+        #[arg(long, conflicts_with = "out")]
+        clipboard: bool,
+    },
 }
 
 #[derive(Subcommand)]

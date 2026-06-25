@@ -1941,7 +1941,93 @@ fn handle_thread(config_path: &Path, action: crate::ThreadCmd) -> Result<()> {
             );
             Ok(())
         }
+        crate::ThreadCmd::Export {
+            role,
+            format,
+            out,
+            clipboard,
+        } => {
+            let threads = store.list_worker_threads()?;
+            let Some(thread) = find_worker_thread(&threads, &role) else {
+                if cfg.roles.contains_key(&role) {
+                    anyhow::bail!("worker thread '{role}' has no captured Tiffany session yet");
+                }
+                anyhow::bail!(
+                    "worker thread not found for role '{role}'. Available worker roles: {}",
+                    available_worker_thread_roles(&cfg, &threads)
+                );
+            };
+            println!(
+                "{}",
+                export_worker_thread_session(&store, thread, format, out.as_deref(), clipboard)?
+            );
+            Ok(())
+        }
     }
+}
+
+fn export_worker_thread_session(
+    store: &orchestrator::core::session_store::SessionStore,
+    thread: &WorkerThread,
+    format: crate::SessionExportFormatArg,
+    out: Option<&Path>,
+    clipboard: bool,
+) -> Result<String> {
+    let session_id = thread.last_session_id.with_context(|| {
+        format!(
+            "worker thread '{}' has no captured Tiffany session yet",
+            thread.role
+        )
+    })?;
+    let session = store
+        .get_many(&[session_id])?
+        .into_iter()
+        .next()
+        .with_context(|| {
+            format!(
+                "last Tiffany session not found for role '{}': {session_id}",
+                thread.role
+            )
+        })?;
+    let format = match format {
+        crate::SessionExportFormatArg::Markdown => SessionExportFormat::Markdown,
+        crate::SessionExportFormatArg::Html => SessionExportFormat::Html,
+    };
+
+    if clipboard {
+        let body = orchestrator::session_export::render_session_markdown(store, &session)?;
+        copy_to_clipboard_cli(&body)?;
+        return Ok(format!(
+            "Worker thread session exported\n  role: {}\n  Tiffany thread: {}\n  session: {}\n  target: clipboard\n  bytes: {}\n\nAction: paste into Claude Code or another review tool to continue manually.",
+            thread.role,
+            thread.id,
+            orchestrator::session_export::short_session_id(&session),
+            body.len()
+        ));
+    }
+
+    let path = if let Some(path) = out {
+        let body = match format {
+            SessionExportFormat::Markdown => {
+                orchestrator::session_export::render_session_markdown(store, &session)?
+            }
+            SessionExportFormat::Html => {
+                orchestrator::session_export::render_session_html(store, &session)?
+            }
+        };
+        write_session_export(path, &body)?;
+        path.to_path_buf()
+    } else {
+        orchestrator::session_export::export_session_to_file(store, &session, format)?.path
+    };
+
+    Ok(format!(
+        "Worker thread session exported\n  role: {}\n  Tiffany thread: {}\n  session: {}\n  target: {}\n\nAction: open the export for full selectable history, or paste it into the native worker to continue manually.",
+        thread.role,
+        thread.id,
+        orchestrator::session_export::short_session_id(&session),
+        path.display()
+    ))
 }
 
 fn worker_thread_list(cfg: &Config, threads: &[WorkerThread]) -> String {
@@ -1963,7 +2049,7 @@ fn worker_thread_list(cfg: &Config, threads: &[WorkerThread]) -> String {
         }
     }
     out.push_str(
-        "\n\nDetails: orchestrator thread show <role>  Fresh start: orchestrator thread clear <role>",
+        "\n\nDetails: orchestrator thread show <role>  Export: orchestrator thread export <role>  Fresh start: orchestrator thread clear <role>",
     );
     out
 }
@@ -2054,7 +2140,7 @@ fn worker_thread_detail(cfg: &Config, thread: &WorkerThread) -> String {
         .map(uuid::Uuid::to_string)
         .unwrap_or_else(|| "none".to_string());
     format!(
-        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n  Tiffany thread: {}\n  native session: {}\n  native resume: {}\n  last Tiffany session: {}\n  worktree: {}\n  created: {}\n  updated: {}\n\nStatus: {}\nAction: orchestrator thread clear {} resets only the native CLI session id for a fresh next run.",
+        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n  Tiffany thread: {}\n  native session: {}\n  native resume: {}\n  last Tiffany session: {}\n  worktree: {}\n  created: {}\n  updated: {}\n\nStatus: {}\nAction: orchestrator thread export {} writes the last Tiffany session for handoff.\nAction: orchestrator thread clear {} resets only the native CLI session id for a fresh next run.",
         short_uuid(&thread.id),
         thread.role,
         thread.runtime,
@@ -2073,6 +2159,7 @@ fn worker_thread_detail(cfg: &Config, thread: &WorkerThread) -> String {
         thread.created_at.to_rfc3339(),
         thread.updated_at.to_rfc3339(),
         worker_thread_status_hint(thread),
+        thread.role,
         thread.role
     )
 }
@@ -5288,6 +5375,63 @@ mod tests {
         assert!(detail.contains("Status: ready for native resume"));
         assert!(detail.contains("Action: orchestrator thread clear worker-codex"));
         assert!(detail.contains("/tmp/tiffany-worker"));
+    }
+
+    #[test]
+    fn worker_thread_export_writes_last_session_markdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = orchestrator::core::session_store::SessionStore::open(
+            &tmp.path().join("logs"),
+            &tmp.path().join("db.sqlite"),
+        )
+        .unwrap();
+        let mut session = Session::new(uuid::Uuid::new_v4(), "claude-code", Role::Worker);
+        session.ended_at = Some(chrono::Utc::now());
+        store.finalize(&session).unwrap();
+        store
+            .append(&orchestrator::core::types::Event {
+                session_id: session.id,
+                task_id: session.task_id,
+                ts: chrono::Utc::now(),
+                kind: "assistant".to_string(),
+                payload: serde_json::json!({"text": "handoff ready"}),
+            })
+            .unwrap();
+        let thread = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "claude-sonnet-4-6",
+                Some("anthropic"),
+            )
+            .unwrap();
+        store
+            .update_worker_thread_after_session(
+                thread.id,
+                Some("claude-native-session"),
+                session.id,
+                None,
+            )
+            .unwrap();
+        let thread = store.worker_thread_by_role("worker-cc").unwrap().unwrap();
+        let out = tmp.path().join("exports").join("worker-cc.md");
+
+        let rendered = export_worker_thread_session(
+            &store,
+            &thread,
+            crate::SessionExportFormatArg::Markdown,
+            Some(&out),
+            false,
+        )
+        .unwrap();
+
+        assert!(rendered.contains("role: worker-cc"));
+        assert!(rendered.contains("target:"));
+        assert!(rendered.contains("worker-cc.md"));
+        let body = std::fs::read_to_string(out).unwrap();
+        assert!(body.contains("# Tiffany session"));
+        assert!(body.contains("handoff ready"));
     }
 
     #[test]

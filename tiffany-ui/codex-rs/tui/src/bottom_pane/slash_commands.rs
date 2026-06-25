@@ -209,7 +209,7 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
         SlashCommand::Provider => "configure providers and API keys",
         SlashCommand::Role => "register one role with provider, model, and runtime",
         SlashCommand::Roles => "inspect registered roles",
-        SlashCommand::Thread => "inspect or clear stable worker sessions",
+        SlashCommand::Thread => "inspect, clear, or export stable worker sessions",
         SlashCommand::Doctor => "diagnose setup",
         SlashCommand::Status => "show Tiffany orchestration status",
         SlashCommand::Help => "show this command list",
@@ -240,10 +240,10 @@ fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> 
             "Continue by typing the next prompt directly. Stable worker sessions can be inspected with /thread."
         }
         "sessions" | "history" => {
-            "Use /thread for active worker sessions, or run orchestrator sessions list/show from the shell for persisted logs."
+            "Use /thread for active worker sessions, /thread export <role> for persisted logs, or run orchestrator sessions list/show from the shell."
         }
         "handoff" => {
-            "Ask for a handoff in chat, or use orchestrator sessions show/export from the shell for persisted session output."
+            "Ask for a handoff in chat, or use /thread export <role> for persisted session output."
         }
         "usage" => "Run orchestrator usage from the shell for token and cost summaries.",
         "tests" | "test" => {
