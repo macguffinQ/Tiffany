@@ -388,6 +388,28 @@ async fn tiffany_orchestrator_rejects_hidden_codex_command_direct_dispatch() {
 }
 
 #[tokio::test]
+async fn tiffany_orchestrator_hides_quit_alias_but_allows_exit() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    submit_composer_text(&mut chat, "/quit");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("'/quit' is not available in Tiffany orchestrator mode"));
+    assert!(rendered.contains("Use /exit"));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    submit_composer_text(&mut chat, "/exit");
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
 async fn tiffany_orchestrator_rejects_hidden_codex_command_direct_inline_dispatch() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);
@@ -531,11 +553,44 @@ async fn tiffany_orchestrator_status_uses_native_orchestration_summary() {
     assert!(rendered.contains("tiffany-loop orchestrator"));
     assert!(rendered.contains("status"));
     assert!(rendered.contains("direct / single / full"));
-    assert!(
-        rendered.contains("/provider  /role  /roles  /thread  /doctor  /copy  /raw  /diff  /clear")
-    );
+    assert!(rendered.contains("runtime"));
+    assert!(rendered.contains("orchestrator"));
+    assert!(rendered.contains(
+        "/provider  /role  /roles  /thread  /doctor  /status  /help  /copy  /raw  /diff  /clear  /exit"
+    ));
     assert!(!rendered.contains("ChatGPT"));
     assert!(!rendered.contains("Reasoning"));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn tiffany_orchestrator_status_warns_when_runtime_is_missing() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let missing = std::env::temp_dir().join(format!(
+        "definitely-missing-tiffany-orchestrator-{}",
+        std::process::id()
+    ));
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.set_tiffany_orchestrator_config(Some(
+        crate::tiffany_orchestrator::TiffanyOrchestratorConfig {
+            bin: missing.display().to_string(),
+            extra_args: Vec::new(),
+            config_path: None,
+        },
+    ));
+
+    submit_composer_text(&mut chat, "/status");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("runtime"));
+    assert!(rendered.contains("missing"));
+    assert!(rendered.contains("/doctor"));
+    assert!(rendered.contains("TIFFANY_ORCHESTRATOR_BIN"));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 

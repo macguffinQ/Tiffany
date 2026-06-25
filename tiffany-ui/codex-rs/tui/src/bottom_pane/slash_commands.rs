@@ -79,7 +79,6 @@ pub(crate) const TIFFANY_ORCHESTRATOR_COMMANDS: &[SlashCommand] = &[
     SlashCommand::Raw,
     SlashCommand::Diff,
     SlashCommand::Clear,
-    SlashCommand::Quit,
     SlashCommand::Exit,
 ];
 
@@ -145,6 +144,7 @@ pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Op
             SlashCommand::Logout => {
                 "Tiffany uses provider settings instead of account login; configure providers with /provider."
             }
+            SlashCommand::Quit => "Use /exit to leave Tiffany orchestrator mode.",
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 "Use /role and /roles to register or inspect Tiffany worker roles."
             }
@@ -169,23 +169,13 @@ pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Op
 }
 
 fn tiffany_native_command_hint() -> String {
-    let commands = TIFFANY_ORCHESTRATOR_COMMANDS
-        .iter()
-        .copied()
-        .filter(|cmd| *cmd != SlashCommand::Quit)
-        .map(|cmd| format!("/{}", cmd.command()))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let commands = tiffany_orchestrator_command_list(", ");
     format!("Use {commands}, or plain chat prompts.")
 }
 
 pub(crate) fn tiffany_orchestrator_help_text() -> String {
     let mut text = String::from("Tiffany orchestrator commands:");
-    for cmd in TIFFANY_ORCHESTRATOR_COMMANDS
-        .iter()
-        .copied()
-        .filter(|cmd| *cmd != SlashCommand::Quit)
-    {
+    for cmd in tiffany_orchestrator_help_commands() {
         text.push('\n');
         text.push_str(&format!(
             "/{:<10} {}",
@@ -194,6 +184,24 @@ pub(crate) fn tiffany_orchestrator_help_text() -> String {
         ));
     }
     text
+}
+
+pub(crate) fn tiffany_orchestrator_status_command_list() -> String {
+    tiffany_orchestrator_command_list("  ")
+}
+
+fn tiffany_orchestrator_command_list(separator: &str) -> String {
+    tiffany_orchestrator_help_commands()
+        .map(|cmd| format!("/{}", cmd.command()))
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
+fn tiffany_orchestrator_help_commands() -> impl Iterator<Item = SlashCommand> {
+    TIFFANY_ORCHESTRATOR_COMMANDS
+        .iter()
+        .copied()
+        .filter(|cmd| *cmd != SlashCommand::Quit)
 }
 
 pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'static str {
@@ -210,7 +218,6 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
         SlashCommand::Diff => "show current git changes",
         SlashCommand::Clear => "clear the visible UI",
         SlashCommand::Exit => "exit tiffany-loop",
-        SlashCommand::Quit => "alias for /exit",
         _ => "not available in Tiffany orchestrator mode",
     }
 }
@@ -489,7 +496,6 @@ mod tests {
                 SlashCommand::Raw,
                 SlashCommand::Diff,
                 SlashCommand::Clear,
-                SlashCommand::Quit,
                 SlashCommand::Exit,
             ]
         );
@@ -570,7 +576,6 @@ mod tests {
         })
         .into_iter()
         .map(|(_, command)| command)
-        .filter(|command| *command != SlashCommand::Quit)
         .collect::<Vec<_>>();
         let help = tiffany_orchestrator_help_text();
 

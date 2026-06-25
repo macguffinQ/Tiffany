@@ -18,6 +18,7 @@ use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::bottom_pane::slash_commands::tiffany_orchestrator_command_visible;
 use crate::bottom_pane::slash_commands::tiffany_orchestrator_help_text;
+use crate::bottom_pane::slash_commands::tiffany_orchestrator_status_command_list;
 use crate::bottom_pane::slash_commands::tiffany_orchestrator_unsupported_command_message;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
@@ -712,11 +713,13 @@ impl ChatWidget {
             .map(|config| config.bin.as_str())
             .filter(|bin| !bin.is_empty())
             .unwrap_or("orchestrator");
+        let runtime = tiffany_orchestrator_runtime_status(bin);
         let config = self
             .tiffany_orchestrator_config
             .as_ref()
             .and_then(|config| config.config_path.as_deref())
             .unwrap_or("default");
+        let commands = tiffany_orchestrator_status_command_list();
 
         let mut lines: Vec<Line<'static>> = vec![
             vec![
@@ -742,13 +745,9 @@ impl ChatWidget {
                 "registered roles route to Claude Code, Codex CLI, or compatible runtimes".into(),
             ]
             .into(),
-            vec!["bin     ".dim(), bin.to_string().into()].into(),
+            runtime_status_line(&runtime),
             vec!["config  ".dim(), config.to_string().into()].into(),
-            vec![
-                "cmd     ".dim(),
-                "/provider  /role  /roles  /thread  /doctor  /copy  /raw  /diff  /clear".into(),
-            ]
-            .into(),
+            vec!["cmd     ".dim(), commands.into()].into(),
         ];
         if queued > 0 {
             lines.push(
@@ -1586,6 +1585,118 @@ fn expand_home_path(path: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(path)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TiffanyOrchestratorRuntimeStatus {
+    requested: String,
+    resolved: Option<String>,
+}
+
+fn tiffany_orchestrator_runtime_status(bin: &str) -> TiffanyOrchestratorRuntimeStatus {
+    let requested = normalized_tiffany_orchestrator_bin(bin).to_string();
+    let resolved = resolve_tiffany_orchestrator_runtime(&requested)
+        .map(|path| path.to_string_lossy().into_owned());
+    TiffanyOrchestratorRuntimeStatus {
+        requested,
+        resolved,
+    }
+}
+
+fn runtime_status_line(status: &TiffanyOrchestratorRuntimeStatus) -> Line<'static> {
+    if let Some(path) = &status.resolved {
+        vec![
+            "runtime ".dim(),
+            "ok".fg(crate::tiffany_orchestrator::TIFFANY_BLUE).bold(),
+            "  ".into(),
+            status.requested.clone().into(),
+            "  ".dim(),
+            path.clone().dim(),
+        ]
+        .into()
+    } else {
+        vec![
+            "runtime ".dim(),
+            "missing".fg(Color::Red).bold(),
+            "  ".into(),
+            status.requested.clone().into(),
+            "  run ".dim(),
+            "/doctor".bold(),
+            " or set ".dim(),
+            "TIFFANY_ORCHESTRATOR_BIN".bold(),
+        ]
+        .into()
+    }
+}
+
+fn normalized_tiffany_orchestrator_bin(bin: &str) -> &str {
+    let bin = bin.trim();
+    if bin.is_empty() { "orchestrator" } else { bin }
+}
+
+fn resolve_tiffany_orchestrator_runtime(bin: &str) -> Option<std::path::PathBuf> {
+    let path = expand_home_path(bin);
+    if bin_has_path_separator(bin) || path.is_absolute() {
+        return is_launchable_file(&path).then_some(path);
+    }
+
+    if bin == "orchestrator"
+        && let Ok(current_exe) = std::env::current_exe()
+        && let Some(parent) = current_exe.parent()
+    {
+        let adjacent = parent.join(executable_name("orchestrator"));
+        if is_launchable_file(&adjacent) {
+            return Some(adjacent);
+        }
+    }
+
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .flat_map(|dir| executable_candidates(&dir, bin))
+        .find(|path| is_launchable_file(path))
+}
+
+fn bin_has_path_separator(bin: &str) -> bool {
+    bin.contains('/') || bin.contains('\\')
+}
+
+fn executable_candidates(dir: &std::path::Path, bin: &str) -> Vec<std::path::PathBuf> {
+    if cfg!(windows) && std::path::Path::new(bin).extension().is_none() {
+        let pathext = std::env::var_os("PATHEXT")
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+        pathext
+            .split(';')
+            .filter(|ext| !ext.trim().is_empty())
+            .map(|ext| dir.join(format!("{bin}{ext}")))
+            .collect()
+    } else {
+        vec![dir.join(bin)]
+    }
+}
+
+#[cfg(unix)]
+fn is_launchable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.is_file()
+        && path
+            .metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_launchable_file(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
+fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
 fn yaml_mapping_string(mapping: &serde_yaml::Mapping, key: &str) -> Option<String> {
     mapping
         .get(serde_yaml::Value::String(key.to_string()))
@@ -1788,4 +1899,58 @@ pub(super) fn role_setup_draft_args(draft: &RoleSetupDraft) -> Result<String, St
 fn is_keep_key_marker(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     matches!(normalized.as_str(), "<unchanged>" | "unchanged" | "keep")
+}
+
+#[cfg(test)]
+mod tiffany_orchestrator_runtime_status_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_status_normalizes_empty_bin() {
+        let status = tiffany_orchestrator_runtime_status("   ");
+
+        assert_eq!(status.requested, "orchestrator");
+    }
+
+    #[test]
+    fn runtime_status_rejects_missing_explicit_path() {
+        let missing = std::env::temp_dir().join(format!(
+            "definitely-missing-tiffany-orchestrator-runtime-{}",
+            std::process::id()
+        ));
+
+        let status = tiffany_orchestrator_runtime_status(&missing.to_string_lossy());
+
+        assert_eq!(status.resolved, None);
+    }
+
+    #[test]
+    fn runtime_status_accepts_launchable_explicit_path() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let runtime = temp.path().join(executable_name("orchestrator"));
+        std::fs::write(&runtime, "")?;
+        make_launchable(&runtime)?;
+
+        let status = tiffany_orchestrator_runtime_status(&runtime.to_string_lossy());
+
+        assert_eq!(
+            status.resolved.as_deref(),
+            Some(runtime.to_string_lossy().as_ref())
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn make_launchable(path: &std::path::Path) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(path)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions)
+    }
+
+    #[cfg(not(unix))]
+    fn make_launchable(_path: &std::path::Path) -> std::io::Result<()> {
+        Ok(())
+    }
 }
