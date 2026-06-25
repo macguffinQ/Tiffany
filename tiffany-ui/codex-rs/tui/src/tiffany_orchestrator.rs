@@ -985,6 +985,7 @@ fn concise_success_lines(
     match label {
         "roles" => concise_roles_success(command_args, output),
         "provider" => concise_provider_success(command_args, output),
+        "thread" => concise_thread_success(command_args, output),
         _ => None,
     }
 }
@@ -1009,6 +1010,17 @@ struct ProviderSummary {
     endpoint: String,
     models: Option<String>,
     roles: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ThreadSummary {
+    role: String,
+    active: bool,
+    runtime: String,
+    model: String,
+    thread: Option<String>,
+    native: Option<String>,
+    last: Option<String>,
 }
 
 fn concise_roles_success(
@@ -1140,6 +1152,134 @@ fn concise_provider_success(
     }
 }
 
+fn concise_thread_success(
+    command_args: &[String],
+    output: &std::process::Output,
+) -> Option<Vec<Line<'static>>> {
+    if command_args.first().map(String::as_str) != Some("thread") {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match command_args.get(1).map(String::as_str) {
+        Some("list") => thread_list_summary_lines(&stdout),
+        Some("show") => thread_detail_summary_lines(&stdout),
+        Some("clear") => thread_clear_summary_lines(&stdout),
+        _ => None,
+    }
+}
+
+fn thread_list_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
+    let rows = parse_thread_list_summaries(text);
+    if rows.is_empty() {
+        if text.contains("no worker roles configured") {
+            return Some(vec![
+                status_line("⚠", Color::Yellow, "thread", "no worker roles configured"),
+                next_line("/role", "register worker roles before running tasks"),
+            ]);
+        }
+        return None;
+    }
+
+    let active_count = rows.iter().filter(|row| row.active).count();
+    let mut lines = vec![status_line(
+        "✓",
+        TIFFANY_BLUE,
+        "thread",
+        &format!("{active_count}/{} role(s) have worker sessions", rows.len()),
+    )];
+    for row in rows.iter().take(10) {
+        lines.push(thread_summary_line(row));
+    }
+    if rows.len() > 10 {
+        lines.push(body_line(&format!("… {} more", rows.len() - 10), true));
+    }
+    lines.push(next_line(
+        "/thread <role>",
+        "inspect native session and manual resume command",
+    ));
+    lines.push(next_line(
+        "/thread clear <role>",
+        "start the next run with a fresh native session",
+    ));
+    Some(lines)
+}
+
+fn thread_detail_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
+    let fields = parse_thread_fields(text);
+    let role = fields
+        .get("role")
+        .cloned()
+        .or_else(|| parse_worker_thread_title(text))
+        .unwrap_or_else(|| "worker".to_string());
+    let status = fields
+        .get("status")
+        .cloned()
+        .unwrap_or_else(|| "ready".to_string());
+    let native = fields
+        .get("native session")
+        .cloned()
+        .unwrap_or_else(|| "none".to_string());
+    let symbol = if native == "none" { "⚠" } else { "✓" };
+    let color = if native == "none" {
+        Color::Yellow
+    } else {
+        TIFFANY_BLUE
+    };
+    let mut lines = vec![status_line(
+        symbol,
+        color,
+        "thread",
+        &format!("{role} · {status}"),
+    )];
+
+    push_thread_meta(&mut lines, "runtime", fields.get("runtime"));
+    push_thread_meta(&mut lines, "agent", fields.get("agent"));
+    push_thread_meta(&mut lines, "model", fields.get("model"));
+    push_thread_meta(&mut lines, "native", Some(&native));
+    push_thread_meta(&mut lines, "resume", fields.get("native resume"));
+    push_thread_meta(&mut lines, "thread", fields.get("tiffany thread"));
+    push_thread_meta(&mut lines, "last", fields.get("last tiffany session"));
+    push_thread_meta(&mut lines, "work", fields.get("worktree"));
+
+    if native == "none" {
+        next_line_into(
+            &mut lines,
+            "/thread clear <role>",
+            "already fresh; run a task to capture native session",
+        );
+    } else {
+        next_line_into(
+            &mut lines,
+            &format!("/thread clear {role}"),
+            "clear only native CLI session id",
+        );
+    }
+    Some(lines)
+}
+
+fn thread_clear_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
+    let fields = parse_thread_fields(text);
+    let role = fields.get("role")?.clone();
+    let mut lines = vec![status_line(
+        "✓",
+        TIFFANY_BLUE,
+        "thread",
+        &format!("{role} native session cleared"),
+    )];
+    push_thread_meta(&mut lines, "thread", fields.get("tiffany thread"));
+    push_thread_meta(&mut lines, "cleared", fields.get("cleared native session"));
+    push_thread_meta(&mut lines, "next", fields.get("next run"));
+    lines.push(body_line(
+        "kept Tiffany worker thread, last session pointer, and conversation context",
+        true,
+    ));
+    lines.push(next_line(
+        &format!("/thread {role}"),
+        "confirm the next run will start fresh",
+    ));
+    Some(lines)
+}
+
 fn provider_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
     let providers = parse_provider_summaries(text);
     if providers.is_empty() {
@@ -1251,6 +1391,44 @@ fn role_summary_line(role: &RoleSummary) -> Line<'static> {
         ),
         Span::styled(format!("{teams:<11}"), Style::default().fg(Color::DarkGray)),
         Span::styled(truncate_text(&health, 34), Style::default().fg(color)),
+    ])
+}
+
+fn thread_summary_line(thread: &ThreadSummary) -> Line<'static> {
+    let (symbol, color) = if thread.active {
+        ("✓", TIFFANY_BLUE)
+    } else {
+        ("○", Color::DarkGray)
+    };
+    let native = thread.native.as_deref().unwrap_or("none");
+    let session = if thread.active {
+        format!(
+            "thread {}  native {}  last {}",
+            thread.thread.as_deref().unwrap_or("none"),
+            native,
+            thread.last.as_deref().unwrap_or("none")
+        )
+    } else {
+        "no worker thread yet".to_string()
+    };
+    Line::from(vec![
+        Span::styled(
+            format!("  {symbol} "),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:<18}", thread.role),
+            Style::default().fg(TIFFANY_SOFT),
+        ),
+        Span::styled(
+            format!("{:<13}", truncate_text(&thread.runtime, 13)),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(
+            format!("{:<28}", truncate_text(&thread.model, 28)),
+            Style::default(),
+        ),
+        Span::styled(session, Style::default().fg(Color::DarkGray)),
     ])
 }
 
@@ -1483,6 +1661,92 @@ fn parse_role_summary_line(line: &str) -> Option<RoleSummary> {
             .find_map(|part| part.strip_prefix("health="))
             .map(ToString::to_string),
     })
+}
+
+fn parse_thread_list_summaries(text: &str) -> Vec<ThreadSummary> {
+    text.lines()
+        .filter_map(parse_thread_list_line)
+        .collect::<Vec<_>>()
+}
+
+fn parse_thread_list_line(line: &str) -> Option<ThreadSummary> {
+    let trimmed = line.trim();
+    let active = if let Some(rest) = trimmed.strip_prefix("● ") {
+        (true, rest)
+    } else if let Some(rest) = trimmed.strip_prefix("○ ") {
+        (false, rest)
+    } else {
+        return None;
+    };
+    let (active, rest) = active;
+    let parts = rest.split_whitespace().collect::<Vec<_>>();
+    let role = parts.first()?.to_string();
+    let joined = parts.get(1..).unwrap_or(&[]).join(" ");
+    if !active {
+        let detail = joined
+            .split(" · ")
+            .next()
+            .unwrap_or("not configured")
+            .trim()
+            .to_string();
+        return Some(ThreadSummary {
+            role,
+            active,
+            runtime: detail,
+            model: String::new(),
+            thread: None,
+            native: None,
+            last: None,
+        });
+    }
+
+    let segments = joined.split(" · ").map(str::trim).collect::<Vec<_>>();
+    let runtime = segments.first().copied().unwrap_or("runtime").to_string();
+    let model = segments.get(1).copied().unwrap_or("model").to_string();
+    Some(ThreadSummary {
+        role,
+        active,
+        runtime,
+        model,
+        thread: segment_value(&segments, "thread"),
+        native: segment_value(&segments, "native"),
+        last: segment_value(&segments, "last"),
+    })
+}
+
+fn segment_value(segments: &[&str], prefix: &str) -> Option<String> {
+    let needle = format!("{prefix} ");
+    segments
+        .iter()
+        .find_map(|segment| segment.strip_prefix(&needle))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn parse_thread_fields(text: &str) -> HashMap<String, String> {
+    let mut fields = HashMap::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let value = value.trim();
+        if !key.is_empty() && !value.is_empty() {
+            fields.insert(key, value.to_string());
+        }
+    }
+    fields
+}
+
+fn parse_worker_thread_title(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("Worker thread "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 fn spawn_error_lines(
@@ -1764,8 +2028,14 @@ impl BridgeState {
         fill_present(&mut meta.cc_agent, event.cc_agent.as_deref());
         fill_present(&mut meta.model, event.model.as_deref());
         fill_present(&mut meta.provider, event.provider.as_deref());
-        fill_present(&mut meta.worker_thread_id, event.worker_thread_id.as_deref());
-        fill_present(&mut meta.native_session_id, event.native_session_id.as_deref());
+        fill_present(
+            &mut meta.worker_thread_id,
+            event.worker_thread_id.as_deref(),
+        );
+        fill_present(
+            &mut meta.native_session_id,
+            event.native_session_id.as_deref(),
+        );
         if event.reused.is_some() {
             meta.reused = event.reused;
         }
@@ -1788,8 +2058,14 @@ impl BridgeState {
         fill_missing(&mut event.cc_agent, meta.cc_agent.as_deref());
         fill_missing(&mut event.model, meta.model.as_deref());
         fill_missing(&mut event.provider, meta.provider.as_deref());
-        fill_missing(&mut event.worker_thread_id, meta.worker_thread_id.as_deref());
-        fill_missing(&mut event.native_session_id, meta.native_session_id.as_deref());
+        fill_missing(
+            &mut event.worker_thread_id,
+            meta.worker_thread_id.as_deref(),
+        );
+        fill_missing(
+            &mut event.native_session_id,
+            meta.native_session_id.as_deref(),
+        );
         if event.reused.is_none() {
             event.reused = meta.reused;
         }
@@ -1832,10 +2108,16 @@ fn worker_context_line(task_id: &str, meta: &WorkerMeta) -> String {
         } else {
             "thread"
         };
-        parts.push(format!("{state} {}", short_task_id(Some(thread_id)).unwrap_or(thread_id)));
+        parts.push(format!(
+            "{state} {}",
+            short_task_id(Some(thread_id)).unwrap_or(thread_id)
+        ));
     }
     if let Some(native) = meta.native_session_id.as_deref().and_then(nonempty_trimmed) {
-        parts.push(format!("native {}", short_task_id(Some(native)).unwrap_or(native)));
+        parts.push(format!(
+            "native {}",
+            short_task_id(Some(native)).unwrap_or(native)
+        ));
     }
     if let Some(id) = short_task_id(Some(task_id)) {
         parts.push(id.to_string());
@@ -2562,11 +2844,7 @@ fn worker_lifecycle_title(event: &TiffanyProgressEvent) -> String {
     if let Some(model) = provider_model_label(event) {
         parts.push(model);
     }
-    if let Some(thread_id) = event
-        .worker_thread_id
-        .as_deref()
-        .and_then(nonempty_trimmed)
-    {
+    if let Some(thread_id) = event.worker_thread_id.as_deref().and_then(nonempty_trimmed) {
         parts.push(format!(
             "thread {}",
             short_task_id(Some(thread_id)).unwrap_or(thread_id)
@@ -2961,6 +3239,26 @@ fn meta_line(label: &str, value: &str) -> Line<'static> {
     ])
 }
 
+fn push_thread_meta(lines: &mut Vec<Line<'static>>, label: &str, value: Option<&String>) {
+    if let Some(value) = value.map(String::as_str).and_then(nonempty_trimmed) {
+        lines.push(thread_meta_line(label, value));
+    }
+}
+
+fn thread_meta_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("  ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(
+            label.to_string(),
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(value.to_string(), Style::default().fg(Color::DarkGray)),
+    ])
+}
+
 fn labeled_detail_block(label: &str, value: &str) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for (idx, line) in value.trim().lines().enumerate() {
@@ -2999,6 +3297,10 @@ fn next_line(command: &str, detail: &str) -> Line<'static> {
         Span::raw("  "),
         Span::styled(detail.to_string(), Style::default().fg(Color::DarkGray)),
     ])
+}
+
+fn next_line_into(lines: &mut Vec<Line<'static>>, command: &str, detail: &str) {
+    lines.push(next_line(command, detail));
 }
 
 fn output_body_line(line: &str) -> Line<'static> {
@@ -3422,6 +3724,90 @@ mod tests {
         assert!(text.contains("worker-codex"));
         assert!(text.contains("MiniMax-M3"));
         assert!(text.contains("teams off"));
+    }
+
+    #[test]
+    fn thread_list_summary_lines_render_role_sessions_and_actions() {
+        let lines = thread_list_summary_lines(
+            "Worker threads\n\
+               stored threads: 1\n\
+             \n\
+             Roles:\n\
+               ○ worker-cc          claude-code · sonnet · no worker thread yet\n\
+               ● worker-codex       codex · openai/gpt-4o · thread 00000000 · native codex-native-session · last 11111111\n\
+             \n\
+             Details: orchestrator thread show <role>  Fresh start: orchestrator thread clear <role>\n",
+        )
+        .expect("thread list summary lines");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("✓ thread  1/2 role(s) have worker sessions"));
+        assert!(text.contains("worker-cc"));
+        assert!(text.contains("no worker thread yet"));
+        assert!(text.contains("worker-codex"));
+        assert!(text.contains("codex-native-session"));
+        assert!(text.contains("last 11111111"));
+        assert!(text.contains("next  /thread <role>"));
+        assert!(text.contains("next  /thread clear <role>"));
+        assert!(!text.contains("Worker threads"));
+        assert!(!text.contains("orchestrator thread show"));
+    }
+
+    #[test]
+    fn thread_detail_summary_lines_render_native_resume_command() {
+        let lines = thread_detail_summary_lines(
+            "Worker thread 00000000\n\
+               role: worker-codex\n\
+               runtime: codex\n\
+               agent: codex\n\
+               model: openai/gpt-4o\n\
+               provider: openai\n\
+               Tiffany thread: 00000000-0000-0000-0000-000000000123\n\
+               native session: codex-native-session\n\
+               native resume: codex exec resume codex-native-session\n\
+               last Tiffany session: 00000000-0000-0000-0000-000000000456\n\
+               worktree: /tmp/tiffany-worker\n\
+             \n\
+             Status: ready for native resume; Tiffany will reuse this session for the same role\n\
+             Action: orchestrator thread clear worker-codex resets only the native CLI session id for a fresh next run.\n",
+        )
+        .expect("thread detail summary lines");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains(
+            "✓ thread  worker-codex · ready for native resume; Tiffany will reuse this session for the same role"
+        ));
+        assert!(text.contains("runtime  codex"));
+        assert!(text.contains("model  openai/gpt-4o"));
+        assert!(text.contains("native  codex-native-session"));
+        assert!(text.contains("resume  codex exec resume codex-native-session"));
+        assert!(text.contains("last  00000000-0000-0000-0000-000000000456"));
+        assert!(text.contains("next  /thread clear worker-codex"));
+        assert!(!text.contains("Worker thread 00000000"));
+        assert!(!text.contains("Action: orchestrator"));
+    }
+
+    #[test]
+    fn thread_clear_summary_lines_render_fresh_next_run() {
+        let lines = thread_clear_summary_lines(
+            "Worker thread reset\n\
+               role: worker-cc\n\
+               Tiffany thread: 00000000-0000-0000-0000-000000000123\n\
+               cleared native session: claude-native-session\n\
+               next run: starts a fresh native claude-code session\n\
+             \n\
+             Kept: worker thread id, last Tiffany session, and conversation context.\n",
+        )
+        .expect("thread clear summary lines");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("✓ thread  worker-cc native session cleared"));
+        assert!(text.contains("cleared  claude-native-session"));
+        assert!(text.contains("next  starts a fresh native claude-code session"));
+        assert!(text.contains("kept Tiffany worker thread"));
+        assert!(text.contains("next  /thread worker-cc"));
+        assert!(!text.contains("Worker thread reset"));
+        assert!(!text.contains("Kept: worker thread id"));
     }
 
     #[test]
@@ -4298,7 +4684,11 @@ mod tests {
     fn captures_assistant_output_but_not_worker_process_noise_for_memory() {
         let assistant = TiffanyProgressEvent {
             worker_role: Some("worker-cc".to_string()),
-            ..worker_output_event("worker output", "claude-code", "claude-code assistant: 你好！")
+            ..worker_output_event(
+                "worker output",
+                "claude-code",
+                "claude-code assistant: 你好！",
+            )
         };
         let assistant_visible = visible_content(&assistant).expect("assistant visible");
         assert_eq!(

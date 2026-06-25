@@ -705,21 +705,48 @@ impl ChatWidget {
             .unwrap_or("default");
 
         let mut lines: Vec<Line<'static>> = vec![
-            vec!["◆ ".fg(crate::tiffany_orchestrator::TIFFANY_BLUE).bold(), "T>_ ".bold(), "tiffany-loop orchestrator".into()].into(),
-            vec!["status  ".dim(), mode.into(), "  queue ".dim(), queued.to_string().into(), "  raw ".dim(), raw_mode.into()].into(),
-            vec!["flow    ".dim(), "direct / single / full  →  selected per prompt".into()].into(),
-            vec!["worker  ".dim(), "registered roles route to Claude Code, Codex CLI, or compatible runtimes".into()].into(),
+            vec![
+                "◆ ".fg(crate::tiffany_orchestrator::TIFFANY_BLUE).bold(),
+                "T>_ ".bold(),
+                "tiffany-loop orchestrator".into(),
+            ]
+            .into(),
+            vec![
+                "status  ".dim(),
+                mode.into(),
+                "  queue ".dim(),
+                queued.to_string().into(),
+                "  raw ".dim(),
+                raw_mode.into(),
+            ]
+            .into(),
+            vec![
+                "flow    ".dim(),
+                "direct / single / full  →  selected per prompt".into(),
+            ]
+            .into(),
+            vec![
+                "worker  ".dim(),
+                "registered roles route to Claude Code, Codex CLI, or compatible runtimes".into(),
+            ]
+            .into(),
             vec!["bin     ".dim(), bin.to_string().into()].into(),
             vec!["config  ".dim(), config.to_string().into()].into(),
-            vec!["cmd     ".dim(), "/provider  /role  /roles  /thread  /doctor".into()].into(),
+            vec![
+                "cmd     ".dim(),
+                "/provider  /role  /roles  /thread  /doctor".into(),
+            ]
+            .into(),
         ];
         if queued > 0 {
-            lines.push(vec![
+            lines.push(
+                vec![
                 "next    ".dim(),
                 "queued prompts will run one at a time after the current orchestration finishes"
                     .into(),
             ]
-            .into());
+                .into(),
+            );
         }
         self.add_to_history(history_cell::PlainHistoryCell::new(lines));
     }
