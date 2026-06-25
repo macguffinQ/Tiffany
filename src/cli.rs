@@ -1879,6 +1879,26 @@ fn handle_roles(config_path: &Path, action: crate::RolesCmd) -> Result<()> {
             agent_teams,
             no_agent_teams,
         ),
+        crate::RolesCmd::Profile {
+            name,
+            planner,
+            critic,
+            reviewer,
+            worker_cc,
+            worker_codex,
+            dry_run,
+        } => save_role_profile(
+            config_path,
+            &name,
+            &[
+                ("planner", planner.as_deref()),
+                ("critic", critic.as_deref()),
+                ("reviewer", reviewer.as_deref()),
+                ("worker-cc", worker_cc.as_deref()),
+                ("worker-codex", worker_codex.as_deref()),
+            ],
+            dry_run,
+        ),
     }
 }
 
@@ -2283,57 +2303,22 @@ fn register_role(
         anyhow::bail!("--agent-teams and --no-agent-teams cannot both be set");
     }
     let cfg = Config::load(config_path)?;
-    let Some(runtime_cfg) = cfg.runtimes.get(runtime) else {
-        anyhow::bail!(
-            "unknown runtime '{}'. Available: {}",
+    let prepared = prepare_role_registration(
+        &cfg,
+        role,
+        RoleBindingSpec {
+            model,
             runtime,
-            available_runtimes_for_cli(&cfg)
-        );
-    };
+            provider,
+            model_name,
+        },
+        AgentTeamsChoice {
+            agent_teams,
+            no_agent_teams,
+        },
+    )?;
 
-    let resolved_model_id = resolve_role_model_id(&cfg, model, provider, model_name)?;
-    let existing_model = cfg.models.iter().find(|m| m.id == resolved_model_id);
-    let model_write = match existing_model {
-        Some(existing) if provider.is_some() || model_name.is_some() => {
-            let provider = provider.unwrap_or(existing.provider.as_str());
-            if !cfg.providers.contains_key(provider) {
-                anyhow::bail!(
-                    "unknown provider '{}'. Available: {}",
-                    provider,
-                    available_providers_for_cli(&cfg)
-                );
-            }
-            Some(orchestrator::config::ModelConfig {
-                id: resolved_model_id.clone(),
-                provider: provider.to_string(),
-                name: model_name.unwrap_or(existing.name.as_str()).to_string(),
-            })
-        }
-        Some(_) => None,
-        None => {
-            let Some(provider) = provider else {
-                anyhow::bail!(
-                    "unknown model '{}'. Available: {}\nTo register it inline, add --provider <provider> --model-name <provider-model-name>.",
-                    resolved_model_id,
-                    available_models_for_cli(&cfg)
-                );
-            };
-            if !cfg.providers.contains_key(provider) {
-                anyhow::bail!(
-                    "unknown provider '{}'. Available: {}",
-                    provider,
-                    available_providers_for_cli(&cfg)
-                );
-            }
-            Some(orchestrator::config::ModelConfig {
-                id: resolved_model_id.clone(),
-                provider: provider.to_string(),
-                name: model_name.unwrap_or(resolved_model_id.as_str()).to_string(),
-            })
-        }
-    };
-
-    if let Some(model_cfg) = &model_write {
+    if let Some(model_cfg) = &prepared.model_write {
         Config::write_model_to_config_file(config_path, model_cfg)?;
         println!(
             "✓ model {} registered: provider={} name={}",
@@ -2341,23 +2326,11 @@ fn register_role(
         );
     }
 
-    let teams = if no_agent_teams {
-        false
-    } else if agent_teams {
-        true
-    } else {
-        default_agent_teams(role, runtime, runtime_cfg)
-    };
-    let role_cfg = orchestrator::config::RoleConfig {
-        model: resolved_model_id.clone(),
-        runtime: runtime.to_string(),
-        agent_teams: teams,
-    };
-    Config::write_role_to_config_file(config_path, role, &role_cfg)?;
+    Config::write_role_to_config_file(config_path, role, &prepared.role_cfg)?;
     println!("✓ role {} registered", role);
-    println!("  model: {}", resolved_model_id);
-    println!("  runtime: {}", runtime);
-    println!("  agent teams: {}", teams);
+    println!("  model: {}", prepared.role_cfg.model);
+    println!("  runtime: {}", prepared.role_cfg.runtime);
+    println!("  agent teams: {}", prepared.role_cfg.agent_teams);
     match role {
         "planner" | "critic" | "reviewer" => {
             println!(
@@ -2373,6 +2346,209 @@ fn register_role(
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct RoleBindingSpec<'a> {
+    model: Option<&'a str>,
+    runtime: &'a str,
+    provider: Option<&'a str>,
+    model_name: Option<&'a str>,
+}
+
+#[derive(Clone, Copy)]
+struct AgentTeamsChoice {
+    agent_teams: bool,
+    no_agent_teams: bool,
+}
+
+struct PreparedRoleRegistration {
+    role: String,
+    model_write: Option<orchestrator::config::ModelConfig>,
+    role_cfg: orchestrator::config::RoleConfig,
+}
+
+fn prepare_role_registration(
+    cfg: &Config,
+    role: &str,
+    spec: RoleBindingSpec<'_>,
+    teams_choice: AgentTeamsChoice,
+) -> Result<PreparedRoleRegistration> {
+    let Some(runtime_cfg) = cfg.runtimes.get(spec.runtime) else {
+        anyhow::bail!(
+            "unknown runtime '{}'. Available: {}",
+            spec.runtime,
+            available_runtimes_for_cli(cfg)
+        );
+    };
+
+    let resolved_model_id = resolve_role_model_id(cfg, spec.model, spec.provider, spec.model_name)?;
+    let existing_model = cfg.models.iter().find(|m| m.id == resolved_model_id);
+    let model_write = match existing_model {
+        Some(existing) if spec.provider.is_some() || spec.model_name.is_some() => {
+            let provider = spec.provider.unwrap_or(existing.provider.as_str());
+            if !cfg.providers.contains_key(provider) {
+                anyhow::bail!(
+                    "unknown provider '{}'. Available: {}",
+                    provider,
+                    available_providers_for_cli(cfg)
+                );
+            }
+            Some(orchestrator::config::ModelConfig {
+                id: resolved_model_id.clone(),
+                provider: provider.to_string(),
+                name: spec
+                    .model_name
+                    .unwrap_or(existing.name.as_str())
+                    .to_string(),
+            })
+        }
+        Some(_) => None,
+        None => {
+            let Some(provider) = spec.provider else {
+                anyhow::bail!(
+                    "unknown model '{}'. Available: {}\nTo register it inline, use provider/model-name@runtime.",
+                    resolved_model_id,
+                    available_models_for_cli(cfg)
+                );
+            };
+            if !cfg.providers.contains_key(provider) {
+                anyhow::bail!(
+                    "unknown provider '{}'. Available: {}",
+                    provider,
+                    available_providers_for_cli(cfg)
+                );
+            }
+            Some(orchestrator::config::ModelConfig {
+                id: resolved_model_id.clone(),
+                provider: provider.to_string(),
+                name: spec
+                    .model_name
+                    .unwrap_or(resolved_model_id.as_str())
+                    .to_string(),
+            })
+        }
+    };
+
+    let teams = if teams_choice.no_agent_teams {
+        false
+    } else if teams_choice.agent_teams {
+        true
+    } else {
+        default_agent_teams(role, spec.runtime, runtime_cfg)
+    };
+    Ok(PreparedRoleRegistration {
+        role: role.to_string(),
+        model_write,
+        role_cfg: orchestrator::config::RoleConfig {
+            model: resolved_model_id,
+            runtime: spec.runtime.to_string(),
+            agent_teams: teams,
+        },
+    })
+}
+
+fn save_role_profile(
+    config_path: &Path,
+    name: &str,
+    bindings: &[(&str, Option<&str>)],
+    dry_run: bool,
+) -> Result<()> {
+    let mut cfg = Config::load(config_path)?;
+    let mut prepared = Vec::new();
+    for (role, raw) in bindings {
+        let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        let parsed = parse_role_profile_binding(raw)
+            .with_context(|| format!("parsing binding for role '{role}'"))?;
+        let item = prepare_role_registration(
+            &cfg,
+            role,
+            parsed,
+            AgentTeamsChoice {
+                agent_teams: false,
+                no_agent_teams: false,
+            },
+        )?;
+        if let Some(model_cfg) = &item.model_write {
+            upsert_config_model(&mut cfg, model_cfg.clone());
+        }
+        cfg.roles.insert(item.role.clone(), item.role_cfg.clone());
+        prepared.push(item);
+    }
+
+    if prepared.is_empty() {
+        anyhow::bail!(
+            "profile '{name}' has no role bindings; pass at least one of --planner, --critic, --reviewer, --worker-cc, --worker-codex"
+        );
+    }
+
+    if dry_run {
+        println!("Role profile dry-run: {name}");
+    } else {
+        println!("Role profile saved: {name}");
+    }
+    for item in &prepared {
+        if !dry_run {
+            if let Some(model_cfg) = &item.model_write {
+                Config::write_model_to_config_file(config_path, model_cfg)?;
+            }
+            Config::write_role_to_config_file(config_path, &item.role, &item.role_cfg)?;
+        }
+        println!(
+            "  ✓ {:<13} model={} runtime={} agent_teams={}",
+            item.role, item.role_cfg.model, item.role_cfg.runtime, item.role_cfg.agent_teams
+        );
+        if let Some(model_cfg) = &item.model_write {
+            println!(
+                "    model {} -> {}/{}",
+                model_cfg.id, model_cfg.provider, model_cfg.name
+            );
+        }
+    }
+    println!("\nNext: orchestrator roles list");
+    println!("Next: orchestrator doctor");
+    Ok(())
+}
+
+fn upsert_config_model(cfg: &mut Config, model_cfg: orchestrator::config::ModelConfig) {
+    if let Some(existing) = cfg.models.iter_mut().find(|model| model.id == model_cfg.id) {
+        *existing = model_cfg;
+    } else {
+        cfg.models.push(model_cfg);
+    }
+}
+
+fn parse_role_profile_binding(raw: &str) -> Result<RoleBindingSpec<'_>> {
+    let Some((model_part, runtime)) = raw.rsplit_once('@') else {
+        anyhow::bail!("expected model@runtime or provider/model-name@runtime");
+    };
+    let model_part = model_part.trim();
+    let runtime = runtime.trim();
+    if model_part.is_empty() || runtime.is_empty() {
+        anyhow::bail!("model and runtime cannot be empty");
+    }
+    if let Some((provider, model_name)) = model_part.split_once('/') {
+        let provider = provider.trim();
+        let model_name = model_name.trim();
+        if provider.is_empty() || model_name.is_empty() {
+            anyhow::bail!("provider/model-name cannot contain empty parts");
+        }
+        Ok(RoleBindingSpec {
+            model: None,
+            runtime,
+            provider: Some(provider),
+            model_name: Some(model_name),
+        })
+    } else {
+        Ok(RoleBindingSpec {
+            model: Some(model_part),
+            runtime,
+            provider: None,
+            model_name: None,
+        })
+    }
 }
 
 fn resolve_role_model_id(
@@ -5064,6 +5240,102 @@ mod tests {
         assert!(body.contains("model: minimax-m3"));
         assert!(body.contains("runtime: claude-code"));
         assert!(body.contains("agent_teams: true"));
+    }
+
+    #[test]
+    fn parse_role_profile_binding_accepts_model_or_provider_model() {
+        let model = parse_role_profile_binding("sonnet@claude-code").unwrap();
+        assert_eq!(model.model, Some("sonnet"));
+        assert_eq!(model.provider, None);
+        assert_eq!(model.model_name, None);
+        assert_eq!(model.runtime, "claude-code");
+
+        let provider = parse_role_profile_binding("minimax/MiniMax-M3@claude-code").unwrap();
+        assert_eq!(provider.model, None);
+        assert_eq!(provider.provider, Some("minimax"));
+        assert_eq!(provider.model_name, Some("MiniMax-M3"));
+        assert_eq!(provider.runtime, "claude-code");
+
+        assert!(parse_role_profile_binding("sonnet").is_err());
+        assert!(parse_role_profile_binding("/MiniMax-M3@claude-code").is_err());
+    }
+
+    #[test]
+    fn save_role_profile_writes_multiple_roles_and_inline_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        std::fs::write(
+            &config_path,
+            "providers:\n  anthropic:\n    type: anthropic\n    api_key: ${ANTHROPIC_API_KEY}\n  minimax:\n    type: openai\n    api_key: ${MINIMAX_API_KEY}\n    base_url: https://api.minimaxi.com/v1\nruntimes:\n  claude-code:\n    type: subprocess\n    binary: claude\n    supports_agent_teams: true\n  codex:\n    type: subprocess\n    binary: codex\nmodels:\n  - id: sonnet\n    provider: anthropic\n    name: claude-sonnet-4-6\nroles: {}\nbehavior: {}\n",
+        )
+        .unwrap();
+
+        save_role_profile(
+            &config_path,
+            "dev",
+            &[
+                ("planner", Some("sonnet@claude-code")),
+                ("worker-cc", Some("minimax/MiniMax-M3@claude-code")),
+                ("worker-codex", Some("sonnet@codex")),
+            ],
+            false,
+        )
+        .unwrap();
+
+        let body = std::fs::read_to_string(&config_path).unwrap();
+        assert!(body.contains("planner:"));
+        assert!(body.contains("worker-cc:"));
+        assert!(body.contains("worker-codex:"));
+        assert!(body.contains("id: minimax-m3"));
+        assert!(body.contains("provider: minimax"));
+        assert!(body.contains("name: MiniMax-M3"));
+        assert!(body.contains("agent_teams: true"));
+        assert!(body.contains("runtime: codex"));
+    }
+
+    #[test]
+    fn save_role_profile_allows_later_roles_to_reuse_new_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        std::fs::write(
+            &config_path,
+            "providers:\n  minimax:\n    type: openai\n    api_key: ${MINIMAX_API_KEY}\n    base_url: https://api.minimaxi.com/v1\nruntimes:\n  claude-code:\n    type: subprocess\n    binary: claude\n    supports_agent_teams: true\nmodels: []\nroles: {}\nbehavior: {}\n",
+        )
+        .unwrap();
+
+        save_role_profile(
+            &config_path,
+            "reuse",
+            &[
+                ("planner", Some("minimax/MiniMax-M3@claude-code")),
+                ("critic", Some("minimax-m3@claude-code")),
+            ],
+            false,
+        )
+        .unwrap();
+
+        let body = std::fs::read_to_string(&config_path).unwrap();
+        assert_eq!(body.matches("id: minimax-m3").count(), 1);
+        assert!(body.contains("planner:"));
+        assert!(body.contains("critic:"));
+    }
+
+    #[test]
+    fn save_role_profile_dry_run_does_not_write_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        let original = "providers:\n  anthropic:\n    type: anthropic\n    api_key: ${ANTHROPIC_API_KEY}\nruntimes:\n  claude-code:\n    type: subprocess\n    binary: claude\nmodels:\n  - id: sonnet\n    provider: anthropic\n    name: claude-sonnet-4-6\nroles: {}\nbehavior: {}\n";
+        std::fs::write(&config_path, original).unwrap();
+
+        save_role_profile(
+            &config_path,
+            "preview",
+            &[("planner", Some("sonnet@claude-code"))],
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), original);
     }
 
     #[test]

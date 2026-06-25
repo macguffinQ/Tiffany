@@ -255,7 +255,7 @@ struct WorkerMeta {
     reused: Option<bool>,
 }
 
-const TIFFANY_ROLE_USAGE: &str = "Usage: /roles [list|show <role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]";
+const TIFFANY_ROLE_USAGE: &str = "Usage: /roles [list|show <role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>|profile <name> --planner model@runtime --worker-cc provider/model@runtime]";
 
 pub(crate) fn spawn_event_bridge(app_event_tx: AppEventSender, launch: TiffanyOrchestratorLaunch) {
     tokio::spawn(async move {
@@ -1113,7 +1113,7 @@ fn roles_command_args(args: &str) -> Result<Vec<String>, String> {
     }
 
     match parts[0].as_str() {
-        "list" | "show" | "register" => {
+        "list" | "show" | "register" | "profile" => {
             let mut command_args = vec!["roles".to_string()];
             command_args.extend(parts);
             Ok(command_args)
@@ -1721,10 +1721,118 @@ fn concise_roles_success(
                 next_line("/doctor", "verify provider/model/runtime wiring"),
             ])
         }
+        Some("profile") => role_profile_summary_lines(command_args, output),
         Some("list") => role_summary_lines(&String::from_utf8_lossy(&output.stdout), "roles"),
         Some("show") => role_summary_lines(&String::from_utf8_lossy(&output.stdout), "role"),
         _ => None,
     }
+}
+
+fn role_profile_summary_lines(
+    command_args: &[String],
+    output: &std::process::Output,
+) -> Option<Vec<Line<'static>>> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let name = command_args
+        .get(2)
+        .map(String::as_str)
+        .or_else(|| parse_prefixed_field(&stdout, "Role profile saved:"))
+        .or_else(|| parse_prefixed_field(&stdout, "Role profile dry-run:"))
+        .unwrap_or("profile");
+    let rows = parse_role_profile_rows(&stdout);
+    if rows.is_empty() {
+        return None;
+    }
+
+    let dry_run = stdout.contains("Role profile dry-run:");
+    let title = if dry_run {
+        format!("{name} preview")
+    } else {
+        format!("{name} saved")
+    };
+    let mut lines = vec![status_line(
+        if dry_run { "●" } else { "✓" },
+        TIFFANY_BLUE,
+        "profile",
+        &title,
+    )];
+    for row in rows.iter().take(8) {
+        lines.push(role_profile_row_line(row));
+    }
+    if rows.len() > 8 {
+        lines.push(body_line(&format!("… {} more", rows.len() - 8), true));
+    }
+    lines.push(next_line("/roles", "review active role bindings"));
+    lines.push(next_line("/doctor", "verify provider/model/runtime wiring"));
+    Some(lines)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RoleProfileRow {
+    role: String,
+    model: String,
+    runtime: String,
+    agent_teams: String,
+}
+
+fn parse_role_profile_rows(text: &str) -> Vec<RoleProfileRow> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let line = line.strip_prefix('✓')?.trim();
+            let mut parts = line.split_whitespace();
+            let role = parts.next()?.to_string();
+            let mut model = None;
+            let mut runtime = None;
+            let mut agent_teams = None;
+            for part in parts {
+                if let Some(value) = part.strip_prefix("model=") {
+                    model = Some(value.to_string());
+                } else if let Some(value) = part.strip_prefix("runtime=") {
+                    runtime = Some(value.to_string());
+                } else if let Some(value) = part.strip_prefix("agent_teams=") {
+                    agent_teams = Some(value.to_string());
+                }
+            }
+            Some(RoleProfileRow {
+                role,
+                model: model?,
+                runtime: runtime?,
+                agent_teams: agent_teams.unwrap_or_else(|| "false".to_string()),
+            })
+        })
+        .collect()
+}
+
+fn parse_prefixed_field<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix(prefix).map(str::trim))
+        .filter(|value| !value.is_empty())
+}
+
+fn role_profile_row_line(row: &RoleProfileRow) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            "  ✓ ",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:<13}", row.role),
+            Style::default()
+                .fg(TIFFANY_SOFT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(row.model.clone(), Style::default()),
+        Span::styled(" · ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(row.runtime.clone(), Style::default().fg(Color::DarkGray)),
+        Span::styled(" · teams ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(
+            row.agent_teams.clone(),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])
 }
 
 fn concise_provider_success(
@@ -4643,6 +4751,39 @@ mod tests {
                 .unwrap_err()
                 .contains("at most")
         );
+    }
+
+    #[test]
+    fn roles_command_args_accept_profile_save() {
+        assert_eq!(
+            roles_command_args("profile dev --planner sonnet@claude-code --worker-cc minimax/MiniMax-M3@claude-code")
+                .unwrap(),
+            strings(&[
+                "roles",
+                "profile",
+                "dev",
+                "--planner",
+                "sonnet@claude-code",
+                "--worker-cc",
+                "minimax/MiniMax-M3@claude-code",
+            ])
+        );
+    }
+
+    #[test]
+    fn role_profile_summary_lines_render_profile_rows() {
+        let rows = parse_role_profile_rows(
+            "Role profile saved: dev\n  ✓ planner       model=sonnet runtime=claude-code agent_teams=false\n  ✓ worker-cc     model=minimax-m3 runtime=claude-code agent_teams=true\n\nNext: orchestrator roles list\n",
+        );
+        let lines = rows.iter().map(role_profile_row_line).collect::<Vec<_>>();
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert_eq!(
+            parse_prefixed_field("Role profile saved: dev", "Role profile saved:"),
+            Some("dev")
+        );
+        assert!(text.contains("✓ planner      sonnet · claude-code · teams false"));
+        assert!(text.contains("✓ worker-cc    minimax-m3 · claude-code · teams true"));
     }
 
     #[test]

@@ -426,6 +426,36 @@ enum RolesCmd {
         #[arg(long)]
         no_agent_teams: bool,
     },
+
+    /// Save a complete orchestration role profile in one command
+    Profile {
+        /// Profile label shown in command output
+        name: String,
+
+        /// Planner binding: model@runtime or provider/model-name@runtime
+        #[arg(long)]
+        planner: Option<String>,
+
+        /// Critic binding: model@runtime or provider/model-name@runtime
+        #[arg(long)]
+        critic: Option<String>,
+
+        /// Reviewer binding: model@runtime or provider/model-name@runtime
+        #[arg(long)]
+        reviewer: Option<String>,
+
+        /// Claude Code worker binding: model@runtime or provider/model-name@runtime
+        #[arg(long = "worker-cc")]
+        worker_cc: Option<String>,
+
+        /// Codex worker binding: model@runtime or provider/model-name@runtime
+        #[arg(long = "worker-codex")]
+        worker_codex: Option<String>,
+
+        /// Preview writes without changing the config file
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]

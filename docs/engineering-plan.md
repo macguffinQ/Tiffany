@@ -25,6 +25,8 @@ storage, roles, providers, and diagnostics.
   `/thread export <role>` for handoff or manual continuation.
 - Orchestration control events are grouped into compact run timeline cells,
   while worker/tool/stderr output remains visible as waterfall text.
+- Role profiles can save multiple planner, critic, worker, and reviewer
+  bindings in one command; the native TUI can call that through `/roles profile`.
 - `tiffany-loop` checks that the `orchestrator` runtime is launchable before
   entering the native TUI, and reports concrete repair commands when it is not.
 
@@ -59,6 +61,6 @@ storage, roles, providers, and diagnostics.
 
 ## Near-Term Backlog
 
-- Add a role/provider preset editor that can save a complete planner, critic,
-  worker, reviewer profile in one flow.
+- Add a native dropdown form for role profiles on top of the new
+  `/roles profile` command.
 - Add upstream sync notes for each pulled Codex UI update.
