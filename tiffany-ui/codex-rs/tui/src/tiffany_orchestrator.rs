@@ -2921,7 +2921,10 @@ mod tests {
 
     #[test]
     fn thread_command_args_maps_native_tui_shortcuts() {
-        assert_eq!(thread_command_args("").unwrap(), strings(&["thread", "list"]));
+        assert_eq!(
+            thread_command_args("").unwrap(),
+            strings(&["thread", "list"])
+        );
         assert_eq!(
             thread_command_args("list").unwrap(),
             strings(&["thread", "list"])

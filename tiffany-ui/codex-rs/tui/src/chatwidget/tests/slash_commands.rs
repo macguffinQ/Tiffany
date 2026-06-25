@@ -349,6 +349,28 @@ async fn tiffany_orchestrator_rejects_legacy_terminal_command_submit() {
 }
 
 #[tokio::test]
+async fn tiffany_orchestrator_help_lists_supported_commands() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    submit_composer_text(&mut chat, "/help");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Tiffany orchestrator commands:"));
+    assert!(rendered.contains("/provider"));
+    assert!(rendered.contains("/role"));
+    assert!(rendered.contains("/thread"));
+    assert!(rendered.contains("/doctor"));
+    assert!(!rendered.contains("not available in Tiffany orchestrator mode"));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn tiffany_orchestrator_rejects_hidden_codex_command_when_dequeued() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);

@@ -46,6 +46,8 @@ pub enum SlashCommand {
     Roles,
     Thread,
     Doctor,
+    #[strum(to_string = "help", serialize = "commands", serialize = "h")]
+    Help,
     Agent,
     Side,
     Btw,
@@ -133,6 +135,7 @@ impl SlashCommand {
             SlashCommand::Roles => "inspect or register tiffany-loop orchestrator roles",
             SlashCommand::Thread => "inspect or clear stable worker thread sessions",
             SlashCommand::Doctor => "diagnose tiffany-loop orchestrator setup",
+            SlashCommand::Help => "show Tiffany orchestrator commands",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Side | SlashCommand::Btw => {
                 "start a side conversation in an ephemeral fork"
@@ -175,6 +178,7 @@ impl SlashCommand {
                 | SlashCommand::Roles
                 | SlashCommand::Thread
                 | SlashCommand::Doctor
+                | SlashCommand::Help
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
@@ -247,6 +251,7 @@ impl SlashCommand {
             | SlashCommand::Roles
             | SlashCommand::Thread
             | SlashCommand::Doctor
+            | SlashCommand::Help
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins

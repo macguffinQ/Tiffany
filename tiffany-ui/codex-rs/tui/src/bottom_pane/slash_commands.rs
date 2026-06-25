@@ -69,7 +69,13 @@ pub(crate) struct BuiltinCommandFlags {
 
 /// Return the built-ins that should be visible/usable for the current input.
 pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static str, SlashCommand)> {
-    built_in_slash_commands()
+    let commands = if flags.tiffany_orchestrator_shell {
+        tiffany_orchestrator_commands()
+    } else {
+        built_in_slash_commands()
+    };
+
+    commands
         .into_iter()
         .filter(|(_, cmd)| {
             !flags.tiffany_orchestrator_shell || tiffany_orchestrator_command_visible(*cmd)
@@ -85,6 +91,26 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .collect()
 }
 
+fn tiffany_orchestrator_commands() -> Vec<(&'static str, SlashCommand)> {
+    [
+        SlashCommand::Provider,
+        SlashCommand::Role,
+        SlashCommand::Roles,
+        SlashCommand::Thread,
+        SlashCommand::Doctor,
+        SlashCommand::Status,
+        SlashCommand::Help,
+        SlashCommand::Copy,
+        SlashCommand::Raw,
+        SlashCommand::Diff,
+        SlashCommand::Clear,
+        SlashCommand::Exit,
+    ]
+    .into_iter()
+    .map(|cmd| (cmd.command(), cmd))
+    .collect()
+}
+
 fn tiffany_orchestrator_command_visible(cmd: SlashCommand) -> bool {
     matches!(
         cmd,
@@ -97,6 +123,7 @@ fn tiffany_orchestrator_command_visible(cmd: SlashCommand) -> bool {
             | SlashCommand::Raw
             | SlashCommand::Diff
             | SlashCommand::Status
+            | SlashCommand::Help
             | SlashCommand::Clear
             | SlashCommand::Quit
             | SlashCommand::Exit
@@ -156,9 +183,6 @@ fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> 
         | "ctx" | "handoff" | "continue" | "graph" | "acp" | "result" | "final" | "usage"
         | "sessions" | "history" | "checkpoint" | "rollback" | "retry" | "cancel" | "o" => {
             "This is a legacy terminal chat command; the native Tiffany TUI currently exposes setup and local utility commands only."
-        }
-        "help" | "h" | "commands" => {
-            "Type / to open the native command menu: /provider, /role, /roles, /thread, /doctor, /status, /diff, /copy, /raw."
         }
         _ => return None,
     };
@@ -384,16 +408,37 @@ mod tests {
         .map(|(_, command)| command)
         .collect::<Vec<_>>();
 
-        assert!(commands.contains(&SlashCommand::Provider));
-        assert!(commands.contains(&SlashCommand::Role));
-        assert!(commands.contains(&SlashCommand::Roles));
-        assert!(commands.contains(&SlashCommand::Thread));
-        assert!(commands.contains(&SlashCommand::Doctor));
-        assert!(commands.contains(&SlashCommand::Exit));
+        assert_eq!(
+            commands,
+            vec![
+                SlashCommand::Provider,
+                SlashCommand::Role,
+                SlashCommand::Roles,
+                SlashCommand::Thread,
+                SlashCommand::Doctor,
+                SlashCommand::Status,
+                SlashCommand::Help,
+                SlashCommand::Copy,
+                SlashCommand::Raw,
+                SlashCommand::Diff,
+                SlashCommand::Clear,
+                SlashCommand::Exit,
+            ]
+        );
         assert!(!commands.contains(&SlashCommand::Model));
         assert!(!commands.contains(&SlashCommand::Permissions));
         assert!(!commands.contains(&SlashCommand::Init));
         assert!(!commands.contains(&SlashCommand::Compact));
+        assert_eq!(
+            find_builtin_command(
+                "commands",
+                BuiltinCommandFlags {
+                    tiffany_orchestrator_shell: true,
+                    ..all_enabled_flags()
+                },
+            ),
+            Some(SlashCommand::Help)
+        );
     }
 
     #[test]

@@ -49,6 +49,19 @@ const ROLES_USAGE: &str =
     "Usage: /roles [list|show <role>|register <role> --model <model-id> --runtime <runtime-id>]";
 const THREAD_USAGE: &str = "Usage: /thread [list|show <role>|clear <role>]";
 const DOCTOR_USAGE: &str = "Usage: /doctor [run]";
+const TIFFANY_HELP: &str = "\
+Tiffany orchestrator commands:
+/provider   configure providers and API keys
+/role       register one role with provider/model/runtime
+/roles      inspect registered roles
+/thread     inspect or clear stable worker sessions
+/doctor     diagnose setup
+/status     show current session status
+/copy       copy the last answer
+/raw        toggle copy-friendly raw scrollback
+/diff       show git diff
+/clear      clear the UI
+/exit       exit tiffany-loop";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -422,6 +435,9 @@ impl ChatWidget {
             }
             SlashCommand::Doctor => {
                 self.dispatch_tiffany_doctor_command("");
+            }
+            SlashCommand::Help => {
+                self.add_info_message(TIFFANY_HELP.to_string(), /*hint*/ None);
             }
             SlashCommand::Side | SlashCommand::Btw => {
                 self.request_empty_side_conversation(cmd);
@@ -1223,6 +1239,7 @@ impl ChatWidget {
             | SlashCommand::Roles
             | SlashCommand::Thread
             | SlashCommand::Doctor
+            | SlashCommand::Help
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Feedback
             | SlashCommand::New

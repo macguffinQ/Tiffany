@@ -647,14 +647,13 @@ mod tests {
             })
             .collect();
 
-        for expected in [
-            "provider", "role", "roles", "thread", "doctor", "status", "exit",
-        ] {
-            assert!(
-                cmds.iter().any(|cmd| cmd == expected),
-                "expected '/{expected}' in Tiffany popup, got {cmds:?}"
-            );
-        }
+        assert_eq!(
+            cmds.iter().take(12).map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                "provider", "role", "roles", "thread", "doctor", "status", "help", "copy", "raw",
+                "diff", "clear", "exit",
+            ]
+        );
         for hidden in ["model", "permissions", "init", "compact", "apps", "fast"] {
             assert!(
                 !cmds.iter().any(|cmd| cmd == hidden),
