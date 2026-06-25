@@ -1658,6 +1658,11 @@ pub(super) fn provider_setup_draft_args(draft: &ProviderSetupDraft) -> Result<St
     if !env.is_empty() && !key.is_empty() {
         return Err("fill either env or key, not both".to_string());
     }
+    if provider_requires_endpoint(provider, kind) && endpoint.is_empty() {
+        return Err(format!(
+            "endpoint is required for OpenAI-compatible provider `{provider}`"
+        ));
+    }
 
     let mut args = vec!["setup".to_string(), provider.to_string()];
     if !kind.is_empty() {
@@ -1678,6 +1683,10 @@ pub(super) fn provider_setup_draft_args(draft: &ProviderSetupDraft) -> Result<St
     }
 
     Ok(args.join(" "))
+}
+
+fn provider_requires_endpoint(provider: &str, kind: &str) -> bool {
+    kind.eq_ignore_ascii_case("openai") && !provider.eq_ignore_ascii_case("openai")
 }
 
 #[derive(Clone, Copy)]

@@ -776,12 +776,9 @@ async fn slash_provider_bare_opens_setup_prompt() {
     assert!(popup.contains("Endpoint"));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    match rx.try_recv() {
-        Ok(AppEvent::TiffanyOrchestratorProviderCommand { args }) => {
-            assert_eq!(args, "setup custom --type openai --env CUSTOM_API_KEY");
-        }
-        other => panic!("expected TiffanyOrchestratorProviderCommand, got {other:?}"),
-    }
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    let popup = render_bottom_popup(&chat, /*width*/ 90);
+    assert!(popup.contains("endpoint is required"));
 }
 
 #[tokio::test]
@@ -829,12 +826,9 @@ async fn slash_provider_selection_fields_ignore_direct_typing() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    match rx.try_recv() {
-        Ok(AppEvent::TiffanyOrchestratorProviderCommand { args }) => {
-            assert_eq!(args, "setup custom --type openai --env CUSTOM_API_KEY");
-        }
-        other => panic!("expected TiffanyOrchestratorProviderCommand, got {other:?}"),
-    }
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    let popup = render_bottom_popup(&chat, /*width*/ 90);
+    assert!(popup.contains("endpoint is required"));
 }
 
 #[tokio::test]
@@ -914,6 +908,25 @@ fn provider_setup_draft_rejects_env_and_key_together() {
     .expect_err("env and key should conflict");
 
     assert_eq!(err, "fill either env or key, not both");
+}
+
+#[test]
+fn provider_setup_draft_requires_custom_endpoint() {
+    let err = super::super::slash_dispatch::provider_setup_draft_args(
+        &crate::bottom_pane::ProviderSetupDraft {
+            provider: "custom".to_string(),
+            kind: "openai".to_string(),
+            env: "CUSTOM_API_KEY".to_string(),
+            key: String::new(),
+            endpoint: String::new(),
+        },
+    )
+    .expect_err("custom OpenAI-compatible providers need an endpoint");
+
+    assert_eq!(
+        err,
+        "endpoint is required for OpenAI-compatible provider `custom`"
+    );
 }
 
 #[test]

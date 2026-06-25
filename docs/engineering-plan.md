@@ -12,6 +12,9 @@ storage, roles, providers, and diagnostics.
 - `tiffany` is only a compatibility alias.
 - Tiffany mode shows only commands that are wired in Tiffany mode.
 - Provider and role setup must not require account login from the upstream UI.
+- Custom OpenAI-compatible providers must require an explicit endpoint before
+  saving, so first-run setup cannot create a provider that immediately fails at
+  runtime.
 - Worker output is rendered as readable waterfall text, not raw JSON.
 - Worker sessions are stable per role and can be inspected or cleared with
   `/thread`.
