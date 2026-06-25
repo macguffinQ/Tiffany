@@ -1122,6 +1122,9 @@ fn native_resume_command(agent: &str, native_session_id: &str) -> String {
     if agent == "codex" {
         return format!("codex exec resume {native_session_id}");
     }
+    if agent == "gemini" {
+        return "gemini --resume latest".to_string();
+    }
     format!("{agent} resume {native_session_id}")
 }
 

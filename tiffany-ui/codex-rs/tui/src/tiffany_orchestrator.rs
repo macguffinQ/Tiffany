@@ -560,6 +560,7 @@ fn runtime_aliases(runtime: &str) -> &'static [&'static str] {
     match runtime {
         "codex" => &["codex"],
         "claude-code" | "claude" | "cc" => &["claude-code", "claude", "cc"],
+        "gemini" | "gemini-cli" => &["gemini", "gemini-cli"],
         _ => &[],
     }
 }
@@ -569,6 +570,8 @@ fn default_binary_for_runtime(runtime: &str) -> String {
         "claude".to_string()
     } else if is_codex_runtime(runtime) {
         "codex".to_string()
+    } else if is_gemini_runtime(runtime) {
+        "gemini".to_string()
     } else {
         runtime.to_string()
     }
@@ -577,6 +580,7 @@ fn default_binary_for_runtime(runtime: &str) -> String {
 fn default_worker_role(roles: &HashMap<String, RawTiffanyRoleConfig>) -> Option<String> {
     default_worker_role_for_runtime(roles, is_claude_runtime, "worker-cc")
         .or_else(|| default_worker_role_for_runtime(roles, is_codex_runtime, "worker-codex"))
+        .or_else(|| default_worker_role_for_runtime(roles, is_gemini_runtime, "worker-gemini"))
 }
 
 fn default_worker_role_for_runtime(
@@ -602,6 +606,10 @@ fn is_claude_runtime(runtime: &str) -> bool {
 
 fn is_codex_runtime(runtime: &str) -> bool {
     runtime == "codex"
+}
+
+fn is_gemini_runtime(runtime: &str) -> bool {
+    matches!(runtime, "gemini" | "gemini-cli")
 }
 
 fn is_worker_role_name(name: &str) -> bool {
@@ -1614,7 +1622,7 @@ fn doctor_repair_actions(text: &str) -> Vec<DoctorRepairAction> {
         push_doctor_action(
             &mut actions,
             "install runtime",
-            "install claude/codex or change the role runtime",
+            "install claude/codex/gemini or change the role runtime",
         );
     }
     if actions.is_empty() && lower.contains("all required checks passed") {
@@ -2691,7 +2699,7 @@ fn diagnostic_hint(error: &str) -> Option<&'static str> {
         || lower.contains("no such file or directory")
     {
         return Some(
-            "hint: install the selected runtime binary (`claude` or `codex`) or update the role runtime",
+            "hint: install the selected runtime binary (`claude`, `codex`, or `gemini`) or update the role runtime",
         );
     }
     if lower.contains("permission denied") || lower.contains("operation not permitted") {
@@ -4466,6 +4474,34 @@ mod tests {
                 "worker  runtime-missing  worker-codex · codex · definitely-missing-codex"
             )
         );
+        Ok(())
+    }
+
+    #[test]
+    fn intro_lines_show_gemini_worker_runtime_readiness() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let config_path = temp.path().join("config.yaml");
+        let runtime = temp.path().join(executable_name("gemini"));
+        std::fs::write(&runtime, "")?;
+        make_launchable(&runtime)?;
+        std::fs::write(
+            &config_path,
+            format!(
+                "providers:\n  google:\n    type: google\nruntimes:\n  gemini:\n    type: subprocess\n    binary: {}\nmodels:\n  - id: gemini-pro\n    provider: google\n    name: gemini-2.5-pro\nroles:\n  worker-gemini:\n    model: gemini-pro\n    runtime: gemini\nbehavior: {{}}\n",
+                runtime.display()
+            ),
+        )?;
+        let config = TiffanyOrchestratorConfig {
+            bin: "orchestrator".to_string(),
+            extra_args: Vec::new(),
+            config_path: Some(config_path.display().to_string()),
+        };
+        let readiness = startup_readiness(Some(&config));
+
+        let lines = idle_intro_lines_with_readiness(0, Some(&readiness));
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("worker  ready  worker-gemini · gemini"));
         Ok(())
     }
 

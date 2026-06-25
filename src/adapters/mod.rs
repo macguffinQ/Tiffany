@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 pub mod claude_code;
 pub mod codex_cli;
 pub mod direct_api;
+pub mod gemini_cli;
 
 #[derive(Clone, Default)]
 pub(crate) struct StderrCapture {

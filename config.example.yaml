@@ -37,6 +37,11 @@ runtimes:
     binary: codex
     supports_mcp: false
     supports_agent_teams: false
+  gemini:
+    type: subprocess
+    binary: gemini
+    supports_mcp: false
+    supports_agent_teams: false
   direct:
     type: sdk
     supports_mcp: false
@@ -87,6 +92,9 @@ roles:
   worker-codex:
     model: gpt4o
     runtime: codex
+  worker-gemini:
+    model: gemini-pro
+    runtime: gemini
   reviewer:
     model: gpt4o-mini
     runtime: codex

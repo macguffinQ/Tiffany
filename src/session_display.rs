@@ -176,6 +176,9 @@ fn native_resume_command(session: &Session) -> String {
     if session.agent == "codex" {
         return format!("codex exec resume {native_session_id}");
     }
+    if session.agent == "gemini" {
+        return "gemini --resume latest".into();
+    }
     "none".into()
 }
 

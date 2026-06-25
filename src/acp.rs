@@ -1785,7 +1785,7 @@ fn available_commands_json() -> Value {
     let mut commands = vec![{
         json!({
         "name": "agent",
-        "description": "Select worker route: auto, claude, codex, or role name",
+        "description": "Select worker route: auto, claude, codex, gemini, or role name",
         "input": { "hint": route_hint }
         })
     }];
@@ -2519,6 +2519,7 @@ mod tests {
         assert_eq!(normalize_agent_hint("auto"), None);
         assert_eq!(normalize_agent_hint("claude"), Some("worker-cc".into()));
         assert_eq!(normalize_agent_hint("codex"), Some("worker-codex".into()));
+        assert_eq!(normalize_agent_hint("gemini"), Some("worker-gemini".into()));
         assert_eq!(normalize_agent_hint("worker-x"), Some("worker-x".into()));
     }
 
@@ -3179,7 +3180,10 @@ mod tests {
             .filter_map(|command| command.get("name").and_then(Value::as_str))
             .collect::<Vec<_>>();
 
-        assert_eq!(names, vec!["agent", "claude", "codex", "auto", "context"]);
+        assert_eq!(
+            names,
+            vec!["agent", "claude", "codex", "gemini", "auto", "context"]
+        );
     }
 
     #[test]

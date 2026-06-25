@@ -582,7 +582,7 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
         },
         SlashCommandDef {
             name: "continue",
-            description: "open Claude/Codex CLI inline",
+            description: "open native worker CLI inline",
         },
         SlashCommandDef {
             name: "graph",
@@ -3434,7 +3434,7 @@ fn handle_thread_command(
     match args {
         ["clear" | "reset" | "fresh", role, ..] => clear_worker_thread_native_session(store, config, role),
         ["clear" | "reset" | "fresh"] => {
-            "Usage: /thread clear <role>\nThis clears only the native Claude/Codex session id; Tiffany keeps the worker thread and prior Tiffany session history.".into()
+            "Usage: /thread clear <role>\nThis clears only the native worker CLI session id; Tiffany keeps the worker thread and prior Tiffany session history.".into()
         }
         [selector, ..] => format_worker_threads(store, config, input, Some(selector)),
         [] => format_worker_threads(store, config, input, None),
@@ -3489,7 +3489,7 @@ pub(super) fn format_worker_threads(
         }
     }
     out.push_str(
-        "\n\nDetails: /thread <role>  Resume: /continue claude or /continue codex  Fresh start: /thread clear <role>",
+        "\n\nDetails: /thread <role>  Resume: /continue claude|codex|gemini  Fresh start: /thread clear <role>",
     );
     out
 }
@@ -3628,6 +3628,9 @@ fn worker_thread_model_label(config: &Config, thread: &WorkerThread) -> String {
 }
 
 fn native_thread_resume_command(thread: &WorkerThread) -> String {
+    if thread.agent == "gemini" || thread.runtime == "gemini" {
+        return "gemini --resume latest".into();
+    }
     let Some(native_session_id) = thread
         .native_session_id
         .as_deref()
@@ -3650,12 +3653,17 @@ fn tui_continue_command(thread: &WorkerThread) -> String {
         "/continue claude".into()
     } else if thread.agent == "codex" || thread.runtime == "codex" {
         "/continue codex".into()
+    } else if thread.agent == "gemini" || thread.runtime == "gemini" {
+        "/continue gemini".into()
     } else {
         "none".into()
     }
 }
 
 fn worker_thread_status_hint(thread: &WorkerThread) -> &'static str {
+    if thread.agent == "gemini" || thread.runtime == "gemini" {
+        return "Tiffany reuses this worker thread context; Gemini native CLI resume is available as latest/index in the project";
+    }
     if thread.native_session_id.is_some() {
         "ready for native resume; Tiffany will reuse this session for the same role"
     } else {

@@ -48,7 +48,7 @@ enum Cmd {
         #[arg(long)]
         critic: Option<String>,
 
-        /// Force worker route: claude, codex, auto, or any configured worker role
+        /// Force worker route: claude, codex, gemini, auto, or any configured worker role
         #[arg(long)]
         worker: Option<String>,
 
@@ -108,7 +108,7 @@ enum Cmd {
         #[arg(long)]
         critic: Option<String>,
 
-        /// Force worker route: claude, codex, auto, or any configured worker role
+        /// Force worker route: claude, codex, gemini, auto, or any configured worker role
         #[arg(long)]
         worker: Option<String>,
 
@@ -148,7 +148,7 @@ enum Cmd {
 
     /// Run an Agent Client Protocol (ACP) server over stdio
     Acp {
-        /// Worker route: auto, claude, codex, or a role name from config
+        /// Worker route: auto, claude, codex, gemini, or a role name from config
         #[arg(long, default_value = "auto")]
         agent: String,
 

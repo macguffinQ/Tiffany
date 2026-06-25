@@ -957,7 +957,8 @@ fn worker_route_sort_key(name: &str) -> (u8, String) {
     match name {
         "worker-cc" => (0, name.to_string()),
         "worker-codex" => (1, name.to_string()),
-        _ => (2, name.to_string()),
+        "worker-gemini" => (2, name.to_string()),
+        _ => (3, name.to_string()),
     }
 }
 
@@ -2094,7 +2095,8 @@ fn worker_role_sort_key(role: &str) -> (u8, String) {
     match role {
         "worker-cc" => (0, role.to_string()),
         "worker-codex" => (1, role.to_string()),
-        _ => (2, role.to_string()),
+        "worker-gemini" => (2, role.to_string()),
+        _ => (3, role.to_string()),
     }
 }
 
@@ -2212,6 +2214,9 @@ fn worker_thread_model_label(cfg: &Config, thread: &WorkerThread) -> String {
 }
 
 fn native_thread_resume_command(thread: &WorkerThread) -> String {
+    if thread.agent == "gemini" || thread.runtime == "gemini" {
+        return "gemini --resume latest".to_string();
+    }
     let Some(native_session_id) = thread
         .native_session_id
         .as_deref()
@@ -2230,6 +2235,9 @@ fn native_thread_resume_command(thread: &WorkerThread) -> String {
 }
 
 fn worker_thread_status_hint(thread: &WorkerThread) -> &'static str {
+    if thread.agent == "gemini" || thread.runtime == "gemini" {
+        return "Tiffany reuses this worker thread context; Gemini native CLI resume is available as latest/index in the project";
+    }
     if thread.native_session_id.is_some() {
         "ready for native resume; Tiffany will reuse this session for the same role"
     } else {
@@ -2480,7 +2488,7 @@ fn save_role_profile(
 
     if prepared.is_empty() {
         anyhow::bail!(
-            "profile '{name}' has no role bindings; pass at least one of --planner, --critic, --reviewer, --worker-cc, --worker-codex"
+            "profile '{name}' has no role bindings; pass at least one of --planner, --critic, --reviewer, --worker-cc, --worker-codex, --worker-gemini"
         );
     }
 
@@ -2917,7 +2925,14 @@ fn run_wizard(config_path: &Path) -> Result<()> {
     // ── Step 4: assign models to roles ──────────────────────
     println!("\n{}", c(ansi::BOLD, "Step 4: assign models to roles"));
     let default_assignments = default_role_assignments(&cfg)?;
-    for role in ["planner", "critic", "reviewer", "worker-cc", "worker-codex"] {
+    for role in [
+        "planner",
+        "critic",
+        "reviewer",
+        "worker-cc",
+        "worker-codex",
+        "worker-gemini",
+    ] {
         cfg.roles.remove(role);
     }
     for assignment in &default_assignments {
@@ -3180,14 +3195,21 @@ fn default_role_assignments(cfg: &Config) -> Result<Vec<DefaultRoleAssignment>> 
             "gpt4o",
         ],
     );
+    let gemini_primary = pick_runtime_model(cfg, RuntimeTarget::Gemini, &["gemini-pro"]);
 
-    let Some(planner) = codex_primary.clone().or_else(|| claude_primary.clone()) else {
+    let Some(planner) = codex_primary
+        .clone()
+        .or_else(|| claude_primary.clone())
+        .or_else(|| gemini_primary.clone())
+    else {
         anyhow::bail!(
-            "no configured model can drive Claude Code or Codex runtimes; add anthropic/minimax/openai-compatible/ollama provider first"
+            "no configured model can drive Claude Code, Codex, or Gemini runtimes; add anthropic/minimax/openai-compatible/ollama/google provider first"
         );
     };
     let planner_runtime = if codex_primary.as_deref() == Some(planner.as_str()) {
         "codex"
+    } else if gemini_primary.as_deref() == Some(planner.as_str()) {
+        "gemini"
     } else {
         "claude-code"
     };
@@ -3195,9 +3217,12 @@ fn default_role_assignments(cfg: &Config) -> Result<Vec<DefaultRoleAssignment>> 
     let critic = claude_smart
         .clone()
         .or_else(|| codex_primary.clone())
+        .or_else(|| gemini_primary.clone())
         .expect("planner availability checked above");
     let critic_runtime = if claude_smart.as_deref() == Some(critic.as_str()) {
         "claude-code"
+    } else if gemini_primary.as_deref() == Some(critic.as_str()) {
+        "gemini"
     } else {
         "codex"
     };
@@ -3205,9 +3230,12 @@ fn default_role_assignments(cfg: &Config) -> Result<Vec<DefaultRoleAssignment>> 
     let reviewer = codex_cheap
         .clone()
         .or_else(|| claude_cheap.clone())
+        .or_else(|| gemini_primary.clone())
         .expect("planner availability checked above");
     let reviewer_runtime = if codex_cheap.as_deref() == Some(reviewer.as_str()) {
         "codex"
+    } else if gemini_primary.as_deref() == Some(reviewer.as_str()) {
+        "gemini"
     } else {
         "claude-code"
     };
@@ -3248,6 +3276,14 @@ fn default_role_assignments(cfg: &Config) -> Result<Vec<DefaultRoleAssignment>> 
             agent_teams: false,
         });
     }
+    if let Some(model) = gemini_primary {
+        assignments.push(DefaultRoleAssignment {
+            role: "worker-gemini",
+            model,
+            runtime: "gemini",
+            agent_teams: false,
+        });
+    }
     Ok(assignments)
 }
 
@@ -3255,6 +3291,7 @@ fn default_role_assignments(cfg: &Config) -> Result<Vec<DefaultRoleAssignment>> 
 enum RuntimeTarget {
     Claude,
     Codex,
+    Gemini,
 }
 
 fn pick_runtime_model(
@@ -3294,30 +3331,40 @@ fn model_supports_runtime(
             provider.kind.eq_ignore_ascii_case("openai")
                 || provider.kind.eq_ignore_ascii_case("ollama")
         }
+        RuntimeTarget::Gemini => provider.kind.eq_ignore_ascii_case("google"),
     }
 }
 
 fn default_tag_overrides(cfg: &Config) -> Vec<(&'static str, String)> {
+    let fallback_role = runtime::default_worker_role(&cfg.roles).unwrap_or_else(|| {
+        cfg.roles
+            .keys()
+            .find(|role| role.contains("worker"))
+            .cloned()
+            .unwrap_or_else(|| "worker-cc".to_string())
+    });
     let refactor_role = if cfg.roles.contains_key("worker-cc") {
-        "worker-cc"
+        "worker-cc".to_string()
     } else {
-        "worker-codex"
+        fallback_role.clone()
     };
     let fast_role = if cfg.roles.contains_key("worker-codex") {
-        "worker-codex"
+        "worker-codex".to_string()
+    } else if cfg.roles.contains_key("worker-gemini") {
+        "worker-gemini".to_string()
     } else {
-        refactor_role
+        refactor_role.clone()
     };
 
-    [
+    let defaults = [
         ("refactor", refactor_role),
-        ("boilerplate", fast_role),
+        ("boilerplate", fast_role.clone()),
         ("test", fast_role),
-    ]
-    .into_iter()
-    .filter(|(_, role)| cfg.roles.contains_key(*role))
-    .map(|(tag, role)| (tag, role.to_string()))
-    .collect()
+    ];
+    defaults
+        .into_iter()
+        .filter(|(_, role)| cfg.roles.contains_key(role))
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -4757,6 +4804,9 @@ fn resolve_role_cli_spec(
             roles::cli_subprocess::RoleCliRuntime::Codex => {
                 spec = apply_codex_provider_config(spec, cfg, model_entry);
             }
+            roles::cli_subprocess::RoleCliRuntime::Gemini => {
+                spec = apply_gemini_provider_env(spec, cfg, model_entry);
+            }
         }
     }
     Ok(spec)
@@ -4900,6 +4950,37 @@ fn codex_provider_env_key(provider_id: &str, api_key: &str) -> (String, Option<S
     )
 }
 
+fn apply_gemini_provider_env(
+    mut spec: roles::cli_subprocess::RoleCliSpec,
+    cfg: &Config,
+    model_entry: &orchestrator::config::ModelConfig,
+) -> roles::cli_subprocess::RoleCliSpec {
+    let Some(provider) = cfg.providers.get(&model_entry.provider) else {
+        return spec;
+    };
+    if !provider.kind.eq_ignore_ascii_case("google") {
+        return spec;
+    }
+    if let Some(api_key) = provider
+        .api_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        if let Some(env) = provider_secret_env_name(api_key) {
+            if let Ok(value) = std::env::var(env) {
+                spec = spec
+                    .with_env("GEMINI_API_KEY", &value)
+                    .with_env("GOOGLE_API_KEY", value);
+            }
+        } else {
+            spec = spec
+                .with_env("GEMINI_API_KEY", api_key.trim())
+                .with_env("GOOGLE_API_KEY", api_key.trim());
+        }
+    }
+    spec
+}
+
 fn provider_secret_env_name(value: &str) -> Option<&str> {
     let value = value.trim();
     if let Some(rest) = value.strip_prefix("${") {
@@ -4916,6 +4997,9 @@ fn default_binary_for_role_runtime(runtime: roles::cli_subprocess::RoleCliRuntim
         roles::cli_subprocess::RoleCliRuntime::Codex => which::which("codex")
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "codex".to_string()),
+        roles::cli_subprocess::RoleCliRuntime::Gemini => which::which("gemini")
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "gemini".to_string()),
     }
 }
 
@@ -5030,6 +5114,23 @@ pub async fn build_orchestrator(
                     .map(|m| m.name.clone())
                     .unwrap_or_else(|| "gpt-4o".to_string());
                 let adapter = Arc::new(adapters::codex_cli::CodexCLIAdapter::new(
+                    binary,
+                    model,
+                    worktree_pool.clone(),
+                    session_store.clone(),
+                    provider_configs.clone(),
+                ));
+                adapters.insert(name.clone(), adapter);
+            }
+            ("subprocess", Some(roles::cli_subprocess::RoleCliRuntime::Gemini)) => {
+                let binary = rt.binary.clone().unwrap_or_else(|| "gemini".to_string());
+                let model = cfg
+                    .models
+                    .iter()
+                    .find(|m| m.id == "gemini-pro")
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| "gemini-1.5-pro".to_string());
+                let adapter = Arc::new(adapters::gemini_cli::GeminiCLIAdapter::new(
                     binary,
                     model,
                     worktree_pool.clone(),
@@ -5567,6 +5668,104 @@ mod tests {
     }
 
     #[test]
+    fn role_cli_spec_injects_google_provider_env_for_gemini_runtime() {
+        let mut cfg = config_with_models();
+        cfg.runtimes.insert(
+            "gemini".to_string(),
+            orchestrator::config::RuntimeConfig {
+                kind: "subprocess".to_string(),
+                binary: Some("gemini-test".to_string()),
+                supports_mcp: false,
+                supports_agent_teams: false,
+            },
+        );
+        cfg.providers.insert(
+            "google".to_string(),
+            orchestrator::config::ProviderConfig {
+                kind: "google".to_string(),
+                api_key: Some("google-secret".to_string()),
+                base_url: None,
+            },
+        );
+        cfg.models.push(ModelConfig {
+            id: "gemini-pro".to_string(),
+            provider: "google".to_string(),
+            name: "gemini-2.5-pro".to_string(),
+        });
+        cfg.roles.insert(
+            "worker-gemini".to_string(),
+            RoleConfig {
+                model: "gemini-pro".to_string(),
+                runtime: "gemini".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        let spec =
+            resolve_role_cli_spec(&cfg, "worker-gemini", None, "fallback", "gemini").unwrap();
+
+        assert_eq!(
+            spec.runtime,
+            orchestrator::roles::cli_subprocess::RoleCliRuntime::Gemini
+        );
+        assert_eq!(spec.binary, "gemini-test");
+        assert_eq!(spec.model, "gemini-2.5-pro");
+        assert!(spec
+            .env
+            .contains(&("GEMINI_API_KEY".to_string(), "google-secret".to_string())));
+        assert!(spec
+            .env
+            .contains(&("GOOGLE_API_KEY".to_string(), "google-secret".to_string())));
+        assert!(!format!("{spec:?}").contains("google-secret"));
+    }
+
+    #[tokio::test]
+    async fn build_orchestrator_registers_gemini_runtime_adapter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = config_with_models();
+        cfg.behavior.worktree_base = tmp.path().join("worktrees");
+        cfg.behavior.session_log_dir = tmp.path().join("sessions");
+        cfg.behavior.db_path = tmp.path().join("state.sqlite");
+        cfg.runtimes.insert(
+            "gemini".to_string(),
+            orchestrator::config::RuntimeConfig {
+                kind: "subprocess".to_string(),
+                binary: Some("gemini-test".to_string()),
+                supports_mcp: false,
+                supports_agent_teams: false,
+            },
+        );
+        cfg.providers.insert(
+            "google".to_string(),
+            orchestrator::config::ProviderConfig {
+                kind: "google".to_string(),
+                api_key: Some("google-secret".to_string()),
+                base_url: None,
+            },
+        );
+        cfg.models.push(ModelConfig {
+            id: "gemini-pro".to_string(),
+            provider: "google".to_string(),
+            name: "gemini-2.5-pro".to_string(),
+        });
+        cfg.roles.insert(
+            "worker-gemini".to_string(),
+            RoleConfig {
+                model: "gemini-pro".to_string(),
+                runtime: "gemini".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        let orch = build_orchestrator(&cfg, true, true, None, None, None)
+            .await
+            .unwrap();
+
+        let adapter = orch.adapters.get("gemini").expect("gemini adapter");
+        assert_eq!(adapter.name(), "gemini");
+    }
+
+    #[test]
     fn worker_thread_cli_list_includes_roles_resume_state_and_actions() {
         let mut cfg = config_with_models();
         cfg.roles.insert(
@@ -5737,6 +5936,41 @@ mod tests {
     }
 
     #[test]
+    fn ab_worker_routes_can_include_gemini_worker() {
+        let mut cfg = config_with_models();
+        cfg.runtimes.insert(
+            "gemini".to_string(),
+            orchestrator::config::RuntimeConfig {
+                kind: "subprocess".to_string(),
+                binary: Some("gemini-test".to_string()),
+                supports_mcp: false,
+                supports_agent_teams: false,
+            },
+        );
+        cfg.roles.insert(
+            "worker-codex".to_string(),
+            RoleConfig {
+                model: "gpt4o".to_string(),
+                runtime: "codex".to_string(),
+                agent_teams: false,
+            },
+        );
+        cfg.roles.insert(
+            "worker-gemini".to_string(),
+            RoleConfig {
+                model: "gemini-pro".to_string(),
+                runtime: "gemini".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        assert_eq!(
+            ab_worker_routes(&cfg, Some("gemini")).unwrap(),
+            ["worker-gemini".to_string(), "worker-codex".to_string()]
+        );
+    }
+
+    #[test]
     fn ab_worker_routes_require_two_distinct_workers() {
         let mut cfg = config_with_models();
         cfg.roles.insert(
@@ -5805,6 +6039,7 @@ mod tests {
         assert!(cfg.roles.is_empty());
         assert!(cfg.runtimes.contains_key("claude-code"));
         assert!(cfg.runtimes.contains_key("codex"));
+        assert!(cfg.runtimes.contains_key("gemini"));
     }
 
     #[test]
@@ -5881,6 +6116,21 @@ mod tests {
                 ("test", "worker-codex".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn setup_role_defaults_use_gemini_worker_for_google_only() {
+        let mut cfg = default_setup_config();
+        cfg.providers
+            .insert("google".to_string(), provider("google"));
+        register_default_models_for_configured_providers(&mut cfg);
+
+        let assignments = default_role_assignments(&cfg).unwrap();
+
+        assert!(assignments.iter().any(|item| item.role == "worker-gemini"));
+        assert!(!assignments.iter().any(|item| item.role == "worker-cc"));
+        assert!(!assignments.iter().any(|item| item.role == "worker-codex"));
+        assert!(assignments.iter().all(|item| item.runtime == "gemini"));
     }
 
     #[test]

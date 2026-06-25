@@ -34,6 +34,13 @@ pub const AGENT_RUNTIME_ROUTES: &[AgentRuntimeRoute] = &[
         runtime: Some("codex"),
         description: "Run worker tasks with Codex CLI",
     },
+    AgentRuntimeRoute {
+        label: "gemini",
+        aliases: &["gemini", "gemini-cli", "worker-gemini"],
+        role_hint: Some("worker-gemini"),
+        runtime: Some("gemini"),
+        description: "Run worker tasks with Gemini CLI",
+    },
 ];
 
 pub fn normalize_agent_hint(agent: &str) -> Option<String> {
@@ -97,9 +104,14 @@ pub fn is_codex_runtime(runtime: &str) -> bool {
     runtime == "codex"
 }
 
+pub fn is_gemini_runtime(runtime: &str) -> bool {
+    matches!(runtime, "gemini" | "gemini-cli")
+}
+
 pub fn default_worker_role(roles: &HashMap<String, RoleConfig>) -> Option<String> {
     default_worker_role_for_runtime(roles, "claude-code")
         .or_else(|| default_worker_role_for_runtime(roles, "codex"))
+        .or_else(|| default_worker_role_for_runtime(roles, "gemini"))
 }
 
 pub fn default_worker_role_for_runtime(
@@ -117,6 +129,12 @@ pub fn default_worker_role_for_runtime(
             return Some("worker-codex".into());
         }
         return first_worker_role_with_runtime(roles, is_codex_runtime);
+    }
+    if is_gemini_runtime(runtime) {
+        if roles.contains_key("worker-gemini") {
+            return Some("worker-gemini".into());
+        }
+        return first_worker_role_with_runtime(roles, is_gemini_runtime);
     }
     first_worker_role_with_runtime(roles, |role_runtime| role_runtime == runtime)
 }
@@ -156,6 +174,7 @@ mod tests {
         assert_eq!(normalize_agent_hint("claude"), Some("worker-cc".into()));
         assert_eq!(normalize_agent_hint("cc"), Some("worker-cc".into()));
         assert_eq!(normalize_agent_hint("codex"), Some("worker-codex".into()));
+        assert_eq!(normalize_agent_hint("gemini"), Some("worker-gemini".into()));
         assert_eq!(
             normalize_agent_hint("worker-codex"),
             Some("worker-codex".into())
@@ -168,6 +187,7 @@ mod tests {
         assert_eq!(agent_label(None), "auto");
         assert_eq!(agent_label(Some("worker-cc")), "claude");
         assert_eq!(agent_label(Some("worker-codex")), "codex");
+        assert_eq!(agent_label(Some("worker-gemini")), "gemini");
         assert_eq!(agent_label(Some("worker-x")), "worker-x");
     }
 

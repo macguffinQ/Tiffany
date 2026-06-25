@@ -32,6 +32,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 pub enum RoleCliRuntime {
     ClaudeCode,
     Codex,
+    Gemini,
 }
 
 impl RoleCliRuntime {
@@ -39,6 +40,7 @@ impl RoleCliRuntime {
         match runtime {
             "claude-code" | "claude" | "cc" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
+            "gemini" | "gemini-cli" => Some(Self::Gemini),
             _ => None,
         }
     }
@@ -47,6 +49,7 @@ impl RoleCliRuntime {
         match self {
             Self::ClaudeCode => "claude",
             Self::Codex => "codex",
+            Self::Gemini => "gemini",
         }
     }
 }
@@ -272,6 +275,7 @@ fn role_cli_command(spec: &RoleCliSpec, system_prompt: &str, user_prompt: &str) 
             spec.bypass_permissions,
         ),
         RoleCliRuntime::Codex => codex_role_command(spec, system_prompt, user_prompt),
+        RoleCliRuntime::Gemini => gemini_role_command(spec, system_prompt, user_prompt),
     };
     for (key, value) in &spec.env {
         cmd.env(key, value);
@@ -352,6 +356,24 @@ fn codex_role_command(spec: &RoleCliSpec, system_prompt: &str, user_prompt: &str
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     cmd.env("CODEX_UNSAFE_ALLOW_NO_GIT", "1");
+    cmd
+}
+
+fn gemini_role_command(spec: &RoleCliSpec, system_prompt: &str, user_prompt: &str) -> Command {
+    let prompt = format!(
+        "System instructions:\n{}\n\nUser task:\n{}",
+        system_prompt.trim(),
+        user_prompt.trim()
+    );
+    let mut cmd = Command::new(&spec.binary);
+    cmd.arg("--model")
+        .arg(&spec.model)
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg(prompt)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     cmd
 }
 
@@ -1131,6 +1153,42 @@ mod tests {
 
         assert_eq!(summary.kind, "result");
         assert_eq!(summary.text, "{\"approved\":true,\"issues\":[]}");
+    }
+
+    #[test]
+    fn parses_gemini_runtime_aliases() {
+        assert_eq!(
+            RoleCliRuntime::from_runtime_id("gemini"),
+            Some(RoleCliRuntime::Gemini)
+        );
+        assert_eq!(
+            RoleCliRuntime::from_runtime_id("gemini-cli"),
+            Some(RoleCliRuntime::Gemini)
+        );
+    }
+
+    #[test]
+    fn gemini_role_command_uses_model_stream_json_and_prompt() {
+        let spec = RoleCliSpec::new(RoleCliRuntime::Gemini, "gemini", "gemini-2.5-pro");
+        let cmd = gemini_role_command(&spec, "system", "user task");
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--model" && pair[1] == "gemini-2.5-pro"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--output-format" && pair[1] == "stream-json"));
+        assert!(args
+            .last()
+            .is_some_and(|prompt| prompt.contains("System instructions:\nsystem")));
+        assert!(args
+            .last()
+            .is_some_and(|prompt| prompt.contains("User task:\nuser task")));
     }
 
     #[test]
