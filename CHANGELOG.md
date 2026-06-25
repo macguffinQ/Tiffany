@@ -18,8 +18,14 @@ All notable changes to this project will be documented in this file.
   direct compatibility.
 - Tiffany orchestrator mode now explains known-but-hidden slash commands
   such as `/model` or `/init` instead of submitting them as plain prompts.
+- Legacy terminal chat commands typed in the native Tiffany TUI now show
+  command-specific migration hints, such as `/copy` for old `/result` usage
+  and `/status` or `/raw` for old process/detail commands.
 - Removed the `/model to change` header hint from Tiffany orchestrator mode
   because provider/model routing is configured through `/provider` and `/role`.
+- Aligned native Tiffany `/role` and `/roles` usage hints with the provider
+  plus API model flow, keeping internal model IDs out of the default TUI
+  guidance while preserving compatibility.
 - Clarified README command docs so the default native Tiffany TUI only lists
   currently wired commands, with legacy terminal chat commands called out
   separately.
