@@ -70,8 +70,13 @@ Usage:
 In the TUI:
   /provider     configure provider credentials and endpoints
   /role         register planner/critic/worker/reviewer roles
-  /roles        inspect current role -> model -> runtime wiring
+  /roles        inspect current role -> provider -> model -> runtime wiring
+  /thread       inspect or clear stable worker sessions
   /doctor       diagnose provider/model/key/runtime problems
+  /status       show current orchestration status
+  /diff         show git changes
+  /copy         copy the last assistant answer
+  /raw          toggle copy-friendly raw scrollback mode
 
 Environment:
   TIFFANY_HOME              UI config/state root, default: ~/.tiffany
