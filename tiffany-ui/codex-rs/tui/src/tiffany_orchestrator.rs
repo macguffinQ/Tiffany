@@ -161,6 +161,8 @@ pub(crate) struct TiffanyNativeChatEvent {
     pub(crate) role: String,
     pub(crate) status: String,
     pub(crate) title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) kind: Option<String>,
     pub(crate) content: Option<String>,
     pub(crate) agent: Option<String>,
     pub(crate) worker_role: Option<String>,
@@ -495,7 +497,14 @@ pub(crate) fn idle_intro_lines_with_readiness(
         workflow_line(),
         command_hint_line(
             "setup",
-            &["/provider", "/role", "/roles", "/thread", "/history", "/doctor"],
+            &[
+                "/provider",
+                "/role",
+                "/roles",
+                "/thread",
+                "/history",
+                "/doctor",
+            ],
         ),
         command_hint_line(
             "tools",
@@ -951,7 +960,11 @@ pub(crate) fn load_native_memory_turns(
     Ok(turns)
 }
 
-pub(crate) fn native_history_lines(codex_home: &Path, cwd: &Path, args: &str) -> Vec<Line<'static>> {
+pub(crate) fn native_history_lines(
+    codex_home: &Path,
+    cwd: &Path,
+    args: &str,
+) -> Vec<Line<'static>> {
     let command = match NativeHistoryCommand::parse(args) {
         Ok(command) => command,
         Err(err) => {
@@ -966,7 +979,9 @@ pub(crate) fn native_history_lines(codex_home: &Path, cwd: &Path, args: &str) ->
     };
     match load_native_chat_conversation(codex_home, cwd) {
         Ok(Some(conversation)) => match command {
-            NativeHistoryCommand::Show(opts) => native_history_conversation_lines(&conversation, opts),
+            NativeHistoryCommand::Show(opts) => {
+                native_history_conversation_lines(&conversation, opts)
+            }
             NativeHistoryCommand::Export { out, filter } => {
                 native_history_export_lines(codex_home, cwd, &conversation, out, filter)
             }
@@ -1050,7 +1065,9 @@ enum NativeHistoryCommand {
         out: Option<PathBuf>,
         filter: Option<NativeHistoryFilter>,
     },
-    Search { pattern: String },
+    Search {
+        pattern: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1179,7 +1196,12 @@ fn native_history_conversation_lines(
             .map(NativeHistoryFilter::display)
             .unwrap_or_else(|| "history".to_string());
         return vec![
-            status_line("⚠", Color::Yellow, "history", &format!("no events for {filter}")),
+            status_line(
+                "⚠",
+                Color::Yellow,
+                "history",
+                &format!("no events for {filter}"),
+            ),
             next_line("/history full", "show all native process events"),
         ];
     }
@@ -1230,8 +1252,14 @@ fn native_history_conversation_lines(
             true,
         ));
     }
-    lines.push(next_line("/history full", "show more native process events"));
-    lines.push(next_line("/thread <role>", "inspect native CLI resume command"));
+    lines.push(next_line(
+        "/history full",
+        "show more native process events",
+    ));
+    lines.push(next_line(
+        "/thread <role>",
+        "inspect native CLI resume command",
+    ));
     lines
 }
 
@@ -1287,7 +1315,12 @@ fn native_history_export_lines(
             .map(NativeHistoryFilter::display)
             .unwrap_or_else(|| "history".to_string());
         return vec![
-            status_line("⚠", Color::Yellow, "history", &format!("no events for {filter}")),
+            status_line(
+                "⚠",
+                Color::Yellow,
+                "history",
+                &format!("no events for {filter}"),
+            ),
             next_line("/history full", "show all native process events"),
         ];
     }
@@ -1296,7 +1329,12 @@ fn native_history_export_lines(
         && let Err(err) = std::fs::create_dir_all(parent)
     {
         return vec![
-            status_line("✗", Color::Red, "history", "could not create export directory"),
+            status_line(
+                "✗",
+                Color::Red,
+                "history",
+                "could not create export directory",
+            ),
             body_line(&format!("{err:#}"), true),
         ];
     }
@@ -1340,7 +1378,11 @@ fn native_history_search_lines(
         "✓",
         TIFFANY_BLUE,
         "history",
-        &format!("{} match(es) for '{}'", hits.len(), truncate_text(pattern, 80)),
+        &format!(
+            "{} match(es) for '{}'",
+            hits.len(),
+            truncate_text(pattern, 80)
+        ),
     )];
     for hit in hits {
         lines.push(body_line(
@@ -1390,7 +1432,14 @@ fn native_history_search_hits(
             &needle,
         );
         for event in &turn.events {
-            push_history_hit(&mut hits, limit, turn_number, "event", &event.title, &needle);
+            push_history_hit(
+                &mut hits,
+                limit,
+                turn_number,
+                "event",
+                &event.title,
+                &needle,
+            );
             if let Some(content) = event.content.as_deref() {
                 push_history_hit(&mut hits, limit, turn_number, "event", content, &needle);
             }
@@ -1484,6 +1533,9 @@ fn native_event_markdown_meta(event: &TiffanyNativeChatEvent) -> Vec<String> {
     if let Some(role) = event.worker_role.as_deref().and_then(nonempty_trimmed) {
         meta.push(format!("role `{}`", markdown_escape_inline(role)));
     }
+    if let Some(kind) = event.kind.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("kind `{}`", markdown_escape_inline(kind)));
+    }
     if let Some(agent) = event.agent.as_deref().and_then(nonempty_trimmed) {
         meta.push(format!("agent `{}`", markdown_escape_inline(agent)));
     }
@@ -1493,14 +1545,14 @@ fn native_event_markdown_meta(event: &TiffanyNativeChatEvent) -> Vec<String> {
     if let Some(model) = event.model.as_deref().and_then(nonempty_trimmed) {
         meta.push(format!("model `{}`", markdown_escape_inline(model)));
     }
-    if let Some(thread) = event
-        .worker_thread_id
+    if let Some(thread) = event.worker_thread_id.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("thread `{}`", markdown_escape_inline(thread)));
+    }
+    if let Some(native) = event
+        .native_session_id
         .as_deref()
         .and_then(nonempty_trimmed)
     {
-        meta.push(format!("thread `{}`", markdown_escape_inline(thread)));
-    }
-    if let Some(native) = event.native_session_id.as_deref().and_then(nonempty_trimmed) {
         meta.push(format!("native `{}`", markdown_escape_inline(native)));
     }
     meta
@@ -1510,33 +1562,42 @@ fn markdown_escape_inline(value: &str) -> String {
     value.replace('`', "\\`")
 }
 
-fn append_native_history_event_lines(lines: &mut Vec<Line<'static>>, turn: &NativeHistoryTurnView<'_>, limit: usize) {
+fn append_native_history_event_lines(
+    lines: &mut Vec<Line<'static>>,
+    turn: &NativeHistoryTurnView<'_>,
+    limit: usize,
+) {
     if turn.events.is_empty() {
         lines.push(body_line("   native events none captured", true));
         return;
     }
     for event in turn.events.iter().copied().take(limit) {
         let mut label = format!("   {} {}", status_glyph(&event.status), event.title);
-        if let Some(native) = event.native_session_id.as_deref().and_then(nonempty_trimmed) {
-            label.push_str(" · native ");
-            label.push_str(short_task_id(Some(native)).unwrap_or(native));
-        }
-        if let Some(thread) = event
-            .worker_thread_id
+        if let Some(native) = event
+            .native_session_id
             .as_deref()
             .and_then(nonempty_trimmed)
         {
+            label.push_str(" · native ");
+            label.push_str(short_task_id(Some(native)).unwrap_or(native));
+        }
+        if let Some(thread) = event.worker_thread_id.as_deref().and_then(nonempty_trimmed) {
             label.push_str(" · thread ");
             label.push_str(short_task_id(Some(thread)).unwrap_or(thread));
         }
         lines.push(body_line(&truncate_text(&label, 180), true));
+        if let Some(kind) = event.kind.as_deref().and_then(nonempty_trimmed) {
+            lines.push(detail_continuation_line(&format!("kind: {kind}")));
+        }
         if let Some(content) = event.content.as_deref().and_then(nonempty_trimmed) {
             for line in content.lines().take(4) {
                 lines.push(detail_continuation_line(&truncate_text(line, 180)));
             }
             let hidden = content.lines().count().saturating_sub(4);
             if hidden > 0 {
-                lines.push(detail_continuation_line(&format!("… {hidden} more line(s)")));
+                lines.push(detail_continuation_line(&format!(
+                    "… {hidden} more line(s)"
+                )));
             }
         }
     }
@@ -1561,9 +1622,7 @@ fn load_native_chat_store(codex_home: &Path) -> anyhow::Result<TiffanyNativeChat
     let store = match std::fs::read_to_string(&path) {
         Ok(body) => serde_json::from_str::<TiffanyNativeChatStore>(&body)
             .with_context(|| format!("parsing {}", path.display()))?,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            TiffanyNativeChatStore::default()
-        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => TiffanyNativeChatStore::default(),
         Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
     };
 
@@ -1671,10 +1730,15 @@ fn normalize_native_event(event: TiffanyNativeChatEvent) -> Option<TiffanyNative
     if role.is_empty() || status.is_empty() || title.is_empty() {
         return None;
     }
+    let kind = event
+        .kind
+        .and_then(trimmed_string)
+        .or_else(|| inferred_native_event_kind(&title, event.content.as_deref()));
     Some(TiffanyNativeChatEvent {
         role,
         status,
         title,
+        kind,
         content: event.content.and_then(trimmed_string),
         agent: event.agent.and_then(trimmed_string),
         worker_role: event.worker_role.and_then(trimmed_string),
@@ -2878,11 +2942,16 @@ fn thread_detail_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
         &format!("/history role {role}"),
         "show this role's native event stream",
     );
-    if let Some(thread_id) = fields.get("tiffany thread").and_then(|value| nonempty_trimmed(value))
+    if let Some(thread_id) = fields
+        .get("tiffany thread")
+        .and_then(|value| nonempty_trimmed(value))
     {
         next_line_into(
             &mut lines,
-            &format!("/history thread {}", short_task_id(Some(thread_id)).unwrap_or(thread_id)),
+            &format!(
+                "/history thread {}",
+                short_task_id(Some(thread_id)).unwrap_or(thread_id)
+            ),
             "show events for this Tiffany worker thread",
         );
     }
@@ -3830,10 +3899,12 @@ fn native_chat_event_from_progress(
     } else {
         event_title(event)
     };
+    let kind = native_event_kind_from_progress(event);
     normalize_native_event(TiffanyNativeChatEvent {
         role: event.role.clone(),
         status: event.status.clone(),
         title,
+        kind,
         content: visible
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -3846,6 +3917,68 @@ fn native_chat_event_from_progress(
         worker_thread_id: event.worker_thread_id.clone(),
         native_session_id: event.native_session_id.clone(),
     })
+}
+
+fn native_event_kind_from_progress(event: &TiffanyProgressEvent) -> Option<String> {
+    if event.status != "output" {
+        return Some(event.status.clone());
+    }
+    if event.role == "worker" {
+        return event
+            .content
+            .as_deref()
+            .and_then(worker_visible_output_kind)
+            .map(native_event_kind_label)
+            .map(str::to_string)
+            .or_else(|| Some("output".to_string()));
+    }
+    Some(
+        match event.role.as_str() {
+            "planner" => "plan",
+            "critic" => "critique",
+            "reviewer" => "review",
+            _ => "output",
+        }
+        .to_string(),
+    )
+}
+
+fn native_event_kind_label(kind: event_format::VisibleAgentOutputKind) -> &'static str {
+    match kind {
+        event_format::VisibleAgentOutputKind::Final => "final",
+        event_format::VisibleAgentOutputKind::Question => "question",
+        event_format::VisibleAgentOutputKind::ToolCall => "tool_call",
+        event_format::VisibleAgentOutputKind::ToolResult => "tool_result",
+        event_format::VisibleAgentOutputKind::Diff => "diff",
+        event_format::VisibleAgentOutputKind::Patch => "patch",
+        event_format::VisibleAgentOutputKind::FileUpdate => "file_update",
+        event_format::VisibleAgentOutputKind::Stderr => "stderr",
+        event_format::VisibleAgentOutputKind::Actionable => "alert",
+        event_format::VisibleAgentOutputKind::Normal => "output",
+    }
+}
+
+fn inferred_native_event_kind(title: &str, content: Option<&str>) -> Option<String> {
+    let title = title.to_ascii_lowercase();
+    for (needle, kind) in [
+        ("worker final", "final"),
+        ("worker question", "question"),
+        ("worker tool call", "tool_call"),
+        ("worker tool result", "tool_result"),
+        ("worker diff", "diff"),
+        ("worker patch", "patch"),
+        ("worker file update", "file_update"),
+        ("worker stderr", "stderr"),
+        ("worker alert", "alert"),
+    ] {
+        if title.contains(needle) {
+            return Some(kind.to_string());
+        }
+    }
+    content
+        .and_then(worker_visible_output_kind)
+        .map(native_event_kind_label)
+        .map(str::to_string)
 }
 
 fn worker_context_line(task_id: &str, meta: &WorkerMeta) -> String {
@@ -4306,7 +4439,10 @@ fn output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec<Line<'
 }
 
 fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec<Line<'static>> {
-    let kind = event.content.as_deref().and_then(worker_visible_output_kind);
+    let kind = event
+        .content
+        .as_deref()
+        .and_then(worker_visible_output_kind);
     let mut lines = vec![Line::from(vec![
         Span::styled(
             "│",
@@ -4322,7 +4458,11 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
                 .add_modifier(Modifier::BOLD),
         ),
     ])];
-    lines.extend(content.lines().map(|line| output_body_line_for_kind(line, kind)));
+    lines.extend(
+        content
+            .lines()
+            .map(|line| output_body_line_for_kind(line, kind)),
+    );
     if let Some(raw) = event.content.as_deref()
         && let Some(hint) = event_format::agent_failure_hint(raw, CONTROL_SUMMARY_MAX_CHARS)
     {
@@ -5632,7 +5772,10 @@ mod tests {
                 role: "worker".into(),
                 status: "output".into(),
                 title: "worker diff · worker-cc · claude-code · abc12345".into(),
-                content: Some("files changed:\n  - src/lib.rs\n\ndiff --git a/src/lib.rs b/src/lib.rs".into()),
+                kind: Some("diff".into()),
+                content: Some(
+                    "files changed:\n  - src/lib.rs\n\ndiff --git a/src/lib.rs b/src/lib.rs".into(),
+                ),
                 agent: Some("claude-code".into()),
                 worker_role: Some("worker-cc".into()),
                 model: Some("claude-sonnet-4-6".into()),
@@ -5649,7 +5792,11 @@ mod tests {
             .expect("conversation");
         let events = &loaded.turns[0].events;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].title, "worker diff · worker-cc · claude-code · abc12345");
+        assert_eq!(
+            events[0].title,
+            "worker diff · worker-cc · claude-code · abc12345"
+        );
+        assert_eq!(events[0].kind.as_deref(), Some("diff"));
         assert!(events[0].content.as_deref().unwrap().contains("diff --git"));
         assert_eq!(events[0].agent.as_deref(), Some("claude-code"));
         assert_eq!(
@@ -5676,6 +5823,7 @@ mod tests {
                     role: "worker".into(),
                     status: "output".into(),
                     title: "worker diff · worker-cc · claude-code · abc12345".into(),
+                    kind: Some("diff".into()),
                     content: Some(
                         "files changed:\n  - README.md\n\ndiff --git a/README.md b/README.md"
                             .into(),
@@ -5692,6 +5840,7 @@ mod tests {
                     role: "worker".into(),
                     status: "done".into(),
                     title: "worker-cc done · claude-code · 1s".into(),
+                    kind: Some("done".into()),
                     content: None,
                     agent: Some("claude-code".into()),
                     worker_role: Some("worker-cc".into()),
@@ -5712,6 +5861,7 @@ mod tests {
         assert!(text.contains("user  改一下 README"));
         assert!(text.contains("answer 已更新 README"));
         assert!(text.contains("worker diff"));
+        assert!(text.contains("kind: diff"));
         assert!(text.contains("diff --git a/README.md b/README.md"));
         assert!(text.contains("thread abcdef12"));
         assert!(text.contains("/history full"));
@@ -5735,6 +5885,7 @@ mod tests {
                 role: "worker".into(),
                 status: "output".into(),
                 title: "worker tool result · worker-cc · claude-code".into(),
+                kind: Some("tool_result".into()),
                 content: Some("cargo test -q\n\nok".into()),
                 agent: Some("claude-code".into()),
                 worker_role: Some("worker-cc".into()),
@@ -5762,8 +5913,53 @@ mod tests {
         assert!(markdown.contains("写测试"));
         assert!(markdown.contains("测试已通过"));
         assert!(markdown.contains("worker tool result"));
+        assert!(markdown.contains("kind `tool_result`"));
         assert!(markdown.contains("thread `abcdef12-0000-0000-0000-000000000000`"));
         assert!(markdown.contains("```text\ncargo test -q"));
+    }
+
+    #[test]
+    fn native_chat_events_infer_kind_for_old_saved_events() {
+        let old_event = TiffanyNativeChatEvent {
+            role: "worker".into(),
+            status: "output".into(),
+            title: "worker patch · worker-cc · claude-code".into(),
+            kind: None,
+            content: Some("*** Begin Patch\n*** Update File: README.md".into()),
+            agent: Some("claude-code".into()),
+            worker_role: Some("worker-cc".into()),
+            model: None,
+            provider: None,
+            task_id: Some("abc12345".into()),
+            worker_thread_id: None,
+            native_session_id: None,
+        };
+
+        let normalized = normalize_native_event(old_event).expect("normalized old event");
+
+        assert_eq!(normalized.kind.as_deref(), Some("patch"));
+    }
+
+    #[test]
+    fn progress_worker_diff_event_captures_native_kind() {
+        let event = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            content: Some(
+                "claude-code diff: files changed:\n  - README.md\n\ndiff --git a/README.md b/README.md"
+                    .to_string(),
+            ),
+            ..worker_output_event("worker output", "claude-code", "placeholder")
+        };
+        let visible = visible_content(&event).expect("diff visible");
+
+        let native = native_chat_event_from_progress(&event, Some(&visible)).expect("native event");
+
+        assert_eq!(native.kind.as_deref(), Some("diff"));
+        assert_eq!(
+            native.content.as_deref(),
+            Some("files changed:\n  - README.md\n\ndiff --git a/README.md b/README.md")
+        );
+        assert!(native.title.contains("worker diff"));
     }
 
     #[test]
@@ -5784,6 +5980,7 @@ mod tests {
                     role: "worker".into(),
                     status: "output".into(),
                     title: "worker output · worker-cc · claude-code".into(),
+                    kind: Some("output".into()),
                     content: Some("claude handoff content".into()),
                     agent: Some("claude-code".into()),
                     worker_role: Some("worker-cc".into()),
@@ -5797,6 +5994,7 @@ mod tests {
                     role: "worker".into(),
                     status: "output".into(),
                     title: "worker output · worker-codex · codex".into(),
+                    kind: Some("output".into()),
                     content: Some("codex handoff content".into()),
                     agent: Some("codex".into()),
                     worker_role: Some("worker-codex".into()),
@@ -5840,6 +6038,7 @@ mod tests {
                 role: "worker".into(),
                 status: "output".into(),
                 title: "worker diff · worker-cc · claude-code".into(),
+                kind: Some("diff".into()),
                 content: Some("diff --git a/src/login.rs b/src/login.rs".into()),
                 agent: Some("claude-code".into()),
                 worker_role: Some("worker-cc".into()),
@@ -5880,6 +6079,7 @@ mod tests {
                     role: "worker".into(),
                     status: "output".into(),
                     title: "worker output · worker-cc · claude-code".into(),
+                    kind: Some("output".into()),
                     content: Some("claude role output".into()),
                     agent: Some("claude-code".into()),
                     worker_role: Some("worker-cc".into()),
@@ -5893,6 +6093,7 @@ mod tests {
                     role: "worker".into(),
                     status: "output".into(),
                     title: "worker output · worker-codex · codex".into(),
+                    kind: Some("output".into()),
                     content: Some("codex role output".into()),
                     agent: Some("codex".into()),
                     worker_role: Some("worker-codex".into()),
@@ -5907,11 +6108,7 @@ mod tests {
         .expect("append");
 
         let by_role = native_history_lines(home.path(), cwd.path(), "role worker-cc");
-        let role_text = by_role
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let role_text = by_role.iter().map(line_text).collect::<Vec<_>>().join("\n");
         assert!(role_text.contains("filter  role worker-cc"));
         assert!(role_text.contains("claude role output"));
         assert!(!role_text.contains("codex role output"));
