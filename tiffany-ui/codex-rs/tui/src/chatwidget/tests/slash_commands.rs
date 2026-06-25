@@ -343,7 +343,9 @@ async fn tiffany_orchestrator_rejects_legacy_terminal_command_submit() {
         rendered.contains("'/process' is not available in Tiffany orchestrator mode"),
         "expected Tiffany legacy-command message, got {rendered:?}"
     );
-    assert!(rendered.contains("legacy terminal chat command"));
+    assert!(rendered.contains("run waterfall"));
+    assert!(rendered.contains("/status"));
+    assert!(rendered.contains("/raw"));
     assert_eq!(chat.bottom_pane.composer_text(), "/process 200");
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
@@ -459,7 +461,8 @@ async fn tiffany_orchestrator_rejects_legacy_terminal_command_when_dequeued() {
         rendered.contains("'/workflow' is not available in Tiffany orchestrator mode"),
         "expected Tiffany legacy-command message, got {rendered:?}"
     );
-    assert!(rendered.contains("legacy terminal chat command"));
+    assert!(rendered.contains("run waterfall"));
+    assert!(rendered.contains("/status"));
     assert!(chat.input_queue.queued_user_messages.is_empty());
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }

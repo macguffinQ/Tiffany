@@ -217,11 +217,40 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
 
 fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> {
     let hint = match name {
-        "workflow" | "flow" | "process" | "trace" | "queue" | "tests" | "test" | "context"
-        | "ctx" | "handoff" | "continue" | "graph" | "acp" | "result" | "final" | "usage"
-        | "sessions" | "history" | "checkpoint" | "rollback" | "retry" | "cancel" | "o" => {
-            "This is a legacy terminal chat command; the native Tiffany TUI currently exposes setup and local utility commands only."
+        "workflow" | "flow" | "process" | "trace" => {
+            "The native TUI shows the run waterfall inline. Use /status for current state, /raw for copy-friendly scrollback, or ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui for the legacy process commands."
         }
+        "queue" => {
+            "Queued follow-up prompts are shown in the bottom pane and run automatically after the active task finishes."
+        }
+        "result" | "final" => {
+            "The worker answer is already rendered as selectable chat text. Use /copy to copy the last assistant answer."
+        }
+        "o" => {
+            "Detail folding is handled by the native run view; /o exists only in the legacy terminal chat fallback."
+        }
+        "context" | "ctx" | "continue" => {
+            "Continue by typing the next prompt directly. Stable worker sessions can be inspected with /thread."
+        }
+        "sessions" | "history" => {
+            "Use /thread for active worker sessions, or run orchestrator sessions list/show from the shell for persisted logs."
+        }
+        "handoff" => {
+            "Ask for a handoff in chat, or use orchestrator sessions show/export from the shell for persisted session output."
+        }
+        "usage" => "Run orchestrator usage from the shell for token and cost summaries.",
+        "tests" | "test" => {
+            "Ask Tiffany to run the test command in chat, or run the command directly in your shell."
+        }
+        "graph" => {
+            "Use orchestrator sessions show <id|last> --flow from the shell for a readable orchestration waterfall."
+        }
+        "acp" => "Run orchestrator acp from the shell to start the Agent Client Protocol server.",
+        "checkpoint" | "rollback" => {
+            "Patch checkpoint and rollback helpers are only available in the legacy terminal chat fallback."
+        }
+        "retry" => "Re-submit the prompt directly; native retry controls are not wired yet.",
+        "cancel" => "Use Ctrl+C to cancel an active native Tiffany run.",
         _ => return None,
     };
     Some(hint)
@@ -515,7 +544,17 @@ mod tests {
         assert!(
             tiffany_orchestrator_unsupported_command_message("process")
                 .expect("legacy terminal chat command should be explained")
-                .contains("legacy terminal chat command")
+                .contains("run waterfall")
+        );
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("result")
+                .expect("legacy result command should be explained")
+                .contains("/copy")
+        );
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("o")
+                .expect("legacy folding command should be explained")
+                .contains("legacy terminal chat fallback")
         );
         assert!(tiffany_orchestrator_unsupported_command_message("provider").is_none());
         assert!(tiffany_orchestrator_unsupported_command_message("does-not-exist").is_none());
