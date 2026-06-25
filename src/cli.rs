@@ -2,7 +2,9 @@
 
 use anyhow::{Context, Result};
 use orchestrator::config::Config;
-use orchestrator::core::session_store::WorkerThread;
+use orchestrator::core::session_store::{
+    NativeConversation, NativeEvent, NativeImportReport, NativeTurn, WorkerThread,
+};
 use orchestrator::core::types::{Role, Session, Task, TaskStatus};
 use orchestrator::pipeline::orchestrator::Orchestrator;
 use orchestrator::roles::ab_judge::AbJudge;
@@ -17,6 +19,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+
+const TIFFANY_NATIVE_SESSIONS_FILE: &str = "tiffany-orchestrator/native-sessions.json";
 
 pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
     match cmd {
@@ -368,6 +372,21 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                     if report.session_ids.len() > 20 {
                         println!("  ... {} more", report.session_ids.len() - 20);
                     }
+                }
+                crate::SessionsCmd::ImportNative { path } => {
+                    let path = match path {
+                        Some(path) => path,
+                        None => default_native_sessions_path()
+                            .context("could not find tiffany-loop native history; pass --path")?,
+                    };
+                    let report = import_native_sessions_file(&store, &path)?;
+                    println!(
+                        "imported Tiffany native history from {}\n  conversations: {}\n  turns: {}\n  events: {}",
+                        path.display(),
+                        report.conversations,
+                        report.turns,
+                        report.events
+                    );
                 }
             }
             Ok(())
@@ -1907,7 +1926,7 @@ fn handle_thread(config_path: &Path, action: crate::ThreadCmd) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let store = orchestrator::core::session_store::SessionStore::open(
         &cfg.behavior.session_log_dir,
-        &cfg.behavior.session_log_dir.join("db.sqlite"),
+        &cfg.behavior.db_path,
     )?;
 
     match action {
@@ -1984,6 +2003,172 @@ fn handle_thread(config_path: &Path, action: crate::ThreadCmd) -> Result<()> {
             );
             Ok(())
         }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct NativeChatStoreFile {
+    #[serde(default)]
+    conversations: Vec<NativeChatConversationFile>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct NativeChatConversationFile {
+    id: String,
+    cwd: String,
+    #[serde(default)]
+    created_at_unix: u64,
+    #[serde(default)]
+    updated_at_unix: u64,
+    #[serde(default)]
+    turns: Vec<NativeChatTurnFile>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct NativeChatTurnFile {
+    user_prompt: String,
+    result: String,
+    #[serde(default)]
+    captured_at_unix: u64,
+    #[serde(default)]
+    events: Vec<NativeChatEventFile>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct NativeChatEventFile {
+    role: String,
+    status: String,
+    title: String,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    worker_role: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    task_id: Option<String>,
+    #[serde(default)]
+    worker_thread_id: Option<String>,
+    #[serde(default)]
+    native_session_id: Option<String>,
+}
+
+fn import_native_sessions_file(
+    store: &orchestrator::core::session_store::SessionStore,
+    path: &Path,
+) -> Result<NativeImportReport> {
+    let body =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let raw: NativeChatStoreFile =
+        serde_json::from_str(&body).with_context(|| format!("parsing {}", path.display()))?;
+    let mut report = NativeImportReport {
+        conversations: 0,
+        turns: 0,
+        events: 0,
+    };
+    for conversation in raw.conversations {
+        let Some(conversation) = native_conversation_from_file(conversation) else {
+            continue;
+        };
+        let imported = store.upsert_native_conversation(&conversation)?;
+        report.conversations += imported.conversations;
+        report.turns += imported.turns;
+        report.events += imported.events;
+    }
+    Ok(report)
+}
+
+fn native_conversation_from_file(
+    conversation: NativeChatConversationFile,
+) -> Option<NativeConversation> {
+    let id = trimmed_nonempty(conversation.id)?;
+    let cwd = trimmed_nonempty(conversation.cwd)?;
+    let turns = conversation
+        .turns
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, turn)| native_turn_from_file(idx as u32, turn))
+        .collect::<Vec<_>>();
+    (!turns.is_empty()).then_some(NativeConversation {
+        id,
+        cwd,
+        created_at_unix: conversation.created_at_unix,
+        updated_at_unix: conversation.updated_at_unix,
+        turns,
+    })
+}
+
+fn native_turn_from_file(turn_index: u32, turn: NativeChatTurnFile) -> Option<NativeTurn> {
+    let user_prompt = trimmed_nonempty(turn.user_prompt)?;
+    let result = trimmed_nonempty(turn.result)?;
+    let events = turn
+        .events
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, event)| native_event_from_file(idx as u32, event))
+        .collect::<Vec<_>>();
+    Some(NativeTurn {
+        turn_index,
+        user_prompt,
+        result,
+        captured_at_unix: turn.captured_at_unix,
+        events,
+    })
+}
+
+fn native_event_from_file(event_index: u32, event: NativeChatEventFile) -> Option<NativeEvent> {
+    Some(NativeEvent {
+        event_index,
+        role: trimmed_nonempty(event.role)?,
+        status: trimmed_nonempty(event.status)?,
+        title: trimmed_nonempty(event.title)?,
+        kind: event.kind.and_then(trimmed_nonempty),
+        content: event.content.and_then(trimmed_nonempty),
+        agent: event.agent.and_then(trimmed_nonempty),
+        worker_role: event.worker_role.and_then(trimmed_nonempty),
+        model: event.model.and_then(trimmed_nonempty),
+        provider: event.provider.and_then(trimmed_nonempty),
+        task_id: event.task_id.and_then(trimmed_nonempty),
+        worker_thread_id: event.worker_thread_id.and_then(trimmed_nonempty),
+        native_session_id: event.native_session_id.and_then(trimmed_nonempty),
+    })
+}
+
+fn trimmed_nonempty(value: String) -> Option<String> {
+    let value = value.trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn default_native_sessions_path() -> Option<PathBuf> {
+    native_home_candidates()
+        .into_iter()
+        .map(|home| home.join(TIFFANY_NATIVE_SESSIONS_FILE))
+        .find(|path| path.is_file())
+}
+
+fn native_home_candidates() -> Vec<PathBuf> {
+    let mut homes = Vec::new();
+    for env in ["TIFFANY_HOME", "CODEX_HOME"] {
+        if let Some(path) = std::env::var_os(env).filter(|value| !value.is_empty()) {
+            push_unique_path(&mut homes, PathBuf::from(path));
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        push_unique_path(&mut homes, home.join(".tiffany"));
+        push_unique_path(&mut homes, home.join(".codex"));
+    }
+    homes
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
     }
 }
 
@@ -5903,6 +6088,79 @@ mod tests {
         let body = std::fs::read_to_string(out).unwrap();
         assert!(body.contains("# Tiffany session"));
         assert!(body.contains("handoff ready"));
+    }
+
+    #[test]
+    fn import_native_sessions_file_writes_typed_events_to_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = orchestrator::core::session_store::SessionStore::open(
+            &tmp.path().join("logs"),
+            &tmp.path().join("db.sqlite"),
+        )
+        .unwrap();
+        let path = tmp.path().join("native-sessions.json");
+        std::fs::write(
+            &path,
+            r#"{
+              "version": 1,
+              "conversations": [
+                {
+                  "id": "tiffany-native-test",
+                  "cwd": "/tmp/project",
+                  "created_at_unix": 10,
+                  "updated_at_unix": 20,
+                  "turns": [
+                    {
+                      "user_prompt": "改 README",
+                      "result": "已修改",
+                      "captured_at_unix": 20,
+                      "events": [
+                        {
+                          "role": "worker",
+                          "status": "output",
+                          "title": "worker diff · worker-cc · claude-code",
+                          "kind": "diff",
+                          "content": "diff --git a/README.md b/README.md",
+                          "agent": "claude-code",
+                          "worker_role": "worker-cc",
+                          "model": "claude-sonnet-4-6",
+                          "provider": "anthropic",
+                          "task_id": "task-1",
+                          "worker_thread_id": "thread-1",
+                          "native_session_id": "native-1"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let report = import_native_sessions_file(&store, &path).unwrap();
+        let conversation = store
+            .native_conversation_by_cwd("/tmp/project")
+            .unwrap()
+            .expect("imported native conversation");
+
+        assert_eq!(report.conversations, 1);
+        assert_eq!(report.turns, 1);
+        assert_eq!(report.events, 1);
+        assert_eq!(conversation.id, "tiffany-native-test");
+        assert_eq!(conversation.turns[0].user_prompt, "改 README");
+        assert_eq!(
+            conversation.turns[0].events[0].kind.as_deref(),
+            Some("diff")
+        );
+        assert_eq!(
+            conversation.turns[0].events[0].content.as_deref(),
+            Some("diff --git a/README.md b/README.md")
+        );
+        assert_eq!(
+            conversation.turns[0].events[0].worker_role.as_deref(),
+            Some("worker-cc")
+        );
     }
 
     #[test]

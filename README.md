@@ -569,6 +569,13 @@ The native TUI intentionally hides unsupported upstream-only commands such as `/
 
 Legacy terminal chat commands are still available only when forcing the fallback runner with `ORCHESTRATOR_LEGACY_TUI=1` or running the compatibility terminal chat directly. That surface includes older commands such as `/workflow`, `/agent`, `/context`, `/process`, `/trace`, `/queue`, `/tests`, `/handoff`, `/continue`, `/graph`, `/acp`, `/result`, `/usage`, `/o`, and `/resume last`.
 
+To mirror the native TUI history JSON into the orchestrator SQLite session store:
+
+```bash
+orchestrator sessions import-native
+orchestrator sessions import-native --path ~/.tiffany/tiffany-orchestrator/native-sessions.json
+```
+
 The native bottom status line follows tiffany-loop-style run HUD behavior: it keeps one compact line for stage, elapsed time, worker route, context mode, queued message count, detail fold state, process filter, and review/worker issue counters.
 
 Troubleshooting first:

@@ -4,7 +4,7 @@ use crate::core::types::{Event, Role, Session};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -40,6 +40,48 @@ pub struct WorkerThread {
     pub last_session_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeConversation {
+    pub id: String,
+    pub cwd: String,
+    pub created_at_unix: u64,
+    pub updated_at_unix: u64,
+    pub turns: Vec<NativeTurn>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeTurn {
+    pub turn_index: u32,
+    pub user_prompt: String,
+    pub result: String,
+    pub captured_at_unix: u64,
+    pub events: Vec<NativeEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeEvent {
+    pub event_index: u32,
+    pub role: String,
+    pub status: String,
+    pub title: String,
+    pub kind: Option<String>,
+    pub content: Option<String>,
+    pub agent: Option<String>,
+    pub worker_role: Option<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub task_id: Option<String>,
+    pub worker_thread_id: Option<String>,
+    pub native_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeImportReport {
+    pub conversations: usize,
+    pub turns: usize,
+    pub events: usize,
 }
 
 /// Cross-process guard for one worker thread.
@@ -100,9 +142,47 @@ impl SessionStore {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS native_conversations (
+                id TEXT PRIMARY KEY,
+                cwd TEXT NOT NULL UNIQUE,
+                created_at_unix INTEGER NOT NULL,
+                updated_at_unix INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS native_turns (
+                conversation_id TEXT NOT NULL,
+                turn_index INTEGER NOT NULL,
+                user_prompt TEXT NOT NULL,
+                result TEXT NOT NULL,
+                captured_at_unix INTEGER NOT NULL,
+                PRIMARY KEY (conversation_id, turn_index),
+                FOREIGN KEY (conversation_id) REFERENCES native_conversations(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS native_events (
+                conversation_id TEXT NOT NULL,
+                turn_index INTEGER NOT NULL,
+                event_index INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                title TEXT NOT NULL,
+                kind TEXT,
+                content TEXT,
+                agent TEXT,
+                worker_role TEXT,
+                model TEXT,
+                provider TEXT,
+                task_id TEXT,
+                worker_thread_id TEXT,
+                native_session_id TEXT,
+                PRIMARY KEY (conversation_id, turn_index, event_index),
+                FOREIGN KEY (conversation_id, turn_index) REFERENCES native_turns(conversation_id, turn_index) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_native_turns_captured ON native_turns(captured_at_unix DESC);
+            CREATE INDEX IF NOT EXISTS idx_native_events_worker_role ON native_events(worker_role);
+            CREATE INDEX IF NOT EXISTS idx_native_events_worker_thread ON native_events(worker_thread_id);
             "#,
         )?;
         migrate_sessions_table(&db)?;
+        migrate_native_events_table(&db)?;
         Ok(Self {
             inner: Arc::new(SessionStoreInner {
                 log_dir: log_dir.to_path_buf(),
@@ -362,6 +442,137 @@ impl SessionStore {
         Ok(rows)
     }
 
+    pub fn upsert_native_conversation(
+        &self,
+        conversation: &NativeConversation,
+    ) -> Result<NativeImportReport> {
+        let db = self.inner.db.lock().unwrap();
+        let tx = db.unchecked_transaction()?;
+        tx.execute(
+            r#"INSERT INTO native_conversations (id, cwd, created_at_unix, updated_at_unix)
+               VALUES (?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                   cwd=excluded.cwd,
+                   created_at_unix=excluded.created_at_unix,
+                   updated_at_unix=excluded.updated_at_unix"#,
+            params![
+                conversation.id.as_str(),
+                conversation.cwd.as_str(),
+                conversation.created_at_unix as i64,
+                conversation.updated_at_unix as i64,
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM native_turns WHERE conversation_id = ?",
+            params![conversation.id.as_str()],
+        )?;
+
+        let mut event_count = 0usize;
+        for turn in &conversation.turns {
+            tx.execute(
+                r#"INSERT INTO native_turns
+                   (conversation_id, turn_index, user_prompt, result, captured_at_unix)
+                   VALUES (?,?,?,?,?)"#,
+                params![
+                    conversation.id.as_str(),
+                    turn.turn_index as i64,
+                    turn.user_prompt.as_str(),
+                    turn.result.as_str(),
+                    turn.captured_at_unix as i64,
+                ],
+            )?;
+            for event in &turn.events {
+                tx.execute(
+                    r#"INSERT INTO native_events
+                       (conversation_id, turn_index, event_index, role, status, title, kind, content, agent, worker_role, model, provider, task_id, worker_thread_id, native_session_id)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"#,
+                    params![
+                        conversation.id.as_str(),
+                        turn.turn_index as i64,
+                        event.event_index as i64,
+                        event.role.as_str(),
+                        event.status.as_str(),
+                        event.title.as_str(),
+                        event.kind.as_deref(),
+                        event.content.as_deref(),
+                        event.agent.as_deref(),
+                        event.worker_role.as_deref(),
+                        event.model.as_deref(),
+                        event.provider.as_deref(),
+                        event.task_id.as_deref(),
+                        event.worker_thread_id.as_deref(),
+                        event.native_session_id.as_deref(),
+                    ],
+                )?;
+                event_count += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(NativeImportReport {
+            conversations: 1,
+            turns: conversation.turns.len(),
+            events: event_count,
+        })
+    }
+
+    pub fn native_conversation_by_cwd(&self, cwd: &str) -> Result<Option<NativeConversation>> {
+        let db = self.inner.db.lock().unwrap();
+        let header = db
+            .query_row(
+                "SELECT id, cwd, created_at_unix, updated_at_unix FROM native_conversations WHERE cwd = ?",
+                params![cwd],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((id, cwd, created_at_unix, updated_at_unix)) = header else {
+            return Ok(None);
+        };
+        let turns = select_native_turns(&db, &id)?;
+        Ok(Some(NativeConversation {
+            id,
+            cwd,
+            created_at_unix: created_at_unix.max(0) as u64,
+            updated_at_unix: updated_at_unix.max(0) as u64,
+            turns,
+        }))
+    }
+
+    pub fn list_native_conversations(&self) -> Result<Vec<NativeConversation>> {
+        let db = self.inner.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id, cwd, created_at_unix, updated_at_unix FROM native_conversations ORDER BY updated_at_unix DESC, cwd ASC",
+        )?;
+        let headers = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        headers
+            .into_iter()
+            .map(|(id, cwd, created_at_unix, updated_at_unix)| {
+                Ok(NativeConversation {
+                    turns: select_native_turns(&db, &id)?,
+                    id,
+                    cwd,
+                    created_at_unix: created_at_unix.max(0) as u64,
+                    updated_at_unix: updated_at_unix.max(0) as u64,
+                })
+            })
+            .collect()
+    }
+
     pub fn resolve_selector(&self, selector: &str) -> Result<Session> {
         let selector = selector.trim();
         if selector.is_empty() || selector == "last" || selector == "." {
@@ -501,6 +712,85 @@ fn migrate_sessions_table(db: &Connection) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn migrate_native_events_table(db: &Connection) -> Result<()> {
+    for (column, definition) in [
+        ("kind", "TEXT"),
+        ("model", "TEXT"),
+        ("provider", "TEXT"),
+        ("task_id", "TEXT"),
+        ("worker_thread_id", "TEXT"),
+        ("native_session_id", "TEXT"),
+    ] {
+        if table_has_column(db, "native_events", column)? {
+            continue;
+        }
+        db.execute(
+            &format!("ALTER TABLE native_events ADD COLUMN {column} {definition}"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn select_native_turns(db: &Connection, conversation_id: &str) -> Result<Vec<NativeTurn>> {
+    let mut stmt = db.prepare(
+        "SELECT turn_index, user_prompt, result, captured_at_unix
+         FROM native_turns WHERE conversation_id = ? ORDER BY turn_index ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![conversation_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|(turn_index, user_prompt, result, captured_at_unix)| {
+            Ok(NativeTurn {
+                turn_index: turn_index.max(0) as u32,
+                user_prompt,
+                result,
+                captured_at_unix: captured_at_unix.max(0) as u64,
+                events: select_native_events(db, conversation_id, turn_index.max(0) as u32)?,
+            })
+        })
+        .collect()
+}
+
+fn select_native_events(
+    db: &Connection,
+    conversation_id: &str,
+    turn_index: u32,
+) -> Result<Vec<NativeEvent>> {
+    let mut stmt = db.prepare(
+        "SELECT event_index, role, status, title, kind, content, agent, worker_role, model, provider, task_id, worker_thread_id, native_session_id
+         FROM native_events WHERE conversation_id = ? AND turn_index = ? ORDER BY event_index ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![conversation_id, turn_index as i64], |row| {
+            Ok(NativeEvent {
+                event_index: row.get::<_, i64>(0)?.max(0) as u32,
+                role: row.get(1)?,
+                status: row.get(2)?,
+                title: row.get(3)?,
+                kind: row.get(4)?,
+                content: row.get(5)?,
+                agent: row.get(6)?,
+                worker_role: row.get(7)?,
+                model: row.get(8)?,
+                provider: row.get(9)?,
+                task_id: row.get(10)?,
+                worker_thread_id: row.get(11)?,
+                native_session_id: row.get(12)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 fn table_has_column(db: &Connection, table: &str, column: &str) -> Result<bool> {
@@ -788,5 +1078,59 @@ mod tests {
             loaded.worktree_path.as_deref(),
             Some(std::path::Path::new("/tmp/thread-worktree"))
         );
+    }
+
+    #[test]
+    fn native_conversation_round_trips_typed_events() {
+        let (_tmp, store) = test_store();
+        let conversation = NativeConversation {
+            id: "tiffany-native-test".to_string(),
+            cwd: "/tmp/project".to_string(),
+            created_at_unix: 10,
+            updated_at_unix: 20,
+            turns: vec![NativeTurn {
+                turn_index: 0,
+                user_prompt: "改 README".to_string(),
+                result: "已修改".to_string(),
+                captured_at_unix: 20,
+                events: vec![NativeEvent {
+                    event_index: 0,
+                    role: "worker".to_string(),
+                    status: "output".to_string(),
+                    title: "worker diff · worker-cc · claude-code".to_string(),
+                    kind: Some("diff".to_string()),
+                    content: Some("diff --git a/README.md b/README.md".to_string()),
+                    agent: Some("claude-code".to_string()),
+                    worker_role: Some("worker-cc".to_string()),
+                    model: Some("claude-sonnet-4-6".to_string()),
+                    provider: Some("anthropic".to_string()),
+                    task_id: Some("task-1".to_string()),
+                    worker_thread_id: Some("thread-1".to_string()),
+                    native_session_id: Some("native-1".to_string()),
+                }],
+            }],
+        };
+
+        let report = store
+            .upsert_native_conversation(&conversation)
+            .expect("upsert native");
+        let loaded = store
+            .native_conversation_by_cwd("/tmp/project")
+            .expect("load native")
+            .expect("native conversation");
+        let listed = store
+            .list_native_conversations()
+            .expect("list native conversations");
+
+        assert_eq!(
+            report,
+            NativeImportReport {
+                conversations: 1,
+                turns: 1,
+                events: 1
+            }
+        );
+        assert_eq!(loaded, conversation);
+        assert_eq!(listed, vec![conversation]);
     }
 }

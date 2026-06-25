@@ -542,6 +542,12 @@ enum SessionsCmd {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Import tiffany-loop native TUI history into the SQLite session store
+    ImportNative {
+        /// Path to tiffany-orchestrator/native-sessions.json
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -809,6 +815,26 @@ mod tests {
                 assert!(!clipboard);
             }
             _ => panic!("unexpected sessions export command"),
+        }
+    }
+
+    #[test]
+    fn sessions_import_native_accepts_path() {
+        let cli = Cli::parse_from([
+            "orchestrator",
+            "sessions",
+            "import-native",
+            "--path",
+            "/tmp/native-sessions.json",
+        ]);
+
+        match cli.cmd {
+            Cmd::Sessions {
+                action: SessionsCmd::ImportNative { path },
+            } => {
+                assert_eq!(path, Some(PathBuf::from("/tmp/native-sessions.json")));
+            }
+            _ => panic!("unexpected sessions import-native command"),
         }
     }
 
