@@ -958,7 +958,7 @@ pub(crate) fn native_history_lines(codex_home: &Path, cwd: &Path, args: &str) ->
             return vec![
                 status_line("✗", Color::Red, "history", &err),
                 body_line(
-                    "Usage: /history [last|full|<count>|search <text>|export [--out path]]",
+                    "Usage: /history [last|full|<count>|role <role>|thread <id>|search <text>|export [--out path]]",
                     true,
                 ),
             ];
@@ -1036,10 +1036,11 @@ pub(crate) fn append_native_chat_turn(
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct NativeHistoryOptions {
     turn_limit: usize,
     event_limit_per_turn: usize,
+    filter: Option<NativeHistoryFilter>,
 }
 
 #[derive(Clone, Debug)]
@@ -1049,6 +1050,35 @@ enum NativeHistoryCommand {
     Search { pattern: String },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NativeHistoryFilter {
+    Role(String),
+    Thread(String),
+}
+
+impl NativeHistoryFilter {
+    fn display(&self) -> String {
+        match self {
+            Self::Role(role) => format!("role {role}"),
+            Self::Thread(thread) => format!("thread {thread}"),
+        }
+    }
+
+    fn matches(&self, event: &TiffanyNativeChatEvent) -> bool {
+        match self {
+            Self::Role(role) => {
+                event.worker_role.as_deref() == Some(role.as_str())
+                    || event.agent.as_deref() == Some(role.as_str())
+                    || event.role == *role
+            }
+            Self::Thread(thread) => event
+                .worker_thread_id
+                .as_deref()
+                .is_some_and(|id| id == thread || id.starts_with(thread)),
+        }
+    }
+}
+
 impl NativeHistoryCommand {
     fn parse(args: &str) -> Result<Self, String> {
         let parts = args.split_whitespace().collect::<Vec<_>>();
@@ -1056,10 +1086,12 @@ impl NativeHistoryCommand {
             [] | ["last"] | ["summary"] => Ok(Self::Show(NativeHistoryOptions {
                 turn_limit: 5,
                 event_limit_per_turn: 6,
+                filter: None,
             })),
             ["full"] | ["all"] => Ok(Self::Show(NativeHistoryOptions {
                 turn_limit: 10,
                 event_limit_per_turn: 20,
+                filter: None,
             })),
             [count] if count.parse::<usize>().is_ok() => {
                 let count = count.parse::<usize>().unwrap_or_default();
@@ -1069,8 +1101,21 @@ impl NativeHistoryCommand {
                 Ok(Self::Show(NativeHistoryOptions {
                     turn_limit: count.min(50),
                     event_limit_per_turn: 10,
+                    filter: None,
                 }))
             }
+            ["role", role] => Ok(Self::Show(NativeHistoryOptions {
+                turn_limit: 20,
+                event_limit_per_turn: 20,
+                filter: Some(NativeHistoryFilter::Role(role.to_string())),
+            })),
+            ["role", ..] => Err("history role needs <role>".to_string()),
+            ["thread", thread] => Ok(Self::Show(NativeHistoryOptions {
+                turn_limit: 20,
+                event_limit_per_turn: 20,
+                filter: Some(NativeHistoryFilter::Thread(thread.to_string())),
+            })),
+            ["thread", ..] => Err("history thread needs <id>".to_string()),
             ["export"] => Ok(Self::Export { out: None }),
             ["export", "--out" | "-o", path] => Ok(Self::Export {
                 out: Some(PathBuf::from(path)),
@@ -1095,7 +1140,20 @@ fn native_history_conversation_lines(
     conversation: &TiffanyNativeChatConversation,
     opts: NativeHistoryOptions,
 ) -> Vec<Line<'static>> {
-    let total_turns = conversation.turns.len();
+    let turns = filtered_native_history_turns(conversation, opts.filter.as_ref());
+    if turns.is_empty() {
+        let filter = opts
+            .filter
+            .as_ref()
+            .map(NativeHistoryFilter::display)
+            .unwrap_or_else(|| "history".to_string());
+        return vec![
+            status_line("⚠", Color::Yellow, "history", &format!("no events for {filter}")),
+            next_line("/history full", "show all native process events"),
+        ];
+    }
+
+    let total_turns = turns.len();
     let shown_turns = total_turns.min(opts.turn_limit);
     let mut lines = vec![status_line(
         "✓",
@@ -1108,22 +1166,22 @@ fn native_history_conversation_lines(
     )];
     lines.push(thread_meta_line("cwd", &conversation.cwd));
     lines.push(thread_meta_line("session", &conversation.id));
+    if let Some(filter) = opts.filter.as_ref() {
+        lines.push(thread_meta_line("filter", &filter.display()));
+    }
 
-    for (idx, turn) in conversation
-        .turns
+    for turn in turns
         .iter()
         .rev()
         .take(opts.turn_limit)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .enumerate()
     {
-        let turn_number = total_turns.saturating_sub(shown_turns) + idx + 1;
         lines.push(body_line(
             &format!(
                 "{}. user  {}",
-                turn_number,
+                turn.turn_number,
                 truncate_text(&one_line(&turn.user_prompt), 120)
             ),
             false,
@@ -1144,6 +1202,43 @@ fn native_history_conversation_lines(
     lines.push(next_line("/history full", "show more native process events"));
     lines.push(next_line("/thread <role>", "inspect native CLI resume command"));
     lines
+}
+
+fn filtered_native_history_turns<'a>(
+    conversation: &'a TiffanyNativeChatConversation,
+    filter: Option<&NativeHistoryFilter>,
+) -> Vec<NativeHistoryTurnView<'a>> {
+    conversation
+        .turns
+        .iter()
+        .enumerate()
+        .filter_map(|(turn_idx, turn)| {
+            let events = match filter {
+                Some(filter) => turn
+                    .events
+                    .iter()
+                    .filter(|event| filter.matches(event))
+                    .collect::<Vec<_>>(),
+                None => turn.events.iter().collect::<Vec<_>>(),
+            };
+            if filter.is_some() && events.is_empty() {
+                return None;
+            }
+            Some(NativeHistoryTurnView {
+                turn_number: turn_idx + 1,
+                user_prompt: &turn.user_prompt,
+                result: &turn.result,
+                events,
+            })
+        })
+        .collect()
+}
+
+struct NativeHistoryTurnView<'a> {
+    turn_number: usize,
+    user_prompt: &'a str,
+    result: &'a str,
+    events: Vec<&'a TiffanyNativeChatEvent>,
 }
 
 fn native_history_export_lines(
@@ -1362,16 +1457,12 @@ fn markdown_escape_inline(value: &str) -> String {
     value.replace('`', "\\`")
 }
 
-fn append_native_history_event_lines(
-    lines: &mut Vec<Line<'static>>,
-    turn: &TiffanyNativeChatTurn,
-    limit: usize,
-) {
+fn append_native_history_event_lines(lines: &mut Vec<Line<'static>>, turn: &NativeHistoryTurnView<'_>, limit: usize) {
     if turn.events.is_empty() {
         lines.push(body_line("   native events none captured", true));
         return;
     }
-    for event in turn.events.iter().take(limit) {
+    for event in turn.events.iter().copied().take(limit) {
         let mut label = format!("   {} {}", status_glyph(&event.status), event.title);
         if let Some(native) = event.native_session_id.as_deref().and_then(nonempty_trimmed) {
             label.push_str(" · native ");
@@ -5644,6 +5735,71 @@ mod tests {
     }
 
     #[test]
+    fn native_history_can_filter_by_role_or_thread() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "并行处理两个角色".into(),
+                result: "处理完成".into(),
+            },
+            vec![
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker output · worker-cc · claude-code".into(),
+                    content: Some("claude role output".into()),
+                    agent: Some("claude-code".into()),
+                    worker_role: Some("worker-cc".into()),
+                    model: None,
+                    provider: None,
+                    task_id: Some("task-cc".into()),
+                    worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
+                    native_session_id: Some("native-cc".into()),
+                },
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker output · worker-codex · codex".into(),
+                    content: Some("codex role output".into()),
+                    agent: Some("codex".into()),
+                    worker_role: Some("worker-codex".into()),
+                    model: None,
+                    provider: None,
+                    task_id: Some("task-codex".into()),
+                    worker_thread_id: Some("99999999-0000-0000-0000-000000000000".into()),
+                    native_session_id: Some("native-codex".into()),
+                },
+            ],
+        )
+        .expect("append");
+
+        let by_role = native_history_lines(home.path(), cwd.path(), "role worker-cc");
+        let role_text = by_role
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(role_text.contains("filter  role worker-cc"));
+        assert!(role_text.contains("claude role output"));
+        assert!(!role_text.contains("codex role output"));
+
+        let by_thread = native_history_lines(home.path(), cwd.path(), "thread abcdef12");
+        let thread_text = by_thread
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(thread_text.contains("filter  thread abcdef12"));
+        assert!(thread_text.contains("thread abcdef12"));
+        assert!(thread_text.contains("claude role output"));
+        assert!(!thread_text.contains("codex role output"));
+    }
+
+    #[test]
     fn native_history_lines_report_empty_and_bad_args() {
         let home = tempfile::tempdir().expect("home");
         let cwd = tempfile::tempdir().expect("cwd");
@@ -5655,9 +5811,9 @@ mod tests {
         let bad = native_history_lines(home.path(), cwd.path(), "wat");
         let bad_text = bad.iter().map(line_text).collect::<Vec<_>>().join("\n");
         assert!(bad_text.contains("unknown /history option 'wat'"));
-        assert!(
-            bad_text.contains("Usage: /history [last|full|<count>|search <text>|export [--out path]]")
-        );
+        assert!(bad_text.contains(
+            "Usage: /history [last|full|<count>|role <role>|thread <id>|search <text>|export [--out path]]"
+        ));
     }
 
     #[test]
