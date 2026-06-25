@@ -235,7 +235,7 @@ All injected as system-prompt sections, in priority order: **AGENTS.md > CLAUDE.
 - Worker stream rows are labeled as `final`, `tool call`, `tool result`,
   `stderr`, or `alert`, and common failures include a one-line fix hint instead
   of raw adapter JSON.
-- Native slash commands cover provider setup, role registration, stable worker sessions, diagnostics, status, copy/raw mode, clear, and exit. Older process/log/diff/queue/history helper commands remain only in the legacy fallback runner.
+- Native slash commands cover provider setup, role registration, stable worker sessions, diagnostics, status, diff, copy/raw mode, clear, and exit. Older process/log/queue/history helper commands remain only in the legacy fallback runner.
 - In tiffany-loop orchestrator mode, `/provider` is native to the tiffany-loop TUI: `/provider` opens a setup form with separate provider/type/env/key/endpoint fields, `/provider edit openai` edits an existing provider with prefilled values, `/provider list` shows config, `/provider env openai OPENAI_API_KEY` stores an env-var reference, and `/provider endpoint openai https://api.openai.com/v1` stores the endpoint.
 - In tiffany-loop orchestrator mode, `/role` opens a dedicated role-registration form with role/provider/model/runtime/team fields; `/roles` remains the list/CLI-style command surface.
 - Typing `/` opens a command menu; `Up`/`Down` selects and `Enter` confirms.
@@ -559,12 +559,13 @@ Default native TUI slash commands:
 - `/status` - show current session/config status
 - `/copy` - copy the last assistant response as markdown
 - `/raw` - toggle copy-friendly raw scrollback mode
+- `/diff` - show current git changes
 - `/clear` - clear the current chat surface
 - `/exit` or `/quit` - leave the UI
 
 The native TUI intentionally hides unsupported upstream-only commands such as `/model`, `/init`, `/permissions`, `/compact`, `/review`, `/resume`, and `/agent`. If typed manually, Tiffany shows a local explanation instead of sending them to a worker as chat text.
 
-Legacy terminal chat commands are still available only when forcing the fallback runner with `ORCHESTRATOR_LEGACY_TUI=1` or running the compatibility terminal chat directly. That surface includes older commands such as `/workflow`, `/agent`, `/context`, `/process`, `/trace`, `/diff`, `/queue`, `/tests`, `/handoff`, `/continue`, `/graph`, `/acp`, `/result`, `/usage`, `/o`, and `/resume last`.
+Legacy terminal chat commands are still available only when forcing the fallback runner with `ORCHESTRATOR_LEGACY_TUI=1` or running the compatibility terminal chat directly. That surface includes older commands such as `/workflow`, `/agent`, `/context`, `/process`, `/trace`, `/queue`, `/tests`, `/handoff`, `/continue`, `/graph`, `/acp`, `/result`, `/usage`, `/o`, and `/resume last`.
 
 The native bottom status line follows tiffany-loop-style run HUD behavior: it keeps one compact line for stage, elapsed time, worker route, context mode, queued message count, detail fold state, process filter, and review/worker issue counters.
 

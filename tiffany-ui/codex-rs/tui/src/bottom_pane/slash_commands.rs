@@ -77,6 +77,7 @@ pub(crate) const TIFFANY_ORCHESTRATOR_COMMANDS: &[SlashCommand] = &[
     SlashCommand::Help,
     SlashCommand::Copy,
     SlashCommand::Raw,
+    SlashCommand::Diff,
     SlashCommand::Clear,
     SlashCommand::Quit,
     SlashCommand::Exit,
@@ -206,6 +207,7 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
         SlashCommand::Help => "show this command list",
         SlashCommand::Copy => "copy the last assistant answer",
         SlashCommand::Raw => "toggle copy-friendly raw scrollback",
+        SlashCommand::Diff => "show current git changes",
         SlashCommand::Clear => "clear the visible UI",
         SlashCommand::Exit => "exit tiffany-loop",
         SlashCommand::Quit => "alias for /exit",
@@ -485,6 +487,7 @@ mod tests {
                 SlashCommand::Help,
                 SlashCommand::Copy,
                 SlashCommand::Raw,
+                SlashCommand::Diff,
                 SlashCommand::Clear,
                 SlashCommand::Quit,
                 SlashCommand::Exit,
@@ -492,7 +495,6 @@ mod tests {
         );
         assert!(!commands.contains(&SlashCommand::Model));
         assert!(!commands.contains(&SlashCommand::Permissions));
-        assert!(!commands.contains(&SlashCommand::Diff));
         assert!(!commands.contains(&SlashCommand::Init));
         assert!(!commands.contains(&SlashCommand::Compact));
         assert_eq!(
@@ -550,11 +552,7 @@ mod tests {
                 .contains("/copy")
         );
         assert!(tiffany_orchestrator_unsupported_command_message("raw").is_none());
-        assert!(
-            tiffany_orchestrator_unsupported_command_message("diff")
-                .expect("diff should be known but hidden")
-                .contains("not available in Tiffany orchestrator mode")
-        );
+        assert!(tiffany_orchestrator_unsupported_command_message("diff").is_none());
         assert!(
             tiffany_orchestrator_unsupported_command_message("o")
                 .expect("legacy folding command should be explained")
@@ -585,7 +583,7 @@ mod tests {
         }
         assert!(!help.contains("/quit"));
         assert!(help.contains("/raw"));
-        assert!(!help.contains("/diff"));
+        assert!(help.contains("/diff"));
         assert!(!help.contains("/model"));
         assert!(!help.contains("/permissions"));
     }

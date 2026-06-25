@@ -659,18 +659,10 @@ mod tests {
             cmds.iter().map(String::as_str).collect::<Vec<_>>(),
             vec![
                 "provider", "role", "roles", "thread", "doctor", "status", "help", "copy", "raw",
-                "clear", "exit",
+                "diff", "clear", "exit",
             ]
         );
-        for hidden in [
-            "model",
-            "permissions",
-            "init",
-            "compact",
-            "apps",
-            "fast",
-            "diff",
-        ] {
+        for hidden in ["model", "permissions", "init", "compact", "apps", "fast"] {
             assert!(
                 !cmds.iter().any(|cmd| cmd == hidden),
                 "expected '/{hidden}' to be hidden in Tiffany popup, got {cmds:?}"

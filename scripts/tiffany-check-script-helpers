@@ -85,18 +85,11 @@ for expected in \
   '/doctor       diagnose provider/model/key/runtime problems' \
   '/status       show current orchestration status' \
   '/copy         copy the last assistant answer' \
-  '/raw          toggle copy-friendly raw scrollback mode'
+  '/raw          toggle copy-friendly raw scrollback mode' \
+  '/diff         show git changes'
 do
   if ! grep -F -- "$expected" <<<"$tiffany_dev_help" >/dev/null; then
     echo "expected tiffany-dev --help to include TUI command help: $expected" >&2
-    exit 1
-  fi
-done
-for hidden in \
-  '/diff         show git changes'
-do
-  if grep -F -- "$hidden" <<<"$tiffany_dev_help" >/dev/null; then
-    echo "expected tiffany-dev --help to hide unsupported Tiffany command help: $hidden" >&2
     exit 1
   fi
 done

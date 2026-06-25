@@ -390,8 +390,28 @@ async fn tiffany_orchestrator_rejects_legacy_terminal_command_submit() {
     );
     assert!(rendered.contains("run waterfall"));
     assert!(rendered.contains("/status"));
-    assert!(!rendered.contains("/diff"));
     assert_eq!(chat.bottom_pane.composer_text(), "/process 200");
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn tiffany_orchestrator_allows_native_diff_command() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    submit_composer_text(&mut chat, "/diff");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !rendered.contains("'/diff' is not available in Tiffany orchestrator mode"),
+        "expected Tiffany /diff to dispatch natively, got {rendered:?}"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "");
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
@@ -419,6 +439,7 @@ async fn tiffany_orchestrator_help_lists_supported_commands() {
         "/help",
         "/copy",
         "/raw",
+        "/diff",
         "/clear",
         "/exit",
     ];
@@ -429,7 +450,6 @@ async fn tiffany_orchestrator_help_lists_supported_commands() {
         );
     }
     assert!(!rendered.contains("/quit"));
-    assert!(!rendered.contains("/diff"));
     assert!(!rendered.contains("/model"));
     assert!(!rendered.contains("/permissions"));
     assert!(!rendered.contains("not available in Tiffany orchestrator mode"));
@@ -452,7 +472,9 @@ async fn tiffany_orchestrator_status_uses_native_orchestration_summary() {
     assert!(rendered.contains("tiffany-loop orchestrator"));
     assert!(rendered.contains("status"));
     assert!(rendered.contains("direct / single / full"));
-    assert!(rendered.contains("/provider  /role  /roles  /thread  /doctor  /copy  /raw  /clear"));
+    assert!(
+        rendered.contains("/provider  /role  /roles  /thread  /doctor  /copy  /raw  /diff  /clear")
+    );
     assert!(!rendered.contains("ChatGPT"));
     assert!(!rendered.contains("Reasoning"));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));

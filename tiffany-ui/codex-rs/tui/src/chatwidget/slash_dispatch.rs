@@ -746,7 +746,7 @@ impl ChatWidget {
             vec!["config  ".dim(), config.to_string().into()].into(),
             vec![
                 "cmd     ".dim(),
-                "/provider  /role  /roles  /thread  /doctor  /copy  /raw  /clear".into(),
+                "/provider  /role  /roles  /thread  /doctor  /copy  /raw  /diff  /clear".into(),
             ]
             .into(),
         ];

@@ -76,6 +76,7 @@ In the TUI:
   /status       show current orchestration status
   /copy         copy the last assistant answer
   /raw          toggle copy-friendly raw scrollback mode
+  /diff         show git changes
 
 Environment:
   TIFFANY_HOME              UI config/state root, default: ~/.tiffany

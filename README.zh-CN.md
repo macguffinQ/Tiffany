@@ -456,12 +456,13 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `/status`：显示当前会话和配置状态。
 - `/copy`：复制最后一条 assistant 回复为 Markdown。
 - `/raw`：切换便于系统选中复制的 raw scrollback 模式。
+- `/diff`：显示当前 git 改动。
 - `/clear`：清空当前聊天界面。
 - `/exit` 或 `/quit`：退出 UI。
 
 原生 TUI 会主动隐藏 `/model`、`/init`、`/permissions`、`/compact`、`/review`、`/resume`、`/agent` 等上游专用命令。手动输入这些命令时，Tiffany 会显示本地解释，不会把它们当普通聊天内容发给 worker。
 
-旧 terminal chat 命令只在 `ORCHESTRATOR_LEGACY_TUI=1` 强制 fallback 或直接运行兼容 terminal chat 时可用，包括 `/workflow`、`/agent`、`/context`、`/process`、`/trace`、`/diff`、`/queue`、`/tests`、`/handoff`、`/continue`、`/graph`、`/acp`、`/result`、`/usage`、`/o`、`/resume last` 等。
+旧 terminal chat 命令只在 `ORCHESTRATOR_LEGACY_TUI=1` 强制 fallback 或直接运行兼容 terminal chat 时可用，包括 `/workflow`、`/agent`、`/context`、`/process`、`/trace`、`/queue`、`/tests`、`/handoff`、`/continue`、`/graph`、`/acp`、`/result`、`/usage`、`/o`、`/resume last` 等。
 
 默认原生 TUI 的底部状态行会常驻显示当前阶段、耗时、worker 路由、上下文模式、队列数量、折叠状态、process filter、review/worker 问题计数，尽量保持一行内可扫读。
 
