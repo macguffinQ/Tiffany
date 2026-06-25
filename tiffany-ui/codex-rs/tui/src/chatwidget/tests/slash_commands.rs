@@ -1,7 +1,14 @@
 use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
+use crate::workspace_command::WorkspaceCommand;
+use crate::workspace_command::WorkspaceCommandError;
+use crate::workspace_command::WorkspaceCommandExecutor;
+use crate::workspace_command::WorkspaceCommandOutput;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Mutex;
 
 fn force_pet_image_support(chat: &mut ChatWidget) {
     chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
@@ -77,6 +84,40 @@ fn recall_latest_after_clearing(chat: &mut ChatWidget) -> String {
         .set_composer_text(String::new(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     chat.bottom_pane.composer_text()
+}
+
+struct DiffProbeRunner {
+    commands: Mutex<Vec<WorkspaceCommand>>,
+}
+
+impl DiffProbeRunner {
+    fn new() -> Self {
+        Self {
+            commands: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn commands(&self) -> Vec<WorkspaceCommand> {
+        self.commands.lock().expect("commands lock").clone()
+    }
+}
+
+impl WorkspaceCommandExecutor for DiffProbeRunner {
+    fn run(
+        &self,
+        command: WorkspaceCommand,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<WorkspaceCommandOutput, WorkspaceCommandError>> + Send + '_>,
+    > {
+        Box::pin(async move {
+            self.commands.lock().expect("commands lock").push(command);
+            Ok(WorkspaceCommandOutput {
+                exit_code: 128,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        })
+    }
 }
 
 fn dispatch_usage_and_expect_refresh(
@@ -398,6 +439,8 @@ async fn tiffany_orchestrator_rejects_legacy_terminal_command_submit() {
 async fn tiffany_orchestrator_allows_native_diff_command() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);
+    let diff_runner = std::sync::Arc::new(DiffProbeRunner::new());
+    chat.workspace_command_runner = Some(diff_runner.clone());
 
     submit_composer_text(&mut chat, "/diff");
 
@@ -413,6 +456,22 @@ async fn tiffany_orchestrator_allows_native_diff_command() {
     );
     assert_eq!(chat.bottom_pane.composer_text(), "");
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("timed out waiting for native diff result")
+        .expect("diff result event");
+    assert_matches!(event, AppEvent::DiffResult(text) if text.contains("not inside a git repository"));
+
+    let commands = diff_runner.commands();
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].argv[0], "git");
+    assert!(commands[0].argv.contains(&"rev-parse".to_string()));
+    assert!(
+        commands[0]
+            .argv
+            .contains(&"--is-inside-work-tree".to_string())
+    );
 }
 
 #[tokio::test]
