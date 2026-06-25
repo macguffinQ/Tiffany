@@ -51,15 +51,12 @@ impl DoctorReport {
 
     pub fn render_text(&self) -> String {
         let mut out = String::from("orchestrator doctor\n");
-        for line in &self.lines {
-            match line.level {
-                DoctorLevel::Ok => out.push_str(&format!("✓ {}\n", line.message)),
-                DoctorLevel::Warn => out.push_str(&format!("⚠ {}\n", line.message)),
-                DoctorLevel::Fail => out.push_str(&format!("✗ {}\n", line.message)),
-                DoctorLevel::Hint => out.push_str(&format!("  hint: {}\n", line.message)),
-                DoctorLevel::Header => out.push_str(&format!("\n{}:\n", line.message)),
-            }
-        }
+        out.push_str(&format!(
+            "status {} · checks {} · issues {}\n",
+            self.status(),
+            self.check_count,
+            self.issue_count
+        ));
 
         let issue_summary = self.issue_summary();
         if !issue_summary.is_empty() {
@@ -77,6 +74,14 @@ impl DoctorReport {
             }
         }
 
+        let detail_lines = self.compact_detail_lines();
+        if !detail_lines.is_empty() {
+            out.push_str("\nDetails:\n");
+            for line in detail_lines {
+                render_doctor_line(&mut out, line);
+            }
+        }
+
         out.push('\n');
         if self.issue_count == 0 {
             out.push_str("✓ all required checks passed");
@@ -87,6 +92,42 @@ impl DoctorReport {
             ));
         }
         out
+    }
+
+    fn compact_detail_lines(&self) -> Vec<&DoctorLine> {
+        let mut lines = Vec::new();
+        let mut pending_header = None;
+        let mut in_actionable_block = false;
+
+        for line in &self.lines {
+            match line.level {
+                DoctorLevel::Header => {
+                    pending_header = Some(line);
+                    in_actionable_block = false;
+                }
+                DoctorLevel::Ok => {
+                    in_actionable_block = false;
+                }
+                DoctorLevel::Warn | DoctorLevel::Fail => {
+                    if let Some(header) = pending_header.take() {
+                        lines.push(header);
+                    }
+                    lines.push(line);
+                    in_actionable_block = true;
+                }
+                DoctorLevel::Hint
+                    if in_actionable_block || standalone_hint_is_actionable(&line.message) =>
+                {
+                    lines.push(line);
+                }
+                DoctorLevel::Hint => {
+                    // Standalone hints are preserved in JSON, but omitted from
+                    // the default terminal view to keep /doctor readable.
+                }
+            }
+        }
+
+        lines
     }
 
     pub fn issue_summary(&self) -> Vec<String> {
@@ -283,6 +324,36 @@ impl DoctorReport {
         steps.truncate(4);
         steps
     }
+}
+
+fn render_doctor_line(out: &mut String, line: &DoctorLine) {
+    match line.level {
+        DoctorLevel::Ok => out.push_str(&format!("✓ {}\n", line.message)),
+        DoctorLevel::Warn => out.push_str(&format!("⚠ {}\n", line.message)),
+        DoctorLevel::Fail => out.push_str(&format!("✗ {}\n", line.message)),
+        DoctorLevel::Hint => out.push_str(&format!("  hint: {}\n", line.message)),
+        DoctorLevel::Header => out.push_str(&format!("{}:\n", line.message)),
+    }
+}
+
+fn standalone_hint_is_actionable(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("configure ")
+        || lower.contains("register ")
+        || lower.contains("install ")
+        || lower.contains("reinstall ")
+        || lower.contains("upgrade ")
+        || lower.contains("run `")
+        || lower.contains("set ")
+        || lower.contains("unset ")
+        || lower.contains("switch ")
+        || lower.contains("select ")
+        || lower.contains("add ")
+        || lower.contains("fix ")
+        || lower.contains("model not found")
+        || message.contains("模型不存在")
+        || message.contains("[1211]")
+        || message.contains("api_model")
 }
 
 #[derive(Debug, Serialize)]
@@ -2263,6 +2334,20 @@ mod tests {
         }
     }
 
+    fn report_has_line(report: &DoctorReport, level: DoctorLevel, needle: &str) -> bool {
+        report
+            .lines
+            .iter()
+            .any(|line| line.level == level && line.message.contains(needle))
+    }
+
+    fn report_has_message(report: &DoctorReport, needle: &str) -> bool {
+        report
+            .lines
+            .iter()
+            .any(|line| line.message.contains(needle))
+    }
+
     #[test]
     fn report_renders_icons_and_summary() {
         let report = test_report(
@@ -2285,7 +2370,8 @@ mod tests {
 
         let rendered = report.render_text();
 
-        assert!(rendered.contains("✓ config parsed"));
+        assert!(rendered.contains("status issues · checks 2 · issues 1"));
+        assert!(!rendered.contains("✓ config parsed"));
         assert!(rendered.contains("✗ openai: api key missing"));
         assert!(rendered.contains("hint: export OPENAI_API_KEY"));
         assert!(rendered.contains("Issue summary:"));
@@ -2307,8 +2393,10 @@ mod tests {
 
         let rendered = report.render_text();
 
+        assert!(rendered.contains("status ok · checks 1 · issues 0"));
         assert!(rendered.contains("Next steps:"));
         assert!(rendered.contains("tiffany-loop"));
+        assert!(!rendered.contains("config parsed"));
         assert!(rendered.contains("all required checks passed"));
     }
 
@@ -2396,11 +2484,10 @@ mod tests {
 
         check_tiffany_ui(&mut builder, Path::new("~/.orchestrator/config.yaml"));
         let report = builder.finish();
-        let rendered = report.render_text();
 
-        assert!(rendered.contains("Tiffany UI:"));
-        assert!(rendered.contains("orchestrator config:"));
-        assert!(rendered.contains("launch bridge:"));
+        assert!(report_has_line(&report, DoctorLevel::Header, "Tiffany UI"));
+        assert!(report_has_message(&report, "orchestrator config:"));
+        assert!(report_has_message(&report, "launch bridge:"));
     }
 
     #[test]
@@ -2594,8 +2681,9 @@ end
         let report = builder.finish();
         let rendered = report.render_text();
 
-        assert!(rendered.contains("homebrew tap checkout:"));
-        assert!(rendered.contains("5983c0e"));
+        assert!(report_has_message(&report, "homebrew tap checkout:"));
+        assert!(report_has_message(&report, "5983c0e"));
+        assert!(!rendered.contains("homebrew tap checkout:"));
         assert!(!rendered.contains("may block updates"));
     }
 
@@ -2716,7 +2804,8 @@ end
         let rendered = report.render_text();
 
         assert_eq!(report.issue_count, 0);
-        assert!(rendered.contains("✓ shared target:"));
+        assert!(report_has_line(&report, DoctorLevel::Ok, "shared target:"));
+        assert!(!rendered.contains("✓ shared target:"));
         assert!(!rendered.contains("legacy fork target"));
         assert!(!rendered.contains("tiffany-clean-targets --trim"));
     }
@@ -2869,7 +2958,11 @@ end
         let report = builder.finish();
         let rendered = report.render_text();
 
-        assert!(rendered.contains("local-api: runtime type `direct`"));
+        assert!(report_has_message(
+            &report,
+            "local-api: runtime type `direct`"
+        ));
+        assert!(!rendered.contains("local-api: runtime type `direct`"));
         assert!(rendered.contains("openai: api key missing"));
         assert_eq!(report.issue_count, 1);
     }
@@ -3013,7 +3106,12 @@ Options:
 
         assert_eq!(report.issue_count, 0);
         assert!(rendered.contains("⚠ google: api key missing (unused by current roles)"));
-        assert!(rendered.contains("✓ minimax: api key present"));
+        assert!(report_has_line(
+            &report,
+            DoctorLevel::Ok,
+            "minimax: api key present"
+        ));
+        assert!(!rendered.contains("✓ minimax: api key present"));
     }
 
     #[test]
@@ -3039,7 +3137,11 @@ Options:
         let rendered = report.render_text();
 
         assert_eq!(report.issue_count, 0);
-        assert!(rendered.contains("minimax: type=openai endpoint=https://api.openai.com/v1"));
+        assert!(report_has_message(
+            &report,
+            "minimax: type=openai endpoint=https://api.openai.com/v1"
+        ));
+        assert!(!rendered.contains("minimax: type=openai endpoint=https://api.openai.com/v1"));
         assert!(rendered.contains("minimax: OpenAI-compatible provider has no base_url"));
         assert!(rendered.contains("/provider endpoint minimax <url>"));
         assert!(rendered.contains("Set missing OpenAI-compatible endpoints"));
@@ -3120,7 +3222,12 @@ Options:
         let rendered = report.render_text();
 
         assert_eq!(report.issue_count, 0);
-        assert!(rendered.contains("✓ minimax-m3: api_model=MiniMax-M3 provider=minimax"));
+        assert!(report_has_line(
+            &report,
+            DoctorLevel::Ok,
+            "minimax-m3: api_model=MiniMax-M3 provider=minimax"
+        ));
+        assert!(!rendered.contains("✓ minimax-m3: api_model=MiniMax-M3 provider=minimax"));
         assert!(rendered.contains("⚠ gpt4o: provider `openai` is not configured"));
     }
 
@@ -3220,8 +3327,12 @@ Options:
         let report = builder.finish();
         let rendered = report.render_text();
 
-        assert!(rendered.contains("minimax-m3-codex: api_model=MiniMax-M3 provider=minimax"));
-        assert!(rendered.contains(
+        assert!(report_has_message(
+            &report,
+            "minimax-m3-codex: api_model=MiniMax-M3 provider=minimax"
+        ));
+        assert!(report_has_message(
+            &report,
             "worker-codex: model=minimax-m3-codex -> minimax/MiniMax-M3 -> runtime=codex teams=off"
         ));
         assert!(rendered.contains("model id is Tiffany's internal alias"));
@@ -3282,8 +3393,11 @@ Options:
         let report = builder.finish();
         let rendered = report.render_text();
 
-        assert!(rendered.contains("worker-cc: model=sonnet"));
-        assert!(rendered.contains("runtime=claude (resolved=claude-code) teams=on"));
+        assert!(report_has_message(&report, "worker-cc: model=sonnet"));
+        assert!(report_has_message(
+            &report,
+            "runtime=claude (resolved=claude-code) teams=on"
+        ));
         assert!(rendered.contains("Claude Code workers may pause"));
         assert!(rendered.contains("behavior.cc_bypass_permissions: true"));
         assert!(!rendered.contains("worker-cc: runtime `claude` is not defined"));

@@ -4803,9 +4803,9 @@ behavior:
 
         let msg = input.transcript.last().expect("doctor response");
         assert!(msg.content.contains("orchestrator doctor"));
-        assert!(msg.content.contains("config parsed"));
-        assert!(msg.content.contains("Runtimes:"));
-        assert!(msg.content.contains("Roles:"));
+        assert!(msg.content.contains("status ok"));
+        assert!(msg.content.contains("Next steps:"));
+        assert!(msg.content.contains("all required checks passed"));
     }
 
     #[test]
