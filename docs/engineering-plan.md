@@ -15,6 +15,9 @@ storage, roles, providers, and diagnostics.
 - Custom OpenAI-compatible providers must require an explicit endpoint before
   saving, so first-run setup cannot create a provider that immediately fails at
   runtime.
+- Built-in role presets should default to the neutral configured provider path
+  used by Tiffany examples, while still allowing users to select any supported
+  provider manually.
 - Worker output is rendered as readable waterfall text, not raw JSON.
 - Worker sessions are stable per role and can be inspected or cleared with
   `/thread`.

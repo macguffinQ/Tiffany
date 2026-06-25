@@ -648,6 +648,45 @@ async fn slash_role_single_arg_prefills_registration_prompt() {
 }
 
 #[tokio::test]
+async fn slash_role_control_roles_default_to_neutral_codex_worker() {
+    for role in ["planner", "critic", "reviewer"] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.set_tiffany_orchestrator_shell(true);
+
+        chat.dispatch_command_with_args(SlashCommand::Role, role.to_string(), Vec::new());
+
+        assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+        let popup = render_bottom_popup(&chat, /*width*/ 100);
+        assert!(popup.contains(role), "expected role in popup: {popup}");
+        assert!(
+            popup.contains("minimax"),
+            "expected minimax default for {role}: {popup}"
+        );
+        assert!(
+            popup.contains("MiniMax-M3"),
+            "expected MiniMax model for {role}: {popup}"
+        );
+        assert!(
+            popup.contains("codex"),
+            "expected codex runtime for {role}: {popup}"
+        );
+
+        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match rx.try_recv() {
+            Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
+                assert_eq!(
+                    args,
+                    format!(
+                        "register {role} --model minimax-m3-codex --runtime codex --provider minimax --model-name MiniMax-M3 --no-agent-teams"
+                    )
+                );
+            }
+            other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn slash_role_selection_fields_ignore_direct_typing() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);
