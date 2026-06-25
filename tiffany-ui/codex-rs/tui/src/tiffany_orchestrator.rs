@@ -958,7 +958,7 @@ pub(crate) fn native_history_lines(codex_home: &Path, cwd: &Path, args: &str) ->
             return vec![
                 status_line("✗", Color::Red, "history", &err),
                 body_line(
-                    "Usage: /history [last|full|<count>|role <role>|thread <id>|search <text>|export [--out path]]",
+                    "Usage: /history [last|full|<count>|role <role>|thread <id>|search <text>|export [role <role>|thread <id>] [--out path]]",
                     true,
                 ),
             ];
@@ -967,8 +967,8 @@ pub(crate) fn native_history_lines(codex_home: &Path, cwd: &Path, args: &str) ->
     match load_native_chat_conversation(codex_home, cwd) {
         Ok(Some(conversation)) => match command {
             NativeHistoryCommand::Show(opts) => native_history_conversation_lines(&conversation, opts),
-            NativeHistoryCommand::Export { out } => {
-                native_history_export_lines(codex_home, cwd, &conversation, out)
+            NativeHistoryCommand::Export { out, filter } => {
+                native_history_export_lines(codex_home, cwd, &conversation, out, filter)
             }
             NativeHistoryCommand::Search { pattern } => {
                 native_history_search_lines(&conversation, &pattern)
@@ -1046,7 +1046,10 @@ struct NativeHistoryOptions {
 #[derive(Clone, Debug)]
 enum NativeHistoryCommand {
     Show(NativeHistoryOptions),
-    Export { out: Option<PathBuf> },
+    Export {
+        out: Option<PathBuf>,
+        filter: Option<NativeHistoryFilter>,
+    },
     Search { pattern: String },
 }
 
@@ -1116,14 +1119,7 @@ impl NativeHistoryCommand {
                 filter: Some(NativeHistoryFilter::Thread(thread.to_string())),
             })),
             ["thread", ..] => Err("history thread needs <id>".to_string()),
-            ["export"] => Ok(Self::Export { out: None }),
-            ["export", "--out" | "-o", path] => Ok(Self::Export {
-                out: Some(PathBuf::from(path)),
-            }),
-            ["export", flag, ..] if matches!(*flag, "--out" | "-o") => {
-                Err("history export --out needs a file path".to_string())
-            }
-            ["export", flag, ..] => Err(format!("unknown /history export option '{flag}'")),
+            ["export", rest @ ..] => parse_native_history_export_command(rest),
             ["search" | "grep" | "find", pattern @ ..] => {
                 let pattern = pattern.join(" ").trim().to_string();
                 if pattern.is_empty() {
@@ -1134,6 +1130,41 @@ impl NativeHistoryCommand {
             [unknown, ..] => Err(format!("unknown /history option '{unknown}'")),
         }
     }
+}
+
+fn parse_native_history_export_command(parts: &[&str]) -> Result<NativeHistoryCommand, String> {
+    let mut out = None;
+    let mut filter = None;
+    let mut i = 0;
+    while i < parts.len() {
+        match parts[i] {
+            "--out" | "-o" => {
+                let Some(path) = parts.get(i + 1) else {
+                    return Err("history export --out needs a file path".to_string());
+                };
+                out = Some(PathBuf::from(path));
+                i += 2;
+            }
+            "role" => {
+                let Some(role) = parts.get(i + 1) else {
+                    return Err("history export role needs <role>".to_string());
+                };
+                filter = Some(NativeHistoryFilter::Role((*role).to_string()));
+                i += 2;
+            }
+            "thread" => {
+                let Some(thread) = parts.get(i + 1) else {
+                    return Err("history export thread needs <id>".to_string());
+                };
+                filter = Some(NativeHistoryFilter::Thread((*thread).to_string()));
+                i += 2;
+            }
+            value => {
+                return Err(format!("unknown /history export option '{value}'"));
+            }
+        }
+    }
+    Ok(NativeHistoryCommand::Export { out, filter })
 }
 
 fn native_history_conversation_lines(
@@ -1246,9 +1277,21 @@ fn native_history_export_lines(
     cwd: &Path,
     conversation: &TiffanyNativeChatConversation,
     out: Option<PathBuf>,
+    filter: Option<NativeHistoryFilter>,
 ) -> Vec<Line<'static>> {
     let path = out.unwrap_or_else(|| default_native_history_export_path(codex_home, cwd));
-    let body = render_native_history_markdown(conversation);
+    let turns = filtered_native_history_turns(conversation, filter.as_ref());
+    if turns.is_empty() {
+        let filter = filter
+            .as_ref()
+            .map(NativeHistoryFilter::display)
+            .unwrap_or_else(|| "history".to_string());
+        return vec![
+            status_line("⚠", Color::Yellow, "history", &format!("no events for {filter}")),
+            next_line("/history full", "show all native process events"),
+        ];
+    }
+    let body = render_native_history_markdown(conversation, &turns, filter.as_ref());
     if let Some(parent) = path.parent()
         && let Err(err) = std::fs::create_dir_all(parent)
     {
@@ -1263,7 +1306,7 @@ fn native_history_export_lines(
                 "✓",
                 TIFFANY_BLUE,
                 "history",
-                &format!("exported {} turn(s)", conversation.turns.len()),
+                &format!("exported {} turn(s)", turns.len()),
             ),
             thread_meta_line("target", &path.display().to_string()),
             thread_meta_line("bytes", &body.len().to_string()),
@@ -1384,17 +1427,27 @@ fn default_native_history_export_path(codex_home: &Path, cwd: &Path) -> PathBuf 
         .join(format!("{}.md", native_conversation_id(&cwd_key(cwd))))
 }
 
-fn render_native_history_markdown(conversation: &TiffanyNativeChatConversation) -> String {
+fn render_native_history_markdown(
+    conversation: &TiffanyNativeChatConversation,
+    turns: &[NativeHistoryTurnView<'_>],
+    filter: Option<&NativeHistoryFilter>,
+) -> String {
     let mut out = String::new();
     out.push_str("# Tiffany Native Conversation History\n\n");
     out.push_str(&format!("- Conversation: `{}`\n", conversation.id));
     out.push_str(&format!("- CWD: `{}`\n", conversation.cwd));
-    out.push_str(&format!("- Turns: {}\n", conversation.turns.len()));
+    out.push_str(&format!("- Turns: {}\n", turns.len()));
+    if let Some(filter) = filter {
+        out.push_str(&format!(
+            "- Filter: `{}`\n",
+            markdown_escape_inline(&filter.display())
+        ));
+    }
     out.push_str(&format!("- Created: {}\n", conversation.created_at_unix));
     out.push_str(&format!("- Updated: {}\n\n", conversation.updated_at_unix));
 
-    for (idx, turn) in conversation.turns.iter().enumerate() {
-        out.push_str(&format!("## Turn {}\n\n", idx + 1));
+    for turn in turns {
+        out.push_str(&format!("## Turn {}\n\n", turn.turn_number));
         out.push_str("### User\n\n");
         out.push_str(turn.user_prompt.trim());
         out.push_str("\n\n### Assistant Result\n\n");
@@ -5714,6 +5767,64 @@ mod tests {
     }
 
     #[test]
+    fn native_history_export_can_filter_worker_role() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let out = home.path().join("worker-cc.md");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "分别处理两个角色".into(),
+                result: "处理完成".into(),
+            },
+            vec![
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker output · worker-cc · claude-code".into(),
+                    content: Some("claude handoff content".into()),
+                    agent: Some("claude-code".into()),
+                    worker_role: Some("worker-cc".into()),
+                    model: Some("claude-sonnet-4-6".into()),
+                    provider: Some("anthropic".into()),
+                    task_id: Some("task-cc".into()),
+                    worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
+                    native_session_id: Some("native-cc".into()),
+                },
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker output · worker-codex · codex".into(),
+                    content: Some("codex handoff content".into()),
+                    agent: Some("codex".into()),
+                    worker_role: Some("worker-codex".into()),
+                    model: Some("gpt-4o".into()),
+                    provider: Some("openai".into()),
+                    task_id: Some("task-codex".into()),
+                    worker_thread_id: Some("99999999-0000-0000-0000-000000000000".into()),
+                    native_session_id: Some("native-codex".into()),
+                },
+            ],
+        )
+        .expect("append");
+
+        let lines = native_history_lines(
+            home.path(),
+            cwd.path(),
+            &format!("export role worker-cc --out {}", out.display()),
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("history  exported 1 turn(s)"));
+
+        let markdown = std::fs::read_to_string(&out).expect("export body");
+        assert!(markdown.contains("- Filter: `role worker-cc`"));
+        assert!(markdown.contains("claude handoff content"));
+        assert!(!markdown.contains("codex handoff content"));
+    }
+
+    #[test]
     fn native_history_search_finds_turns_and_events() {
         let home = tempfile::tempdir().expect("home");
         let cwd = tempfile::tempdir().expect("cwd");
@@ -5830,7 +5941,7 @@ mod tests {
         let bad_text = bad.iter().map(line_text).collect::<Vec<_>>().join("\n");
         assert!(bad_text.contains("unknown /history option 'wat'"));
         assert!(bad_text.contains(
-            "Usage: /history [last|full|<count>|role <role>|thread <id>|search <text>|export [--out path]]"
+            "Usage: /history [last|full|<count>|role <role>|thread <id>|search <text>|export [role <role>|thread <id>] [--out path]]"
         ));
     }
 
