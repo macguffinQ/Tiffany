@@ -76,6 +76,26 @@ fi
 
 echo "tap name helper checks passed"
 
+tiffany_dev_help="$("$repo_dir/scripts/tiffany-dev" --help)"
+for expected in \
+  '/provider     configure provider credentials and endpoints' \
+  '/role         register planner/critic/worker/reviewer roles' \
+  '/roles        inspect current role -> provider -> model -> runtime wiring' \
+  '/thread       inspect or clear stable worker sessions' \
+  '/doctor       diagnose provider/model/key/runtime problems' \
+  '/status       show current orchestration status' \
+  '/diff         show git changes' \
+  '/copy         copy the last assistant answer' \
+  '/raw          toggle copy-friendly raw scrollback mode'
+do
+  if ! grep -F -- "$expected" <<<"$tiffany_dev_help" >/dev/null; then
+    echo "expected tiffany-dev --help to include TUI command help: $expected" >&2
+    exit 1
+  fi
+done
+
+echo "tiffany-dev help checks passed"
+
 release_workflow="$repo_dir/.github/workflows/release.yml"
 if ! grep -F -- './scripts/tiffany-post-release-check --tag ${GITHUB_REF_NAME} --tap-dir ../homebrew-tap --skip-install' "$release_workflow" >/dev/null; then
   echo "expected release workflow manual tap instructions to use --tap-dir" >&2
