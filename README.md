@@ -576,6 +576,8 @@ orchestrator sessions import-native
 orchestrator sessions import-native --path ~/.tiffany/tiffany-orchestrator/native-sessions.json
 ```
 
+The native TUI also runs this mirror step in the background after a successful captured turn, so the command above is mainly for repair, migration, or importing history from another machine.
+
 The native bottom status line follows tiffany-loop-style run HUD behavior: it keeps one compact line for stage, elapsed time, worker route, context mode, queued message count, detail fold state, process filter, and review/worker issue counters.
 
 Troubleshooting first:

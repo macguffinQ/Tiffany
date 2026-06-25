@@ -1010,9 +1010,9 @@ pub(crate) fn append_native_chat_turn(
     cwd: &Path,
     turn: &TiffanyOrchestratorTurn,
     events: Vec<TiffanyNativeChatEvent>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<PathBuf>> {
     let Some(native_turn) = native_chat_turn_from_turn(turn, events) else {
-        return Ok(());
+        return Ok(None);
     };
 
     let path = native_sessions_path(codex_home);
@@ -1048,7 +1048,20 @@ pub(crate) fn append_native_chat_turn(
             .with_context(|| format!("creating {}", parent.display()))?;
     }
     std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    Ok(Some(path))
+}
+
+pub(crate) fn spawn_native_history_import(
+    config: TiffanyOrchestratorConfig,
+    native_sessions_path: PathBuf,
+) {
+    tokio::spawn(async move {
+        if let Err(err) = import_native_history(&config, &native_sessions_path).await {
+            tracing::warn!(
+                "failed to mirror Tiffany native history into orchestrator session store: {err:#}"
+            );
+        }
+    });
 }
 
 #[derive(Clone, Debug)]
@@ -1915,6 +1928,34 @@ async fn run_orchestrator_command(
 ) -> anyhow::Result<std::process::Output> {
     let mut command = orchestrator_command(&config.bin, config.config_path.as_deref());
     Ok(command.args(command_args).output().await?)
+}
+
+async fn import_native_history(
+    config: &TiffanyOrchestratorConfig,
+    native_sessions_path: &Path,
+) -> anyhow::Result<()> {
+    let output =
+        run_orchestrator_command(config, &native_history_import_args(native_sessions_path)).await?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    anyhow::bail!(
+        "sessions import-native exited with {}; stdout: {}; stderr: {}",
+        output.status,
+        stdout.trim(),
+        stderr.trim()
+    )
+}
+
+fn native_history_import_args(native_sessions_path: &Path) -> Vec<String> {
+    vec![
+        "sessions".to_string(),
+        "import-native".to_string(),
+        "--path".to_string(),
+        native_sessions_path.display().to_string(),
+    ]
 }
 
 fn orchestrator_command(bin: &str, config_path: Option<&str>) -> Command {
@@ -5737,11 +5778,32 @@ mod tests {
     }
 
     #[test]
+    fn native_chat_append_returns_sessions_file_for_db_mirror() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+
+        let path = append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "hello".into(),
+                result: "hi".into(),
+            },
+            Vec::new(),
+        )
+        .expect("append native")
+        .expect("native sessions path");
+
+        assert_eq!(path, home.path().join(NATIVE_SESSIONS_FILE));
+        assert!(path.is_file());
+    }
+
+    #[test]
     fn native_chat_sessions_ignore_empty_turns() {
         let home = tempfile::tempdir().expect("home");
         let cwd = tempfile::tempdir().expect("cwd");
 
-        append_native_chat_turn(
+        let path = append_native_chat_turn(
             home.path(),
             cwd.path(),
             &TiffanyOrchestratorTurn {
@@ -5752,6 +5814,7 @@ mod tests {
         )
         .expect("append empty");
 
+        assert!(path.is_none());
         let loaded = load_native_chat_conversation(home.path(), cwd.path()).expect("load");
         assert!(loaded.is_none());
     }
@@ -8251,6 +8314,19 @@ mod tests {
                     "https://api.openai.com/v1"
                 ]),
             ]
+        );
+    }
+
+    #[test]
+    fn native_history_import_args_target_import_native_subcommand() {
+        assert_eq!(
+            native_history_import_args(Path::new("/tmp/native-sessions.json")),
+            strings(&[
+                "sessions",
+                "import-native",
+                "--path",
+                "/tmp/native-sessions.json"
+            ])
         );
     }
 

@@ -2345,15 +2345,23 @@ impl App {
         ) {
             tracing::warn!("failed to save Tiffany orchestrator memory: {err:#}");
         }
-        if let Some(turn) = self.tiffany_orchestrator_turns.back()
-            && let Err(err) = crate::tiffany_orchestrator::append_native_chat_turn(
+        if let Some(turn) = self.tiffany_orchestrator_turns.back() {
+            match crate::tiffany_orchestrator::append_native_chat_turn(
                 self.config.codex_home.as_path(),
                 self.config.cwd.as_path(),
                 turn,
                 native_events,
-            )
-        {
-            tracing::warn!("failed to append Tiffany native chat turn: {err:#}");
+            ) {
+                Ok(Some(path)) => {
+                    if let Some(config) = self.tiffany_orchestrator.clone() {
+                        crate::tiffany_orchestrator::spawn_native_history_import(config, path);
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!("failed to append Tiffany native chat turn: {err:#}");
+                }
+            }
         }
     }
 
