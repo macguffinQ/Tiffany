@@ -266,7 +266,10 @@ async fn slash_thread_guides_when_not_in_orchestrator_mode() {
         Ok(AppEvent::InsertHistoryCell(cell)) => {
             let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
             assert!(rendered.contains("tiffany-loop orchestrator mode"));
-            assert!(rendered.contains("Usage: /thread [list|show <role>|clear <role>]"));
+            assert!(
+                rendered.contains("Usage: /thread [list|show <role>|clear <role>|export <role>")
+            );
+            assert!(rendered.contains("--clipboard"));
         }
         other => panic!("expected InsertHistoryCell, got {other:?}"),
     }

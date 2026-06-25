@@ -2222,6 +2222,17 @@ fn thread_summary_line(thread: &ThreadSummary) -> Line<'static> {
     } else {
         "no worker thread yet".to_string()
     };
+    let actions = if thread.active {
+        format!(
+            "inspect /thread {}  export /thread export {}  clear /thread clear {}",
+            thread.role, thread.role, thread.role
+        )
+    } else {
+        format!(
+            "run task to create session  inspect /thread {}",
+            thread.role
+        )
+    };
     Line::from(vec![
         Span::styled(
             format!("  {symbol} "),
@@ -2239,7 +2250,14 @@ fn thread_summary_line(thread: &ThreadSummary) -> Line<'static> {
             format!("{:<28}", truncate_text(&thread.model, 28)),
             Style::default(),
         ),
-        Span::styled(session, Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{:<72}", truncate_text(&session, 72)),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            truncate_text(&actions, 128),
+            Style::default().fg(TIFFANY_SOFT),
+        ),
     ])
 }
 
@@ -4956,6 +4974,10 @@ mod tests {
         assert!(text.contains("worker-codex"));
         assert!(text.contains("codex-native-session"));
         assert!(text.contains("last 11111111"));
+        assert!(text.contains("inspect /thread worker-codex"));
+        assert!(text.contains("export /thread export worker-codex"));
+        assert!(text.contains("clear /thread clear worker-codex"));
+        assert!(text.contains("run task to create session"));
         assert!(text.contains("next  /thread <role>"));
         assert!(text.contains("next  /thread clear <role>"));
         assert!(!text.contains("Worker threads"));
