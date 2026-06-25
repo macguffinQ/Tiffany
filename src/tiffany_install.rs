@@ -76,6 +76,36 @@ pub fn find_tiffany_binary() -> Option<PathBuf> {
     resolve_tiffany_binary().map(|binary| binary.path)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TiffanyShellCommand {
+    pub name: &'static str,
+    pub path: Option<PathBuf>,
+}
+
+impl TiffanyShellCommand {
+    pub fn status_detail(&self) -> String {
+        let suffix = if self.name == tiffany_exe_names()[1] {
+            " (alias)"
+        } else {
+            ""
+        };
+        match &self.path {
+            Some(path) => format!("{}{}", path.display(), suffix),
+            None => format!("missing from PATH{suffix}"),
+        }
+    }
+}
+
+pub fn resolve_tiffany_shell_commands() -> Vec<TiffanyShellCommand> {
+    tiffany_exe_names()
+        .into_iter()
+        .map(|name| TiffanyShellCommand {
+            name,
+            path: which::which(name).ok(),
+        })
+        .collect()
+}
+
 pub fn tiffany_exe_name() -> &'static str {
     tiffany_exe_names()[0]
 }
@@ -243,6 +273,26 @@ mod tests {
         };
 
         assert_eq!(binary.source_label(), "PATH");
+    }
+
+    #[test]
+    fn shell_command_status_marks_alias() {
+        let command = TiffanyShellCommand {
+            name: tiffany_exe_names()[1],
+            path: Some(PathBuf::from("/opt/homebrew/bin/tiffany")),
+        };
+
+        assert_eq!(command.status_detail(), "/opt/homebrew/bin/tiffany (alias)");
+    }
+
+    #[test]
+    fn shell_command_status_reports_missing_primary() {
+        let command = TiffanyShellCommand {
+            name: tiffany_exe_names()[0],
+            path: None,
+        };
+
+        assert_eq!(command.status_detail(), "missing from PATH");
     }
 
     #[test]

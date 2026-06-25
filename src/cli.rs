@@ -1136,6 +1136,13 @@ fn print_status(config_path: &Path) -> Result<()> {
             println!("ui binary:   not found; `orchestrator tui` will use legacy fallback");
         }
     }
+    for command in tiffany_install::resolve_tiffany_shell_commands() {
+        println!(
+            "{:<13}{}",
+            format!("{}:", command.name),
+            command.status_detail()
+        );
+    }
     println!(
         "ui mode:     {}",
         if tiffany_install::legacy_tui_forced() {
