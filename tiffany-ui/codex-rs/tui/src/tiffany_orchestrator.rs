@@ -2179,6 +2179,10 @@ fn role_summary_line(role: &RoleSummary) -> Line<'static> {
     let target = role_target_label(role);
     let teams = if role.teams { "teams on" } else { "teams off" };
     let (symbol, color, health) = role_health_status(role);
+    let actions = format!(
+        "edit /role {}  thread /thread {}  profile /roles profile",
+        role.name, role.name
+    );
     Line::from(vec![
         Span::styled(
             format!("  {symbol} "),
@@ -2201,7 +2205,14 @@ fn role_summary_line(role: &RoleSummary) -> Line<'static> {
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(format!("{teams:<11}"), Style::default().fg(Color::DarkGray)),
-        Span::styled(truncate_text(&health, 34), Style::default().fg(color)),
+        Span::styled(
+            format!("{:<34}", truncate_text(&health, 34)),
+            Style::default().fg(color),
+        ),
+        Span::styled(
+            truncate_text(&actions, 96),
+            Style::default().fg(TIFFANY_SOFT),
+        ),
     ])
 }
 
@@ -4914,6 +4925,9 @@ mod tests {
         assert!(text.contains("worker-codex"));
         assert!(text.contains("codex"));
         assert!(text.contains("runtime-missing:codex"));
+        assert!(text.contains("edit /role worker-codex"));
+        assert!(text.contains("thread /thread worker-codex"));
+        assert!(text.contains("profile /roles profile"));
         assert!(text.contains("next  /doctor  verify the orchestration chain"));
         assert!(!text.contains("Registered roles:"));
         assert!(!text.contains("Register: orchestrator"));
