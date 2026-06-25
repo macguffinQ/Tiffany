@@ -190,13 +190,13 @@ pub(crate) fn tiffany_orchestrator_help_text() -> String {
         text.push_str(&format!(
             "/{:<10} {}",
             cmd.command(),
-            tiffany_orchestrator_help_description(cmd)
+            tiffany_orchestrator_command_description(cmd)
         ));
     }
     text
 }
 
-fn tiffany_orchestrator_help_description(cmd: SlashCommand) -> &'static str {
+pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'static str {
     match cmd {
         SlashCommand::Provider => "configure providers and API keys",
         SlashCommand::Role => "register one role with provider, model, and runtime",

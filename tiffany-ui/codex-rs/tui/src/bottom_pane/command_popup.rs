@@ -13,6 +13,7 @@ use super::slash_commands::BuiltinCommandFlags;
 use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
 use super::slash_commands::commands_for_input;
+use super::slash_commands::tiffany_orchestrator_command_description;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
@@ -37,6 +38,7 @@ pub(crate) struct CommandPopup {
     command_filter: String,
     commands: Vec<CommandItem>,
     state: ScrollState,
+    tiffany_orchestrator_shell: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -89,6 +91,7 @@ impl CommandPopup {
             command_filter: String::new(),
             commands,
             state: ScrollState::new(),
+            tiffany_orchestrator_shell: flags.tiffany_orchestrator_shell,
         }
     }
 
@@ -207,7 +210,9 @@ impl CommandPopup {
             .into_iter()
             .map(|(item, indices)| {
                 let name = format!("/{}", item.command());
-                let description = item.description().to_string();
+                let description = item
+                    .description(self.tiffany_orchestrator_shell)
+                    .to_string();
                 GenericDisplayRow {
                     name,
                     name_prefix_spans: Vec::new(),
@@ -255,8 +260,11 @@ impl CommandItem {
         }
     }
 
-    fn description(&self) -> &str {
+    fn description(&self, tiffany_orchestrator_shell: bool) -> &str {
         match self {
+            Self::Builtin(cmd) if tiffany_orchestrator_shell => {
+                tiffany_orchestrator_command_description(*cmd)
+            }
             Self::Builtin(cmd) => cmd.description(),
             Self::ServiceTier(command) => &command.description,
         }
@@ -423,7 +431,7 @@ mod tests {
             .into_iter()
             .map(|item| {
                 let command = item.command();
-                let description = item.description();
+                let description = item.description(/*tiffany_orchestrator_shell*/ false);
                 format!("/{command} - {description}")
             })
             .collect::<Vec<_>>()
@@ -660,6 +668,35 @@ mod tests {
                 "expected '/{hidden}' to be hidden in Tiffany popup, got {cmds:?}"
             );
         }
+    }
+
+    #[test]
+    fn tiffany_orchestrator_popup_uses_tiffany_descriptions() {
+        let mut popup = CommandPopup::new(
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: true,
+                plugins_command_enabled: true,
+                token_activity_command_enabled: true,
+                service_tier_commands_enabled: true,
+                goal_command_enabled: true,
+                personality_command_enabled: true,
+                windows_degraded_sandbox_active: true,
+                side_conversation_active: false,
+                tiffany_orchestrator_shell: true,
+            },
+            Vec::new(),
+        );
+        popup.on_composer_text_change("/status".to_string());
+
+        let width = 84;
+        let area = Rect::new(0, 0, width, popup.calculate_required_height(width));
+        let mut buf = Buffer::empty(area);
+        popup.render_ref(area, &mut buf);
+        let rendered = format!("{buf:?}");
+
+        assert!(rendered.contains("show Tiffany orchestration status"));
+        assert!(!rendered.contains("token usage"));
     }
 
     #[test]
