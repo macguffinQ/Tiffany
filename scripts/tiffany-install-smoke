@@ -134,6 +134,7 @@ for binary in "$orchestrator_bin" "$tiffany_bin" "$tiffany_alias_bin"; do
     exit 1
   fi
 done
+export PATH="$bin_dir:$PATH"
 
 export HOME="$tmp_root/home"
 export TIFFANY_HOME="$tmp_root/tiffany"
@@ -251,14 +252,16 @@ fi
 log="$(run_log tiffany-status "$tiffany_bin" status --bin "$orchestrator_bin" --orchestrator-config "$config")"
 assert_log_contains "$log" "tiffany-loop"
 assert_log_contains "$log" "$tiffany_bin"
+assert_log_contains "$log" "tiffany:"
+assert_log_contains "$log" "$tiffany_alias_bin (alias)"
 assert_log_contains "$log" "$config"
 assert_log_contains "$log" "bridge:"
 
 log="$(run_log tiffany-doctor "$tiffany_bin" doctor --bin "$orchestrator_bin" --orchestrator-config "$config")"
 assert_log_contains "$log" "orchestrator doctor"
-assert_log_contains "$log" "tiffany-loop binary:"
-assert_log_contains "$log" "config parsed"
-assert_log_contains "$log" "Roles:"
+assert_log_contains "$log" "status"
+assert_log_contains "$log" "Provider auth missing"
+assert_log_contains "$log" "Configure provider auth"
 
 log="$(run_log tiffany-provider-dry-run "$tiffany_bin" config --bin "$orchestrator_bin" --orchestrator-config "$config" provider setup custom --type openai --env TIFFANY_INSTALL_SMOKE_API_KEY --endpoint https://example.invalid/v1 --dry-run)"
 assert_log_contains "$log" "Provider setup dry-run"

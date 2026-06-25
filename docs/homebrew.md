@@ -76,11 +76,13 @@ eval "$(brew shellenv)"
 tiffany-loop doctor
 ```
 
-`orchestrator doctor` checks the Homebrew tap, package version, installed binary
-paths, and whether both `tiffany-loop` and `orchestrator` resolve through
-`PATH`. If the prefix is present but commands are missing, use
-`brew reinstall tiffany-loop`; if the binaries exist but are not found, add
-Homebrew's `bin` directory to the shell startup file.
+`tiffany-loop status` prints the resolved `tiffany-loop` command, the
+compatibility `tiffany` alias, the `orchestrator` bridge command, and the active
+config roots. `orchestrator doctor` checks the Homebrew tap, package version,
+installed binary paths, and whether `tiffany-loop`, `tiffany`, and
+`orchestrator` resolve through `PATH`. If the prefix is present but commands are
+missing, use `brew reinstall tiffany-loop`; if the binaries exist but are not
+found, add Homebrew's `bin` directory to the shell startup file.
 
 ## Automatic tap updates
 
