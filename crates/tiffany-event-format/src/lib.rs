@@ -812,7 +812,9 @@ pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOut
         });
     }
     let kind = hinted_kind.unwrap_or_else(|| {
-        if looks_like_actionable_output(&display) {
+        if let Some(kind) = visible_output_kind_from_display(&display) {
+            kind
+        } else if looks_like_actionable_output(&display) {
             VisibleAgentOutputKind::Actionable
         } else {
             VisibleAgentOutputKind::Normal
@@ -826,8 +828,22 @@ pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOut
     })
 }
 
+fn visible_output_kind_from_display(display: &str) -> Option<VisibleAgentOutputKind> {
+    let lower = display.trim_start().to_ascii_lowercase();
+    if lower.starts_with("tool result:") || lower == "tool result" {
+        return Some(VisibleAgentOutputKind::ToolResult);
+    }
+    if lower.starts_with("tool error:") || lower == "tool error" {
+        return Some(VisibleAgentOutputKind::Actionable);
+    }
+    if lower.starts_with("tool ") {
+        return Some(VisibleAgentOutputKind::ToolCall);
+    }
+    None
+}
+
 fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
-    let prefix = content.trim_start().split_once(": ")?.0;
+    let (prefix, body) = content.trim_start().split_once(": ")?;
     if prefix_is_stderr(prefix) {
         return Some(VisibleAgentOutputKind::Stderr);
     }
@@ -847,6 +863,12 @@ fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
         | "function_call_output"
         | "custom_tool_call_output"
         | "tool_search_output" => Some(VisibleAgentOutputKind::ToolResult),
+        "user" => visible_output_kind_from_display(body),
+        "status" | "process_exit" => {
+            visible_output_kind_from_display(body).or_else(|| {
+                looks_like_actionable_output(body).then_some(VisibleAgentOutputKind::Actionable)
+            })
+        }
         _ => None,
     }
 }
@@ -987,6 +1009,9 @@ fn known_runtime_output_kind(kind: &str) -> Option<&'static str> {
     match kind {
         "assistant" => Some("assistant"),
         "event" => Some("event"),
+        "user" => Some("user"),
+        "status" => Some("status"),
+        "process_exit" => Some("process_exit"),
         "stderr" => Some("stderr"),
         "result" => Some("result"),
         "final" => Some("final"),
@@ -1071,6 +1096,7 @@ pub fn is_low_value_output(text: &str) -> bool {
             | "codex system"
             | "codex assistant: thinking"
             | "codex finished"
+            | "tool result"
     ) || lower.contains(" heartbeat")
         || lower.ends_with(" system: system")
         || lower.ends_with(" assistant: assistant")
@@ -1103,6 +1129,8 @@ fn looks_like_actionable_lowercase_output(lower: &str) -> bool {
         "rate limit",
         "api key",
         "login",
+        "native session busy",
+        "exited with status",
         "model not found",
         "unknown model",
         "invalid model",
@@ -2507,6 +2535,26 @@ mod tests {
         assert_eq!(tool_result.kind, VisibleAgentOutputKind::ToolResult);
         assert_eq!(tool_result.kind.label(), "tool result");
         assert_eq!(tool_result.display, "tool result: tests passed");
+
+        let user_tool_result =
+            visible_agent_output("claude-code user: tool result: tests passed", 500)
+                .expect("user tool result");
+        assert_eq!(user_tool_result.kind, VisibleAgentOutputKind::ToolResult);
+        assert_eq!(user_tool_result.display, "tool result: tests passed");
+        assert!(visible_agent_output("claude-code user: tool result", 500).is_none());
+
+        let recovery = visible_agent_output(
+            "claude-code status: native session busy · cleared saved session native-busy and retrying once with a fresh native session",
+            500,
+        )
+        .expect("recovery status");
+        assert_eq!(recovery.kind, VisibleAgentOutputKind::Actionable);
+        assert!(recovery.display.contains("native session busy"));
+
+        let process_exit =
+            visible_agent_output("claude-code process_exit: claude exited with status exit status: 1", 500)
+                .expect("process exit");
+        assert_eq!(process_exit.kind, VisibleAgentOutputKind::Actionable);
 
         let question_call = visible_agent_output("claude-code tool_use: tool AskUserQuestion", 500)
             .expect("question call");
