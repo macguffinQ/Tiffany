@@ -374,16 +374,85 @@ fn ensure_orchestrator_launch_ready(bin: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    anyhow::bail!(
-        "orchestrator binary not found: `{}`\n\n\
-         Tiffany Loop needs the `orchestrator` runtime to execute planner/critic/worker/reviewer flows.\n\
-         Fix one of these:\n\
-           - install `orchestrator` next to `tiffany-loop`\n\
-           - run `tiffany-loop orchestrator --bin /path/to/orchestrator`\n\
-           - set `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator`\n\
-           - from source, run `./scripts/tiffany-dev`",
-        display_bin(bin)
+    anyhow::bail!("{}", format_orchestrator_launch_report(bin))
+}
+
+fn format_orchestrator_launch_report(bin: &str) -> String {
+    format_orchestrator_launch_report_from(
+        bin,
+        env::current_exe().ok(),
+        env::var_os("TIFFANY_ORCHESTRATOR_BIN"),
     )
+}
+
+fn format_orchestrator_launch_report_from(
+    bin: &str,
+    current_exe: Option<PathBuf>,
+    env_override: Option<OsString>,
+) -> String {
+    let requested = display_bin(bin);
+    let resolved = resolve_executable_path(bin);
+    let adjacent = current_exe
+        .as_ref()
+        .and_then(|path| path.parent())
+        .map(|dir| dir.join(exe_name("orchestrator")));
+    let path_match = find_in_path("orchestrator");
+    let env_status = env_override
+        .as_ref()
+        .filter(|value| !value.to_string_lossy().trim().is_empty())
+        .map(|value| {
+            let path = PathBuf::from(value);
+            format!("{} ({})", path.display(), launchable_path_status(&path))
+        })
+        .unwrap_or_else(|| "unset".to_string());
+
+    let mut out = String::from("tiffany-loop startup check\n");
+    out.push_str("status: missing orchestrator runtime\n");
+    out.push_str(&format!("requested: {requested}\n"));
+    out.push_str(&format!(
+        "resolved: {}\n",
+        resolved
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "not found".to_string())
+    ));
+    out.push_str(&format!("TIFFANY_ORCHESTRATOR_BIN: {env_status}\n"));
+    if let Some(current_exe) = current_exe {
+        out.push_str(&format!("tiffany-loop binary: {}\n", current_exe.display()));
+    }
+    if let Some(adjacent) = adjacent {
+        out.push_str(&format!(
+            "next to tiffany-loop: {} ({})\n",
+            adjacent.display(),
+            launchable_path_status(&adjacent)
+        ));
+    }
+    out.push_str(&format!(
+        "PATH orchestrator: {}\n",
+        path_match
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "not found".to_string())
+    ));
+    out.push_str("\nTiffany Loop needs the `orchestrator` runtime to execute planner/critic/worker/reviewer flows.\n");
+    out.push_str("Fix one of these:\n");
+    out.push_str(
+        "  - reinstall the package so `orchestrator` is installed next to `tiffany-loop`\n",
+    );
+    out.push_str("  - run `tiffany-loop orchestrator --bin /path/to/orchestrator`\n");
+    out.push_str("  - set `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator`\n");
+    out.push_str("  - from source, run `./scripts/tiffany-dev`\n");
+    out
+}
+
+fn launchable_path_status(path: &Path) -> &'static str {
+    if is_launchable_file(path) {
+        "ok"
+    } else if path.exists() {
+        "not executable"
+    } else {
+        "missing"
+    }
 }
 
 fn resolve_executable_path(bin: &str) -> Option<PathBuf> {
@@ -764,9 +833,44 @@ mod tests {
         let err = ensure_orchestrator_launch_ready(&missing.to_string_lossy()).unwrap_err();
         let message = err.to_string();
 
-        assert!(message.contains("orchestrator binary not found"));
+        assert!(message.contains("status: missing orchestrator runtime"));
         assert!(message.contains("TIFFANY_ORCHESTRATOR_BIN"));
         assert!(message.contains("./scripts/tiffany-dev"));
+    }
+
+    #[test]
+    fn launch_report_shows_runtime_probe_details() -> std::io::Result<()> {
+        let temp =
+            std::env::temp_dir().join(format!("tiffany-loop-report-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp)?;
+        let tiffany = temp.join(exe_name("tiffany-loop"));
+        let adjacent = temp.join(exe_name("orchestrator"));
+        let env_bin = temp.join("env-orchestrator");
+        std::fs::write(&tiffany, "")?;
+        std::fs::write(&adjacent, "")?;
+        std::fs::write(&env_bin, "")?;
+
+        let report = format_orchestrator_launch_report_from(
+            &temp.join("missing-orchestrator").to_string_lossy(),
+            Some(tiffany),
+            Some(env_bin.clone().into_os_string()),
+        );
+
+        assert!(report.contains("tiffany-loop startup check"));
+        assert!(report.contains("status: missing orchestrator runtime"));
+        assert!(report.contains("requested:"));
+        assert!(report.contains("resolved: not found"));
+        assert!(report.contains("TIFFANY_ORCHESTRATOR_BIN:"));
+        assert!(report.contains(&env_bin.display().to_string()));
+        assert!(report.contains("not executable"));
+        assert!(report.contains("next to tiffany-loop:"));
+        assert!(report.contains(&adjacent.display().to_string()));
+        assert!(report.contains("PATH orchestrator:"));
+        assert!(report.contains("reinstall the package"));
+
+        let _ = std::fs::remove_dir_all(temp);
+        Ok(())
     }
 
     #[test]

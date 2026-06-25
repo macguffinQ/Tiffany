@@ -21,6 +21,10 @@ storage, roles, providers, and diagnostics.
 - Worker output is rendered as readable waterfall text, not raw JSON.
 - Worker sessions are stable per role and can be inspected or cleared with
   `/thread`.
+- Worker session history can be exported from the native TUI with
+  `/thread export <role>` for handoff or manual continuation.
+- `tiffany-loop` checks that the `orchestrator` runtime is launchable before
+  entering the native TUI, and reports concrete repair commands when it is not.
 
 ## Current Priorities
 
@@ -54,10 +58,6 @@ storage, roles, providers, and diagnostics.
 
 - Add a compact run timeline cell that groups route, worker, tool calls, and
   result without hiding raw details from `/raw`.
-- Add install-time doctor output that reports missing `orchestrator` next to
-  `tiffany-loop` before the first prompt.
 - Add a role/provider preset editor that can save a complete planner, critic,
   worker, reviewer profile in one flow.
-- Add session export from the native TUI through `/thread export` or a small
-  dedicated command once the command is actually wired.
 - Add upstream sync notes for each pulled Codex UI update.
