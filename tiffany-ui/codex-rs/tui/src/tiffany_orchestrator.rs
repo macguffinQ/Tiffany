@@ -4482,19 +4482,16 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
         .content
         .as_deref()
         .and_then(|content| worker_visible_output_kind_for_event(event, content));
+    let (symbol, color) = worker_output_kind_marker(kind);
     let mut lines = vec![Line::from(vec![
         Span::styled(
-            "│",
-            Style::default()
-                .fg(TIFFANY_DARK)
-                .add_modifier(Modifier::BOLD),
+            symbol,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::styled(
             output_title(event),
-            Style::default()
-                .fg(TIFFANY_BLUE)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
     ])];
     lines.extend(
@@ -4508,6 +4505,23 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
         lines.push(failure_hint_line(hint.title(), hint.action()));
     }
     lines
+}
+
+fn worker_output_kind_marker(
+    kind: Option<event_format::VisibleAgentOutputKind>,
+) -> (&'static str, Color) {
+    match kind {
+        Some(event_format::VisibleAgentOutputKind::Question) => ("?", TIFFANY_BLUE),
+        Some(event_format::VisibleAgentOutputKind::ToolCall) => ("↳", TIFFANY_BLUE),
+        Some(event_format::VisibleAgentOutputKind::ToolResult) => ("✓", Color::Gray),
+        Some(event_format::VisibleAgentOutputKind::Diff)
+        | Some(event_format::VisibleAgentOutputKind::Patch) => ("±", TIFFANY_BLUE),
+        Some(event_format::VisibleAgentOutputKind::FileUpdate) => ("✓", TIFFANY_BLUE),
+        Some(event_format::VisibleAgentOutputKind::Stderr) => ("✗", Color::Red),
+        Some(event_format::VisibleAgentOutputKind::Actionable) => ("⚠", Color::Yellow),
+        Some(event_format::VisibleAgentOutputKind::Final) => ("✓", TIFFANY_BLUE),
+        Some(event_format::VisibleAgentOutputKind::Normal) | None => ("│", TIFFANY_DARK),
+    }
 }
 
 fn emit_lines(app_event_tx: &AppEventSender, lines: Vec<Line<'static>>) {
@@ -7182,6 +7196,43 @@ mod tests {
         assert_eq!(
             line_text(&lines[0]),
             "│ worker output · worker-cc · claude-code · 12345678"
+        );
+    }
+
+    #[test]
+    fn worker_output_title_uses_native_kind_markers() {
+        let base = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            ..worker_output_event("worker output", "claude-code", "running tests")
+        };
+
+        let tool = TiffanyProgressEvent {
+            event_kind: Some("tool_use".to_string()),
+            content: Some("claude-code tool_use: tool Bash: cargo test".to_string()),
+            ..base.clone()
+        };
+        let stderr = TiffanyProgressEvent {
+            event_kind: Some("stderr".to_string()),
+            content: Some("claude-code stderr: model not found".to_string()),
+            ..base.clone()
+        };
+        let diff = TiffanyProgressEvent {
+            event_kind: Some("diff".to_string()),
+            content: Some("claude-code diff: diff --git a/lib.rs b/lib.rs".to_string()),
+            ..base
+        };
+
+        assert_eq!(
+            line_text(&output_event_lines(&tool, "tool Bash: cargo test")[0]),
+            "↳ worker tool call · worker-cc · claude-code · 12345678"
+        );
+        assert_eq!(
+            line_text(&output_event_lines(&stderr, "model not found")[0]),
+            "✗ worker stderr · worker-cc · claude-code · 12345678"
+        );
+        assert_eq!(
+            line_text(&output_event_lines(&diff, "diff --git a/lib.rs b/lib.rs")[0]),
+            "± worker diff · worker-cc · claude-code · 12345678"
         );
     }
 
