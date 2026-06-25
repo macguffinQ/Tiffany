@@ -1,13 +1,16 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::Path;
 use std::process::ExitStatus;
 use std::process::Stdio;
 
+use anyhow::Context;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use serde::Deserialize;
+use serde::Serialize;
 use tiffany_event_format as event_format;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
@@ -30,6 +33,9 @@ const CONTROL_SUMMARY_MAX_CHARS: usize = 240_000;
 const FULL_MESSAGE_STREAM_MAX_CHARS: usize = usize::MAX;
 const FAILURE_DETAIL_MAX_LINES: usize = 96;
 const FAILURE_DETAIL_HEAD_LINES: usize = 24;
+const MEMORY_FILE: &str = "tiffany-orchestrator/memory.json";
+const MEMORY_SCHEMA_VERSION: u32 = 1;
+const MEMORY_MAX_TURNS: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct TiffanyOrchestratorLaunch {
@@ -52,6 +58,34 @@ pub(crate) struct TiffanyOrchestratorConfig {
 pub(crate) struct TiffanyOrchestratorTurn {
     pub(crate) user_prompt: String,
     pub(crate) result: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct TiffanyOrchestratorMemory {
+    #[serde(default = "memory_schema_version")]
+    version: u32,
+    #[serde(default)]
+    conversations: Vec<TiffanyOrchestratorMemoryConversation>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct TiffanyOrchestratorMemoryConversation {
+    cwd: String,
+    turns: Vec<TiffanyOrchestratorMemoryTurn>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct TiffanyOrchestratorMemoryTurn {
+    user_prompt: String,
+    result: String,
+}
+
+fn memory_schema_version() -> u32 {
+    MEMORY_SCHEMA_VERSION
+}
+
+pub(crate) fn memory_max_turns() -> usize {
+    MEMORY_MAX_TURNS
 }
 
 impl TiffanyOrchestratorLaunch {
@@ -301,10 +335,10 @@ pub(crate) fn spawn_thread_command(
     });
 }
 
-pub(crate) fn idle_intro_lines() -> Vec<Line<'static>> {
+pub(crate) fn idle_intro_lines(context_turn_count: usize) -> Vec<Line<'static>> {
     vec![
         brand_line("orchestration shell"),
-        idle_status_line(),
+        idle_status_line(context_turn_count),
         workflow_line(),
         command_hint_line(
             "setup",
@@ -358,6 +392,122 @@ fn truncate_context_text(text: &str, max_chars: usize) -> String {
     let mut out = trimmed.chars().take(max_chars).collect::<String>();
     out.push('…');
     out
+}
+
+pub(crate) fn load_memory_turns(
+    codex_home: &Path,
+    cwd: &Path,
+) -> anyhow::Result<VecDeque<TiffanyOrchestratorTurn>> {
+    let path = memory_path(codex_home);
+    let body = match std::fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(VecDeque::new()),
+        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+    };
+    let memory: TiffanyOrchestratorMemory =
+        serde_json::from_str(&body).with_context(|| format!("parsing {}", path.display()))?;
+    let cwd_key = cwd_key(cwd);
+    let turns = memory
+        .conversations
+        .into_iter()
+        .find(|conversation| conversation.cwd == cwd_key)
+        .map(|conversation| conversation.turns)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(memory_turn_into_turn)
+        .take(MEMORY_MAX_TURNS)
+        .collect::<VecDeque<_>>();
+    Ok(turns)
+}
+
+pub(crate) fn save_memory_turns(
+    codex_home: &Path,
+    cwd: &Path,
+    turns: &VecDeque<TiffanyOrchestratorTurn>,
+) -> anyhow::Result<()> {
+    let path = memory_path(codex_home);
+    let mut memory = match std::fs::read_to_string(&path) {
+        Ok(body) => serde_json::from_str::<TiffanyOrchestratorMemory>(&body)
+            .with_context(|| format!("parsing {}", path.display()))?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            TiffanyOrchestratorMemory::default()
+        }
+        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+    };
+
+    memory.version = MEMORY_SCHEMA_VERSION;
+    let cwd_key = cwd_key(cwd);
+    let memory_turns = turns
+        .iter()
+        .rev()
+        .take(MEMORY_MAX_TURNS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .filter_map(|turn| turn_into_memory_turn(turn))
+        .collect::<Vec<_>>();
+
+    if let Some(conversation) = memory
+        .conversations
+        .iter_mut()
+        .find(|conversation| conversation.cwd == cwd_key)
+    {
+        conversation.turns = memory_turns;
+    } else {
+        memory
+            .conversations
+            .push(TiffanyOrchestratorMemoryConversation {
+                cwd: cwd_key,
+                turns: memory_turns,
+            });
+    }
+
+    memory
+        .conversations
+        .retain(|conversation| !conversation.turns.is_empty());
+
+    let body = serde_json::to_string_pretty(&memory)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn memory_path(codex_home: &Path) -> std::path::PathBuf {
+    codex_home.join(MEMORY_FILE)
+}
+
+fn cwd_key(cwd: &Path) -> String {
+    cwd.canonicalize()
+        .unwrap_or_else(|_| cwd.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+fn memory_turn_into_turn(turn: TiffanyOrchestratorMemoryTurn) -> Option<TiffanyOrchestratorTurn> {
+    let user_prompt = turn.user_prompt.trim().to_string();
+    let result = turn.result.trim().to_string();
+    if user_prompt.is_empty() || result.is_empty() {
+        return None;
+    }
+    Some(TiffanyOrchestratorTurn {
+        user_prompt,
+        result,
+    })
+}
+
+fn turn_into_memory_turn(turn: &TiffanyOrchestratorTurn) -> Option<TiffanyOrchestratorMemoryTurn> {
+    let user_prompt = turn.user_prompt.trim();
+    let result = turn.result.trim();
+    if user_prompt.is_empty() || result.is_empty() {
+        return None;
+    }
+    Some(TiffanyOrchestratorMemoryTurn {
+        user_prompt: user_prompt.to_string(),
+        result: result.to_string(),
+    })
 }
 
 pub(crate) fn prompt_from_app_command(op: &AppCommand) -> Option<String> {
@@ -2217,14 +2367,23 @@ fn tiffany_logo_spans() -> Vec<Span<'static>> {
     ]
 }
 
-fn idle_status_line() -> Line<'static> {
-    Line::from(vec![
+fn idle_status_line(context_turn_count: usize) -> Line<'static> {
+    let mut spans = vec![
         status_chip("status", "ready", TIFFANY_BLUE),
         Span::raw("  "),
         status_chip("mode", "native", TIFFANY_BLUE),
         Span::raw("  "),
         status_chip("memory", "on", TIFFANY_BLUE),
-    ])
+    ];
+    if context_turn_count > 0 {
+        spans.push(Span::raw("  "));
+        spans.push(status_chip(
+            "context",
+            format!("{context_turn_count} turn(s)"),
+            TIFFANY_SOFT,
+        ));
+    }
+    Line::from(spans)
 }
 
 fn run_status_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
@@ -3376,11 +3535,11 @@ mod tests {
 
     #[test]
     fn intro_lines_have_tiffany_blue_structure() {
-        let lines = idle_intro_lines();
+        let lines = idle_intro_lines(2);
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
         assert!(text.contains("◆ T>_  tiffany-loop orchestrator"));
-        assert!(text.contains("status ready"));
+        assert!(text.contains("status ready  mode native  memory on  context 2 turn(s)"));
         assert!(text.contains("flow  direct / single / full  →  selected per prompt"));
         assert!(!text.contains("status ready\nflow  planner → critic"));
         assert!(text.contains("setup  /provider  /role  /roles  /thread  /doctor"));
@@ -3391,6 +3550,73 @@ mod tests {
         assert_eq!(lines[2].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[3].spans[2].style.fg, Some(TIFFANY_SOFT));
         assert_eq!(lines[4].spans[2].style.fg, Some(TIFFANY_SOFT));
+    }
+
+    #[test]
+    fn orchestrator_memory_round_trips_recent_turns_by_cwd() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd_a = tempfile::tempdir().expect("cwd a");
+        let cwd_b = tempfile::tempdir().expect("cwd b");
+        let mut turns = VecDeque::new();
+        for idx in 0..10 {
+            turns.push_back(TiffanyOrchestratorTurn {
+                user_prompt: format!("prompt {idx}"),
+                result: format!("result {idx}"),
+            });
+        }
+
+        save_memory_turns(home.path(), cwd_a.path(), &turns).expect("save cwd a");
+        let loaded_a = load_memory_turns(home.path(), cwd_a.path()).expect("load cwd a");
+        let loaded_b = load_memory_turns(home.path(), cwd_b.path()).expect("load cwd b");
+
+        assert_eq!(loaded_a.len(), MEMORY_MAX_TURNS);
+        assert_eq!(loaded_a.front().unwrap().user_prompt, "prompt 2");
+        assert_eq!(loaded_a.back().unwrap().result, "result 9");
+        assert!(loaded_b.is_empty());
+
+        let mut cwd_b_turns = VecDeque::new();
+        cwd_b_turns.push_back(TiffanyOrchestratorTurn {
+            user_prompt: "other prompt".into(),
+            result: "other result".into(),
+        });
+        save_memory_turns(home.path(), cwd_b.path(), &cwd_b_turns).expect("save cwd b");
+
+        assert_eq!(
+            load_memory_turns(home.path(), cwd_a.path())
+                .expect("reload cwd a")
+                .len(),
+            MEMORY_MAX_TURNS
+        );
+        assert_eq!(
+            load_memory_turns(home.path(), cwd_b.path())
+                .expect("reload cwd b")
+                .front()
+                .unwrap()
+                .result,
+            "other result"
+        );
+    }
+
+    #[test]
+    fn orchestrator_memory_ignores_empty_turns() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let mut turns = VecDeque::new();
+        turns.push_back(TiffanyOrchestratorTurn {
+            user_prompt: " ".into(),
+            result: "ignored".into(),
+        });
+        turns.push_back(TiffanyOrchestratorTurn {
+            user_prompt: "kept".into(),
+            result: " done ".into(),
+        });
+
+        save_memory_turns(home.path(), cwd.path(), &turns).expect("save");
+        let loaded = load_memory_turns(home.path(), cwd.path()).expect("load");
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded.front().unwrap().user_prompt, "kept");
+        assert_eq!(loaded.front().unwrap().result, "done");
     }
 
     #[test]

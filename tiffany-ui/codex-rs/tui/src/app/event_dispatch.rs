@@ -2308,8 +2308,17 @@ impl App {
                 result,
             },
         );
-        while self.tiffany_orchestrator_turns.len() > 8 {
+        while self.tiffany_orchestrator_turns.len()
+            > crate::tiffany_orchestrator::memory_max_turns()
+        {
             self.tiffany_orchestrator_turns.pop_front();
+        }
+        if let Err(err) = crate::tiffany_orchestrator::save_memory_turns(
+            self.config.codex_home.as_path(),
+            self.config.cwd.as_path(),
+            &self.tiffany_orchestrator_turns,
+        ) {
+            tracing::warn!("failed to save Tiffany orchestrator memory: {err:#}");
         }
     }
 

@@ -1018,6 +1018,20 @@ See the Codex keymap documentation for supported actions and examples."
         let tiffany_orchestrator_config = tiffany_orchestrator
             .as_ref()
             .map(crate::tiffany_orchestrator::TiffanyOrchestratorLaunch::config);
+        let tiffany_orchestrator_turns = if tiffany_orchestrator_mode {
+            match crate::tiffany_orchestrator::load_memory_turns(
+                config.codex_home.as_path(),
+                config.cwd.as_path(),
+            ) {
+                Ok(turns) => turns,
+                Err(err) => {
+                    tracing::warn!("failed to load Tiffany orchestrator memory: {err:#}");
+                    VecDeque::new()
+                }
+            }
+        } else {
+            VecDeque::new()
+        };
 
         let mut app = Self {
             model_catalog,
@@ -1069,7 +1083,7 @@ See the Codex keymap documentation for supported actions and examples."
             pending_startup_thread_start,
             tiffany_orchestrator: tiffany_orchestrator_config,
             tiffany_orchestrator_running: false,
-            tiffany_orchestrator_turns: VecDeque::new(),
+            tiffany_orchestrator_turns,
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         };
@@ -1081,8 +1095,11 @@ See the Codex keymap documentation for supported actions and examples."
         if let Some(launch) = tiffany_orchestrator {
             let prompt = launch.prompt.trim().to_string();
             if prompt.is_empty() {
-                app.chat_widget
-                    .add_plain_history_lines(crate::tiffany_orchestrator::idle_intro_lines());
+                app.chat_widget.add_plain_history_lines(
+                    crate::tiffany_orchestrator::idle_intro_lines(
+                        app.tiffany_orchestrator_turns.len(),
+                    ),
+                );
             } else {
                 app.start_tiffany_orchestrator_run(prompt);
             }

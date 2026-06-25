@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Native Tiffany orchestrator mode now restores recent multi-turn context per
+  working directory from `~/.tiffany/tiffany-orchestrator/memory.json`, so
+  follow-up prompts continue to work after restarting the TUI.
 - Added `/thread clear <role>` to clear a stuck native Claude/Codex session id
   while preserving the stable Tiffany worker thread and previous Tiffany
   session history.
