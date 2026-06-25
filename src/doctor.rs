@@ -263,12 +263,13 @@ impl DoctorReport {
         if messages.iter().any(|message| {
             message.contains("tiffany-loop binary not found")
                 || message.contains("tiffany binary not found")
+                || message.contains("Tiffany command(s) not found on PATH")
                 || message.contains("ORCHESTRATOR_LEGACY_TUI")
                 || message.contains("not resolvable")
         }) {
             push_unique(
                 &mut steps,
-                "Install `tiffany-loop` or run `./scripts/tiffany-dev` from a source checkout.",
+                "Install or repair Tiffany with `brew reinstall tiffany-loop`, fix PATH, or run `./scripts/tiffany-dev` from a source checkout.",
             );
         }
         if messages.iter().any(|message| {
@@ -294,7 +295,8 @@ impl DoctorReport {
             );
         }
         if messages.iter().any(|message| {
-            message.contains("not found on PATH")
+            (message.contains("not found on PATH")
+                && !message.contains("Tiffany command(s) not found on PATH"))
                 || message.contains("claude: not found")
                 || message.contains("codex: not found")
         }) {
@@ -2442,6 +2444,34 @@ mod tests {
         assert!(rendered.contains("Upgrade Codex CLI"));
         assert!(rendered.contains("codex exec --cd"));
         assert!(rendered.contains("Rerun `orchestrator doctor`"));
+    }
+
+    #[test]
+    fn report_next_steps_repair_missing_tiffany_alias_not_worker_cli() {
+        let report = test_report(
+            vec![DoctorLine {
+                level: DoctorLevel::Warn,
+                message: "Tiffany command(s) not found on PATH: tiffany".into(),
+            }],
+            1,
+        );
+
+        let steps = report.next_steps();
+        let rendered = report.render_text();
+
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.contains("brew reinstall tiffany-loop")),
+            "expected Tiffany repair step, got {steps:?}"
+        );
+        assert!(
+            !steps
+                .iter()
+                .any(|step| step.contains("Install the selected worker CLI")),
+            "Tiffany alias repair should not be classified as worker CLI repair: {steps:?}"
+        );
+        assert!(rendered.contains("Tiffany command(s) not found on PATH: tiffany"));
     }
 
     #[test]
