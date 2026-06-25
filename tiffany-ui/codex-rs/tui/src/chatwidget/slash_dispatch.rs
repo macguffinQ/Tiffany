@@ -9,9 +9,12 @@ use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::ProviderSetupDraft;
 use crate::bottom_pane::ProviderSetupView;
+use crate::bottom_pane::RoleProfileSetupDraft;
+use crate::bottom_pane::RoleProfileSetupView;
 use crate::bottom_pane::RoleSetupDraft;
 use crate::bottom_pane::RoleSetupView;
 use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::bottom_pane::role_profile_setup_draft_args;
 use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
@@ -275,6 +278,31 @@ impl ChatWidget {
                     Err(err) => Err(err),
                 },
             ),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    fn open_tiffany_role_profile_setup_prompt(&mut self) {
+        if !self.tiffany_orchestrator_shell {
+            self.add_error_message(format!(
+                "'/roles profile' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{ROLES_USAGE}"
+            ));
+            return;
+        }
+
+        let tx = self.app_event_tx.clone();
+        let view = RoleProfileSetupView::new(
+            role_profile_setup_initial_draft(),
+            Box::new(move |draft: RoleProfileSetupDraft| {
+                match role_profile_setup_draft_args(&draft) {
+                    Ok(args) => {
+                        tx.send(AppEvent::TiffanyOrchestratorRolesCommand { args });
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
+            }),
         );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
@@ -1080,7 +1108,11 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Roles if !trimmed.is_empty() => {
-                self.dispatch_tiffany_roles_command(args);
+                if role_profile_setup_prompt(trimmed) {
+                    self.open_tiffany_role_profile_setup_prompt();
+                } else {
+                    self.dispatch_tiffany_roles_command(args);
+                }
             }
             SlashCommand::Role if !trimmed.is_empty() => {
                 if let Some(role) = role_setup_prompt_role(trimmed) {
@@ -1477,6 +1509,17 @@ fn role_setup_prompt_role(args: &str) -> Option<Option<&str>> {
     Some(Some(first))
 }
 
+fn role_profile_setup_prompt(args: &str) -> bool {
+    let mut parts = args.split_whitespace();
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    matches!(
+        first.to_ascii_lowercase().as_str(),
+        "profile" | "setup-profile" | "profile-setup"
+    ) && parts.next().is_none()
+}
+
 fn provider_setup_initial_draft(
     provider: &str,
     config: Option<&crate::tiffany_orchestrator::TiffanyOrchestratorConfig>,
@@ -1657,6 +1700,17 @@ fn provider_default_endpoint(provider: &str) -> Option<&'static str> {
         "moonshot" => Some("https://api.moonshot.ai/v1"),
         "mistral" => Some("https://api.mistral.ai/v1"),
         _ => None,
+    }
+}
+
+fn role_profile_setup_initial_draft() -> RoleProfileSetupDraft {
+    RoleProfileSetupDraft {
+        name: "default".to_string(),
+        planner: "minimax/MiniMax-M3@codex".to_string(),
+        critic: "minimax/MiniMax-M3@codex".to_string(),
+        reviewer: "minimax/MiniMax-M3@codex".to_string(),
+        worker_cc: "anthropic/claude-sonnet-4-6@claude-code".to_string(),
+        worker_codex: "minimax/MiniMax-M3@codex".to_string(),
     }
 }
 

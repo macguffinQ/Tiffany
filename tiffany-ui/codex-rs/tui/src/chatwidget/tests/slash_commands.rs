@@ -1042,6 +1042,50 @@ fn role_setup_draft_registers_role() {
     );
 }
 
+#[test]
+fn role_profile_setup_draft_saves_profile() {
+    let args = crate::bottom_pane::role_profile_setup_draft_args(
+        &crate::bottom_pane::RoleProfileSetupDraft {
+            name: "dev profile".to_string(),
+            planner: "minimax/MiniMax-M3@codex".to_string(),
+            worker_cc: "anthropic/claude-sonnet-4-6@claude-code".to_string(),
+            ..crate::bottom_pane::RoleProfileSetupDraft::default()
+        },
+    )
+    .expect("role profile draft args");
+
+    assert_eq!(
+        args,
+        "profile dev-profile --planner minimax/MiniMax-M3@codex --worker-cc anthropic/claude-sonnet-4-6@claude-code"
+    );
+}
+
+#[tokio::test]
+async fn slash_roles_profile_opens_profile_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command_with_args(SlashCommand::Roles, "profile".to_string(), Vec::new());
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(popup.contains("Role profile"));
+    assert!(popup.contains("Planner"));
+    assert!(popup.contains("Worker Codex"));
+    assert!(popup.contains("roles profile"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
+            assert_eq!(
+                args,
+                "profile default --planner minimax/MiniMax-M3@codex --critic minimax/MiniMax-M3@codex --reviewer minimax/MiniMax-M3@codex --worker-cc anthropic/claude-sonnet-4-6@claude-code --worker-codex minimax/MiniMax-M3@codex"
+            );
+        }
+        other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn queued_slash_compact_dispatches_after_active_turn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

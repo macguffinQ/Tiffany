@@ -27,6 +27,8 @@ storage, roles, providers, and diagnostics.
   while worker/tool/stderr output remains visible as waterfall text.
 - Role profiles can save multiple planner, critic, worker, and reviewer
   bindings in one command; the native TUI can call that through `/roles profile`.
+- `/roles profile` opens a native dropdown form for common planner, critic,
+  worker, and reviewer bindings; existing inline CLI arguments still work.
 - `tiffany-loop` checks that the `orchestrator` runtime is launchable before
   entering the native TUI, and reports concrete repair commands when it is not.
 
@@ -61,6 +63,8 @@ storage, roles, providers, and diagnostics.
 
 ## Near-Term Backlog
 
-- Add a native dropdown form for role profiles on top of the new
-  `/roles profile` command.
+- Trim any remaining upstream-only command affordances that can still appear in
+  Tiffany mode during queued or edge-case dispatch.
+- Add a session inspector view that shows each role's persisted native session
+  id, last run status, and export path without leaving the TUI.
 - Add upstream sync notes for each pulled Codex UI update.

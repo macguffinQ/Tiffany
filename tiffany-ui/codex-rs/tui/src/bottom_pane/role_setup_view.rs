@@ -63,10 +63,10 @@ struct RoleSetupDropdown {
 }
 
 #[derive(Clone, Copy)]
-struct RoleSetupChoice {
-    label: &'static str,
-    value: &'static str,
-    hint: &'static str,
+pub(super) struct RoleSetupChoice {
+    pub(super) label: &'static str,
+    pub(super) value: &'static str,
+    pub(super) hint: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -983,11 +983,15 @@ fn default_provider_for_runtime(runtime: &str) -> &'static str {
     }
 }
 
-fn choice(label: &'static str, value: &'static str, hint: &'static str) -> RoleSetupChoice {
+pub(super) fn choice(
+    label: &'static str,
+    value: &'static str,
+    hint: &'static str,
+) -> RoleSetupChoice {
     RoleSetupChoice { label, value, hint }
 }
 
-fn dropdown_window_start(selected: usize, len: usize, visible: usize) -> usize {
+pub(super) fn dropdown_window_start(selected: usize, len: usize, visible: usize) -> usize {
     if len <= visible {
         0
     } else if selected >= visible {
