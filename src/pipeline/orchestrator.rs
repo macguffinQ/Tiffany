@@ -1073,7 +1073,14 @@ fn enrich_worker_error(
 
 fn is_native_session_occupied(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
-    lower.contains("session id") && lower.contains("already in use")
+    let mentions_session =
+        lower.contains("session id") || lower.contains("session_id") || lower.contains("session");
+    let occupied = lower.contains("already in use")
+        || lower.contains("currently in use")
+        || lower.contains("is in use")
+        || lower.contains("locked by another")
+        || lower.contains("another process");
+    mentions_session && occupied
 }
 
 fn emit_worker_recovery_event(
@@ -1109,14 +1116,25 @@ fn native_resume_command(agent: &str, native_session_id: &str) -> String {
 }
 
 fn extract_occupied_session_id(message: &str) -> Option<String> {
-    let marker = "Session ID ";
-    let start = message.find(marker)? + marker.len();
-    let rest = message.get(start..)?;
-    let id = rest
-        .split_whitespace()
-        .next()?
-        .trim_matches(|ch: char| ch == '\'' || ch == '"' || ch == ',' || ch == ';' || ch == '.');
-    (!id.is_empty()).then(|| id.to_string())
+    for marker in ["Session ID ", "session_id ", "session "] {
+        let Some(start) = find_case_insensitive(message, marker) else {
+            continue;
+        };
+        let rest = message.get(start + marker.len()..)?;
+        let id = rest.split_whitespace().next()?.trim_matches(|ch: char| {
+            ch == '\'' || ch == '"' || ch == ',' || ch == ';' || ch == '.'
+        });
+        if !id.is_empty() {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    haystack
+        .to_ascii_lowercase()
+        .find(&needle.to_ascii_lowercase())
 }
 
 fn fallback_single_task_plan(top_task: &Task, rationale: impl Into<String>) -> PlanOutput {
@@ -1640,6 +1658,51 @@ mod tests {
         assert!(message.contains("/thread worker-cc"));
         assert!(message.contains("/thread clear worker-cc"));
         assert!(message.contains("claude --resume native-123"));
+    }
+
+    #[test]
+    fn native_session_occupied_detection_accepts_runtime_wording_variants() {
+        for message in [
+            "Error: Session ID native-123 is already in use.",
+            "session_id native-123 currently in use",
+            "Claude session native-123 is in use by another process",
+            "Codex session native-123 locked by another process",
+        ] {
+            assert!(
+                is_native_session_occupied(message),
+                "expected occupied session detection for: {message}"
+            );
+        }
+
+        for message in [
+            "model not found",
+            "permission denied while reading file",
+            "session expired; please login again",
+        ] {
+            assert!(
+                !is_native_session_occupied(message),
+                "did not expect occupied session detection for: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_error_extracts_occupied_native_session_from_runtime_variant() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db")).unwrap();
+
+        let message = enrich_worker_error(
+            "Claude session native-456 is in use by another process.",
+            "claude-code",
+            "worker-cc",
+            None,
+            &store,
+        );
+
+        assert!(message.contains("Native session is already in use"));
+        assert!(message.contains("native_session=native-456"));
+        assert!(message.contains("claude --resume native-456"));
     }
 
     #[test]
