@@ -1025,7 +1025,17 @@ See the Codex keymap documentation for supported actions and examples."
                 config.codex_home.as_path(),
                 config.cwd.as_path(),
             ) {
-                Ok(turns) => turns,
+                Ok(turns) if !turns.is_empty() => turns,
+                Ok(_) => match crate::tiffany_orchestrator::load_native_memory_turns(
+                    config.codex_home.as_path(),
+                    config.cwd.as_path(),
+                ) {
+                    Ok(turns) => turns,
+                    Err(err) => {
+                        tracing::warn!("failed to load Tiffany native chat memory: {err:#}");
+                        VecDeque::new()
+                    }
+                },
                 Err(err) => {
                     tracing::warn!("failed to load Tiffany orchestrator memory: {err:#}");
                     VecDeque::new()

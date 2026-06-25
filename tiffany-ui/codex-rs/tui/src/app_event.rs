@@ -237,6 +237,7 @@ pub(crate) enum AppEvent {
     TiffanyOrchestratorTurnCaptured {
         user_prompt: String,
         result: String,
+        native_events: Vec<crate::tiffany_orchestrator::TiffanyNativeChatEvent>,
     },
 
     /// Run a tiffany-loop orchestrator role-management command from the TUI.

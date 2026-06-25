@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 pub struct AgentEventSummary {
     pub kind: String,
     pub text: String,
+    pub tool_name: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -620,6 +621,7 @@ pub fn summarize_cli_stream_line(line: &str, max: usize) -> Option<AgentEventSum
             return (!text.trim().is_empty()).then(|| AgentEventSummary {
                 kind: "raw".into(),
                 text,
+                tool_name: None,
             });
         }
     };
@@ -644,7 +646,12 @@ pub fn summarize_event_value(value: &Value, max: usize) -> Option<AgentEventSumm
         })
         .unwrap_or_else(|| summarize_json_value(value));
     let text = sanitize_text(&text, max);
-    (!text.trim().is_empty()).then(|| AgentEventSummary { kind, text })
+    let tool_name = tool_name_from_value(value);
+    (!text.trim().is_empty()).then(|| AgentEventSummary {
+        kind,
+        text,
+        tool_name,
+    })
 }
 
 pub fn format_runtime_output(agent: &str, event_kind: &str, payload: &Value, max: usize) -> String {
@@ -653,6 +660,39 @@ pub fn format_runtime_output(agent: &str, event_kind: &str, payload: &Value, max
         format!("{agent} {event_kind}")
     } else {
         format!("{agent} {event_kind}: {summary}")
+    }
+}
+
+pub fn tool_name_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(object) => {
+            if let Some(name) = object
+                .get("name")
+                .or_else(|| object.get("tool_name"))
+                .or_else(|| object.get("tool"))
+                .and_then(Value::as_str)
+                .and_then(non_empty)
+            {
+                return Some(name);
+            }
+            if let Some(name) = object
+                .get("function")
+                .and_then(Value::as_object)
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                .and_then(non_empty)
+            {
+                return Some(name);
+            }
+            for key in ["input", "parameters", "args", "arguments", "action"] {
+                if let Some(found) = object.get(key).and_then(tool_name_from_value) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        Value::Array(items) => items.iter().find_map(tool_name_from_value),
+        _ => None,
     }
 }
 
@@ -830,6 +870,14 @@ pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOut
 
 fn visible_output_kind_from_display(display: &str) -> Option<VisibleAgentOutputKind> {
     let lower = display.trim_start().to_ascii_lowercase();
+    if lower.starts_with("diff --git")
+        || lower.starts_with("--- ")
+        || lower.starts_with("+++ ")
+        || lower.starts_with("@@ ")
+        || lower.starts_with("files changed:")
+    {
+        return Some(VisibleAgentOutputKind::ToolResult);
+    }
     if lower.starts_with("tool result:") || lower == "tool result" {
         return Some(VisibleAgentOutputKind::ToolResult);
     }
@@ -860,6 +908,10 @@ fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
         | "image_generation_call"
         | "mcp_tool_call" => Some(VisibleAgentOutputKind::ToolCall),
         "tool_result"
+        | "diff"
+        | "patch"
+        | "file_change"
+        | "file_update"
         | "function_call_output"
         | "custom_tool_call_output"
         | "tool_search_output" => Some(VisibleAgentOutputKind::ToolResult),
@@ -999,7 +1051,15 @@ fn runtime_output_kind_from_prefix(prefix: &str) -> Option<&'static str> {
 fn is_known_runtime_prefix(runtime: &str) -> bool {
     matches!(
         runtime,
-        "agent" | "claude" | "claude-code" | "cc" | "codex" | "worker-cc" | "worker-codex"
+        "agent"
+            | "claude"
+            | "claude-code"
+            | "cc"
+            | "codex"
+            | "gemini"
+            | "worker-cc"
+            | "worker-codex"
+            | "worker-gemini"
     )
 }
 
@@ -1010,6 +1070,10 @@ fn known_runtime_output_kind(kind: &str) -> Option<&'static str> {
         "user" => Some("user"),
         "status" => Some("status"),
         "process_exit" => Some("process_exit"),
+        "diff" => Some("diff"),
+        "patch" => Some("patch"),
+        "file_change" => Some("file_change"),
+        "file_update" => Some("file_update"),
         "stderr" => Some("stderr"),
         "result" => Some("result"),
         "final" => Some("final"),
@@ -2572,6 +2636,15 @@ mod tests {
             question_error.display,
             "waiting for user input: Answer questions?"
         );
+
+        let diff = visible_agent_output(
+            "claude-code diff: files changed:\n  - src/lib.rs\n\ndiff --git a/src/lib.rs b/src/lib.rs",
+            500,
+        )
+        .expect("worker diff");
+        assert_eq!(diff.kind, VisibleAgentOutputKind::ToolResult);
+        assert!(diff.display.contains("files changed:"));
+        assert!(diff.display.contains("diff --git"));
 
         let normal =
             visible_agent_output("claude assistant: useful summary", 500).expect("normal output");

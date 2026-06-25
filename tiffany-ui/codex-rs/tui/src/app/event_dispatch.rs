@@ -351,8 +351,9 @@ impl App {
             AppEvent::TiffanyOrchestratorTurnCaptured {
                 user_prompt,
                 result,
+                native_events,
             } => {
-                self.handle_tiffany_orchestrator_turn_captured(user_prompt, result);
+                self.handle_tiffany_orchestrator_turn_captured(user_prompt, result, native_events);
             }
             AppEvent::TiffanyOrchestratorRolesCommand { args } => {
                 self.handle_tiffany_orchestrator_roles_command(tui, args);
@@ -2310,7 +2311,12 @@ impl App {
         );
     }
 
-    fn handle_tiffany_orchestrator_turn_captured(&mut self, user_prompt: String, result: String) {
+    fn handle_tiffany_orchestrator_turn_captured(
+        &mut self,
+        user_prompt: String,
+        result: String,
+        native_events: Vec<crate::tiffany_orchestrator::TiffanyNativeChatEvent>,
+    ) {
         let user_prompt = user_prompt.trim().to_string();
         let result = result.trim().to_string();
         if user_prompt.is_empty() || result.is_empty() {
@@ -2335,6 +2341,16 @@ impl App {
             &self.tiffany_orchestrator_turns,
         ) {
             tracing::warn!("failed to save Tiffany orchestrator memory: {err:#}");
+        }
+        if let Some(turn) = self.tiffany_orchestrator_turns.back()
+            && let Err(err) = crate::tiffany_orchestrator::append_native_chat_turn(
+                self.config.codex_home.as_path(),
+                self.config.cwd.as_path(),
+                turn,
+                native_events,
+            )
+        {
+            tracing::warn!("failed to append Tiffany native chat turn: {err:#}");
         }
     }
 

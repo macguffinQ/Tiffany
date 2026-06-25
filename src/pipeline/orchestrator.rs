@@ -23,7 +23,15 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-type WorkerJoinOutput = (Uuid, Option<Uuid>, String, String, u64, Result<Session>);
+type WorkerDiffJoinOutput = (Session, Option<String>);
+type WorkerJoinOutput = (
+    Uuid,
+    Option<Uuid>,
+    String,
+    String,
+    u64,
+    Result<WorkerDiffJoinOutput>,
+);
 
 /// Progress events emitted by the orchestrator for live terminal chat display.
 /// (Borrowed from Claude Code's terminal pattern: background task + mpsc channel.)
@@ -891,24 +899,52 @@ impl Orchestrator {
                     drop(event_tx);
                     drop(pipeline_event_tx);
                     let _ = forwarder.await;
-                    let res = res.map(|h| h.session).and_then(|session| {
-                        if let Some(thread_id) = session.worker_thread_id {
-                            session_store
-                                .update_worker_thread_after_session(
-                                    thread_id,
-                                    session.native_session_id.as_deref(),
-                                    session.id,
-                                    session.worktree_path.as_deref(),
-                                )
-                                .with_context(|| {
-                                    format!(
-                                        "updating worker thread after session {} under lease",
+                    let res = match res {
+                        Ok(handle) => {
+                            let mut session = handle.session;
+                            let diff = match adapter.get_diff(&session).await {
+                                Ok(diff) if !diff.trim().is_empty() => {
+                                    session.files_touched = files_touched_from_diff(&diff);
+                                    Some(diff)
+                                }
+                                Ok(_) => None,
+                                Err(err) => {
+                                    tracing::warn!(
+                                        "failed to collect worker diff for session {}: {err:#}",
                                         session.id
+                                    );
+                                    None
+                                }
+                            };
+                            if let Some(thread_id) = session.worker_thread_id {
+                                if let Err(err) = session_store
+                                    .update_worker_thread_after_session(
+                                        thread_id,
+                                        session.native_session_id.as_deref(),
+                                        session.id,
+                                        session.worktree_path.as_deref(),
                                     )
-                                })?;
+                                    .with_context(|| {
+                                        format!(
+                                            "updating worker thread after session {} under lease",
+                                            session.id
+                                        )
+                                    })
+                                {
+                                    return (
+                                        task_id,
+                                        Some(thread.id),
+                                        agent,
+                                        worker_role,
+                                        duration_ms(worker_start.elapsed()),
+                                        Err(err),
+                                    );
+                                }
+                            }
+                            Ok((session, diff))
                         }
-                        Ok(session)
-                    });
+                        Err(err) => Err(err),
+                    };
                     (
                         task_id,
                         Some(thread.id),
@@ -956,7 +992,7 @@ impl Orchestrator {
                     active_thread_ids.remove(&thread_id);
                 }
                 match res {
-                    Ok(mut session) => {
+                    Ok((mut session, diff)) => {
                         let done_agent = if session.agent.trim().is_empty() {
                             agent
                         } else {
@@ -974,6 +1010,13 @@ impl Orchestrator {
                             }
                         }
                         session.ended_at = Some(chrono::Utc::now());
+                        if let Some(diff) = diff {
+                            if let Some(diff_event) =
+                                worker_diff_progress_event(task_id, &session.agent, &role, &diff)
+                            {
+                                let _ = tx.send(diff_event);
+                            }
+                        }
                         self.session_store
                             .finalize(&session)
                             .with_context(|| format!("finalizing worker session {}", session.id))?;
@@ -1040,6 +1083,74 @@ impl Orchestrator {
         tracing::info!("executed {} / {} tasks", results.len(), total);
         Ok(results)
     }
+}
+
+fn worker_diff_progress_event(
+    task_id: Uuid,
+    agent: &str,
+    role: &str,
+    diff: &str,
+) -> Option<RunProgress> {
+    let diff = diff.trim();
+    if diff.is_empty() {
+        return None;
+    }
+    Some(RunProgress::WorkerOutput {
+        task_id,
+        agent: agent.to_string(),
+        role: role.to_string(),
+        content: format!("{agent} diff: {}", summarize_worker_diff(diff, 240_000)),
+    })
+}
+
+fn summarize_worker_diff(diff: &str, max_chars: usize) -> String {
+    let files = files_touched_from_diff(diff);
+    let mut out = String::new();
+    if !files.is_empty() {
+        out.push_str("files changed:");
+        for file in files.iter().take(12) {
+            out.push_str("\n  - ");
+            out.push_str(file);
+        }
+        if files.len() > 12 {
+            out.push_str(&format!("\n  ... {} more file(s)", files.len() - 12));
+        }
+        out.push_str("\n\n");
+    }
+    out.push_str(&truncate_chars(diff, max_chars));
+    out
+}
+
+fn files_touched_from_diff(diff: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    for line in diff.lines() {
+        let Some(rest) = line.strip_prefix("diff --git ") else {
+            continue;
+        };
+        let mut parts = rest.split_whitespace();
+        let _old = parts.next();
+        let Some(new) = parts.next() else {
+            continue;
+        };
+        let path = new.strip_prefix("b/").unwrap_or(new).trim();
+        if path.is_empty() || files.iter().any(|seen| seen == path) {
+            continue;
+        }
+        files.push(path.to_string());
+    }
+    files
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out = text
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    out.push('…');
+    out
 }
 
 fn duration_ms(duration: std::time::Duration) -> u64 {
@@ -1954,6 +2065,59 @@ mod tests {
 
         async fn get_diff(&self, _session: &Session) -> Result<String> {
             Ok(String::new())
+        }
+
+        async fn build_context(
+            &self,
+            _reader: &dyn crate::core::session_store::SessionReader,
+            _parent_ids: &[Uuid],
+        ) -> Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    struct DiffingAdapter;
+
+    #[async_trait::async_trait]
+    impl WorkerAdapter for DiffingAdapter {
+        fn name(&self) -> &str {
+            "test-worker"
+        }
+
+        async fn start(
+            &self,
+            task: &Task,
+            _event_tx: Option<tokio::sync::mpsc::UnboundedSender<Event>>,
+        ) -> Result<WorkerHandle> {
+            let mut session = Session::new(task.id, self.name(), Role::Worker);
+            session.model = task.model_hint.clone().unwrap_or_default();
+            session.parent_session_ids = task.parent_session_ids.clone();
+            session.worker_thread_id = task.worker_thread_id;
+            session.native_session_id = task.native_session_id.clone();
+            session.worktree_path = task.worktree.clone();
+            Ok(WorkerHandle {
+                session,
+                kill: Arc::new(|| {}),
+            })
+        }
+
+        fn stream_events(&self, _session: &Session) -> BoxStream<'static, Result<Event>> {
+            Box::pin(stream::empty())
+        }
+
+        async fn cancel(&self, _session: &Session) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_diff(&self, _session: &Session) -> Result<String> {
+            Ok("diff --git a/src/lib.rs b/src/lib.rs\n\
+                 index 1111111..2222222 100644\n\
+                 --- a/src/lib.rs\n\
+                 +++ b/src/lib.rs\n\
+                 @@ -1 +1 @@\n\
+                 -old\n\
+                 +new\n"
+                .to_string())
         }
 
         async fn build_context(
@@ -3621,5 +3785,40 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             saw_worker_done_duration,
             "expected WorkerDone duration metadata"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_dag_emits_worker_diff_and_records_touched_files() {
+        let (_tmp, mut orch) = test_orchestrator(Arc::new(ApprovingCritic));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert("test-runtime".to_string(), Arc::new(DiffingAdapter));
+
+        let task = Task::new("change files");
+        let task_id = task.id;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let completed = orch.execute_dag(vec![task], tx).await.unwrap();
+
+        assert_eq!(completed.len(), 1);
+
+        let mut saw_diff = false;
+        while let Ok(event) = rx.try_recv() {
+            if let RunProgress::WorkerOutput { content, .. } = event {
+                saw_diff |= content.contains("test-worker diff:")
+                    && content.contains("files changed:")
+                    && content.contains("src/lib.rs")
+                    && content.contains("diff --git");
+            }
+        }
+        assert!(saw_diff, "expected worker diff progress event");
+
+        let session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == task_id)
+            .expect("worker session");
+        assert_eq!(session.files_touched, vec!["src/lib.rs"]);
     }
 }

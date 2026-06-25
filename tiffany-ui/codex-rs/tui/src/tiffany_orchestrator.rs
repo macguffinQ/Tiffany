@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::process::ExitStatus;
 use std::process::Stdio;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use anyhow::Context;
 use ratatui::style::Color;
@@ -36,6 +38,8 @@ const FAILURE_DETAIL_HEAD_LINES: usize = 24;
 const MEMORY_FILE: &str = "tiffany-orchestrator/memory.json";
 const MEMORY_SCHEMA_VERSION: u32 = 1;
 const MEMORY_MAX_TURNS: usize = 8;
+const NATIVE_SESSIONS_FILE: &str = "tiffany-orchestrator/native-sessions.json";
+const NATIVE_SESSIONS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug)]
 pub struct TiffanyOrchestratorLaunch {
@@ -124,6 +128,47 @@ struct TiffanyOrchestratorMemoryTurn {
     result: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct TiffanyNativeChatStore {
+    #[serde(default = "native_sessions_schema_version")]
+    pub(crate) version: u32,
+    #[serde(default)]
+    pub(crate) conversations: Vec<TiffanyNativeChatConversation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct TiffanyNativeChatConversation {
+    pub(crate) id: String,
+    pub(crate) cwd: String,
+    pub(crate) created_at_unix: u64,
+    pub(crate) updated_at_unix: u64,
+    #[serde(default)]
+    pub(crate) turns: Vec<TiffanyNativeChatTurn>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct TiffanyNativeChatTurn {
+    pub(crate) user_prompt: String,
+    pub(crate) result: String,
+    pub(crate) captured_at_unix: u64,
+    #[serde(default)]
+    pub(crate) events: Vec<TiffanyNativeChatEvent>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct TiffanyNativeChatEvent {
+    pub(crate) role: String,
+    pub(crate) status: String,
+    pub(crate) title: String,
+    pub(crate) content: Option<String>,
+    pub(crate) agent: Option<String>,
+    pub(crate) worker_role: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) provider: Option<String>,
+    pub(crate) task_id: Option<String>,
+    pub(crate) native_session_id: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawTiffanyOrchestratorConfig {
     #[serde(default)]
@@ -170,6 +215,10 @@ struct RawTiffanyRoleConfig {
 
 fn memory_schema_version() -> u32 {
     MEMORY_SCHEMA_VERSION
+}
+
+fn native_sessions_schema_version() -> u32 {
+    NATIVE_SESSIONS_SCHEMA_VERSION
 }
 
 pub(crate) fn memory_max_turns() -> usize {
@@ -240,6 +289,7 @@ struct BridgeState {
     final_output: Option<String>,
     worker_metadata: HashMap<String, WorkerMeta>,
     pending_timeline: Vec<TiffanyProgressEvent>,
+    native_events: Vec<TiffanyNativeChatEvent>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -868,8 +918,109 @@ pub(crate) fn save_memory_turns(
     Ok(())
 }
 
+pub(crate) fn load_native_chat_conversation(
+    codex_home: &Path,
+    cwd: &Path,
+) -> anyhow::Result<Option<TiffanyNativeChatConversation>> {
+    let store = load_native_chat_store(codex_home)?;
+    let cwd_key = cwd_key(cwd);
+    Ok(store
+        .conversations
+        .into_iter()
+        .find(|conversation| conversation.cwd == cwd_key))
+}
+
+pub(crate) fn load_native_memory_turns(
+    codex_home: &Path,
+    cwd: &Path,
+) -> anyhow::Result<VecDeque<TiffanyOrchestratorTurn>> {
+    let turns = load_native_chat_conversation(codex_home, cwd)?
+        .map(|conversation| conversation.turns)
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .take(MEMORY_MAX_TURNS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .filter_map(native_chat_turn_into_turn)
+        .collect::<VecDeque<_>>();
+    Ok(turns)
+}
+
+pub(crate) fn append_native_chat_turn(
+    codex_home: &Path,
+    cwd: &Path,
+    turn: &TiffanyOrchestratorTurn,
+    events: Vec<TiffanyNativeChatEvent>,
+) -> anyhow::Result<()> {
+    let Some(native_turn) = native_chat_turn_from_turn(turn, events) else {
+        return Ok(());
+    };
+
+    let path = native_sessions_path(codex_home);
+    let mut store = load_native_chat_store(codex_home)?;
+    store.version = NATIVE_SESSIONS_SCHEMA_VERSION;
+
+    let cwd_key = cwd_key(cwd);
+    let now = native_turn.captured_at_unix;
+    if let Some(conversation) = store
+        .conversations
+        .iter_mut()
+        .find(|conversation| conversation.cwd == cwd_key)
+    {
+        conversation.updated_at_unix = now;
+        conversation.turns.push(native_turn);
+    } else {
+        store.conversations.push(TiffanyNativeChatConversation {
+            id: native_conversation_id(&cwd_key),
+            cwd: cwd_key,
+            created_at_unix: now,
+            updated_at_unix: now,
+            turns: vec![native_turn],
+        });
+    }
+
+    store
+        .conversations
+        .retain(|conversation| !conversation.turns.is_empty());
+
+    let body = serde_json::to_string_pretty(&store)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
 fn memory_path(codex_home: &Path) -> std::path::PathBuf {
     codex_home.join(MEMORY_FILE)
+}
+
+fn native_sessions_path(codex_home: &Path) -> std::path::PathBuf {
+    codex_home.join(NATIVE_SESSIONS_FILE)
+}
+
+fn load_native_chat_store(codex_home: &Path) -> anyhow::Result<TiffanyNativeChatStore> {
+    let path = native_sessions_path(codex_home);
+    let store = match std::fs::read_to_string(&path) {
+        Ok(body) => serde_json::from_str::<TiffanyNativeChatStore>(&body)
+            .with_context(|| format!("parsing {}", path.display()))?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            TiffanyNativeChatStore::default()
+        }
+        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+    };
+
+    Ok(TiffanyNativeChatStore {
+        version: NATIVE_SESSIONS_SCHEMA_VERSION,
+        conversations: store
+            .conversations
+            .into_iter()
+            .filter_map(normalize_native_conversation)
+            .collect(),
+    })
 }
 
 fn cwd_key(cwd: &Path) -> String {
@@ -877,6 +1028,112 @@ fn cwd_key(cwd: &Path) -> String {
         .unwrap_or_else(|_| cwd.to_path_buf())
         .to_string_lossy()
         .to_string()
+}
+
+fn native_conversation_id(cwd_key: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in cwd_key.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("tiffany-native-{hash:016x}")
+}
+
+fn now_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn normalize_native_conversation(
+    conversation: TiffanyNativeChatConversation,
+) -> Option<TiffanyNativeChatConversation> {
+    let cwd = conversation.cwd.trim().to_string();
+    if cwd.is_empty() {
+        return None;
+    }
+
+    let turns = conversation
+        .turns
+        .into_iter()
+        .filter_map(normalize_native_turn)
+        .collect::<Vec<_>>();
+    if turns.is_empty() {
+        return None;
+    }
+
+    let id = if conversation.id.trim().is_empty() {
+        native_conversation_id(&cwd)
+    } else {
+        conversation.id.trim().to_string()
+    };
+    let first_turn_ts = turns
+        .first()
+        .map(|turn| turn.captured_at_unix)
+        .unwrap_or_default();
+    let last_turn_ts = turns
+        .last()
+        .map(|turn| turn.captured_at_unix)
+        .unwrap_or(first_turn_ts);
+    let created_at_unix = if conversation.created_at_unix == 0 {
+        first_turn_ts
+    } else {
+        conversation.created_at_unix
+    };
+    let updated_at_unix = conversation.updated_at_unix.max(last_turn_ts);
+
+    Some(TiffanyNativeChatConversation {
+        id,
+        cwd,
+        created_at_unix,
+        updated_at_unix,
+        turns,
+    })
+}
+
+fn normalize_native_turn(turn: TiffanyNativeChatTurn) -> Option<TiffanyNativeChatTurn> {
+    let user_prompt = turn.user_prompt.trim().to_string();
+    let result = turn.result.trim().to_string();
+    if user_prompt.is_empty() || result.is_empty() {
+        return None;
+    }
+    Some(TiffanyNativeChatTurn {
+        user_prompt,
+        result,
+        captured_at_unix: turn.captured_at_unix,
+        events: turn
+            .events
+            .into_iter()
+            .filter_map(normalize_native_event)
+            .collect(),
+    })
+}
+
+fn normalize_native_event(event: TiffanyNativeChatEvent) -> Option<TiffanyNativeChatEvent> {
+    let role = event.role.trim().to_string();
+    let status = event.status.trim().to_string();
+    let title = event.title.trim().to_string();
+    if role.is_empty() || status.is_empty() || title.is_empty() {
+        return None;
+    }
+    Some(TiffanyNativeChatEvent {
+        role,
+        status,
+        title,
+        content: event.content.and_then(trimmed_string),
+        agent: event.agent.and_then(trimmed_string),
+        worker_role: event.worker_role.and_then(trimmed_string),
+        model: event.model.and_then(trimmed_string),
+        provider: event.provider.and_then(trimmed_string),
+        task_id: event.task_id.and_then(trimmed_string),
+        native_session_id: event.native_session_id.and_then(trimmed_string),
+    })
+}
+
+fn trimmed_string(value: String) -> Option<String> {
+    let value = value.trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 fn memory_turn_into_turn(turn: TiffanyOrchestratorMemoryTurn) -> Option<TiffanyOrchestratorTurn> {
@@ -900,6 +1157,35 @@ fn turn_into_memory_turn(turn: &TiffanyOrchestratorTurn) -> Option<TiffanyOrches
     Some(TiffanyOrchestratorMemoryTurn {
         user_prompt: user_prompt.to_string(),
         result: result.to_string(),
+    })
+}
+
+fn native_chat_turn_from_turn(
+    turn: &TiffanyOrchestratorTurn,
+    events: Vec<TiffanyNativeChatEvent>,
+) -> Option<TiffanyNativeChatTurn> {
+    let user_prompt = turn.user_prompt.trim();
+    let result = turn.result.trim();
+    if user_prompt.is_empty() || result.is_empty() {
+        return None;
+    }
+    Some(TiffanyNativeChatTurn {
+        user_prompt: user_prompt.to_string(),
+        result: result.to_string(),
+        captured_at_unix: now_unix_seconds(),
+        events,
+    })
+}
+
+fn native_chat_turn_into_turn(turn: TiffanyNativeChatTurn) -> Option<TiffanyOrchestratorTurn> {
+    let user_prompt = turn.user_prompt.trim().to_string();
+    let result = turn.result.trim().to_string();
+    if user_prompt.is_empty() || result.is_empty() {
+        return None;
+    }
+    Some(TiffanyOrchestratorTurn {
+        user_prompt,
+        result,
     })
 }
 
@@ -979,6 +1265,7 @@ async fn run_event_bridge(
             app_event_tx.send(AppEvent::TiffanyOrchestratorTurnCaptured {
                 user_prompt: launch.user_prompt,
                 result,
+                native_events: state.native_events,
             });
         }
     } else {
@@ -2842,6 +3129,10 @@ impl BridgeState {
             }
         }
 
+        if let Some(native_event) = native_chat_event_from_progress(&event, visible.as_deref()) {
+            self.native_events.push(native_event);
+        }
+
         if event.status == "output" {
             self.flush_timeline(app_event_tx);
             emit_event_lines(app_event_tx, &event, visible);
@@ -2955,6 +3246,32 @@ impl BridgeState {
             .map(|(task_id, meta)| worker_context_line(task_id, meta))
             .collect()
     }
+}
+
+fn native_chat_event_from_progress(
+    event: &TiffanyProgressEvent,
+    visible: Option<&str>,
+) -> Option<TiffanyNativeChatEvent> {
+    let title = if event.status == "output" {
+        output_title(event)
+    } else {
+        event_title(event)
+    };
+    normalize_native_event(TiffanyNativeChatEvent {
+        role: event.role.clone(),
+        status: event.status.clone(),
+        title,
+        content: visible
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        agent: event.agent.clone(),
+        worker_role: event.worker_role.clone(),
+        model: event.model.clone(),
+        provider: event.provider.clone(),
+        task_id: event.task_id.clone(),
+        native_session_id: event.native_session_id.clone(),
+    })
 }
 
 fn worker_context_line(task_id: &str, meta: &WorkerMeta) -> String {
@@ -3698,6 +4015,13 @@ fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
         return "session recovery";
     }
     match event_format::visible_agent_output(raw, CONTROL_SUMMARY_MAX_CHARS).map(|view| view.kind) {
+        _ if event_format::runtime_output_kind(raw).is_some_and(|kind| kind == "diff") => "diff",
+        _ if event_format::runtime_output_kind(raw).is_some_and(|kind| kind == "patch") => "patch",
+        _ if event_format::runtime_output_kind(raw)
+            .is_some_and(|kind| matches!(kind, "file_change" | "file_update")) =>
+        {
+            "file update"
+        }
         Some(event_format::VisibleAgentOutputKind::Final) => "final",
         Some(event_format::VisibleAgentOutputKind::Question) => "question",
         Some(event_format::VisibleAgentOutputKind::ToolCall) => "tool call",
@@ -4592,6 +4916,120 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded.front().unwrap().user_prompt, "kept");
         assert_eq!(loaded.front().unwrap().result, "done");
+    }
+
+    #[test]
+    fn native_chat_sessions_append_full_turn_history_by_cwd() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd_a = tempfile::tempdir().expect("cwd a");
+        let cwd_b = tempfile::tempdir().expect("cwd b");
+
+        for idx in 0..(MEMORY_MAX_TURNS + 3) {
+            append_native_chat_turn(
+                home.path(),
+                cwd_a.path(),
+                &TiffanyOrchestratorTurn {
+                    user_prompt: format!("prompt {idx}"),
+                    result: format!("result {idx}"),
+                },
+                Vec::new(),
+            )
+            .expect("append cwd a");
+        }
+        append_native_chat_turn(
+            home.path(),
+            cwd_b.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "other prompt".into(),
+                result: "other result".into(),
+            },
+            Vec::new(),
+        )
+        .expect("append cwd b");
+
+        let loaded_a = load_native_chat_conversation(home.path(), cwd_a.path())
+            .expect("load cwd a")
+            .expect("cwd a conversation");
+        let loaded_b = load_native_chat_conversation(home.path(), cwd_b.path())
+            .expect("load cwd b")
+            .expect("cwd b conversation");
+
+        assert_eq!(loaded_a.turns.len(), MEMORY_MAX_TURNS + 3);
+        assert_eq!(loaded_a.turns.first().unwrap().user_prompt, "prompt 0");
+        assert_eq!(
+            loaded_a.turns.last().unwrap().result,
+            format!("result {}", MEMORY_MAX_TURNS + 2)
+        );
+        assert_eq!(loaded_b.turns.len(), 1);
+        assert_eq!(loaded_b.turns[0].result, "other result");
+        assert_ne!(loaded_a.id, loaded_b.id);
+
+        let memory_turns =
+            load_native_memory_turns(home.path(), cwd_a.path()).expect("native memory turns");
+        assert_eq!(memory_turns.len(), MEMORY_MAX_TURNS);
+        assert_eq!(memory_turns.front().unwrap().user_prompt, "prompt 3");
+        assert_eq!(
+            memory_turns.back().unwrap().result,
+            format!("result {}", MEMORY_MAX_TURNS + 2)
+        );
+    }
+
+    #[test]
+    fn native_chat_sessions_ignore_empty_turns() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: " ".into(),
+                result: "ignored".into(),
+            },
+            Vec::new(),
+        )
+        .expect("append empty");
+
+        let loaded = load_native_chat_conversation(home.path(), cwd.path()).expect("load");
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn native_chat_sessions_persist_visible_native_events() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "change a file".into(),
+                result: "changed".into(),
+            },
+            vec![TiffanyNativeChatEvent {
+                role: "worker".into(),
+                status: "output".into(),
+                title: "worker diff · worker-cc · claude-code · abc12345".into(),
+                content: Some("files changed:\n  - src/lib.rs\n\ndiff --git a/src/lib.rs b/src/lib.rs".into()),
+                agent: Some("claude-code".into()),
+                worker_role: Some("worker-cc".into()),
+                model: Some("claude-sonnet-4-6".into()),
+                provider: Some("anthropic".into()),
+                task_id: Some("abc12345".into()),
+                native_session_id: Some("native-1".into()),
+            }],
+        )
+        .expect("append native event");
+
+        let loaded = load_native_chat_conversation(home.path(), cwd.path())
+            .expect("load")
+            .expect("conversation");
+        let events = &loaded.turns[0].events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].title, "worker diff · worker-cc · claude-code · abc12345");
+        assert!(events[0].content.as_deref().unwrap().contains("diff --git"));
+        assert_eq!(events[0].agent.as_deref(), Some("claude-code"));
+        assert_eq!(events[0].native_session_id.as_deref(), Some("native-1"));
     }
 
     #[test]
@@ -5592,9 +6030,19 @@ mod tests {
         assert_eq!(
             output_title(&TiffanyProgressEvent {
                 content: Some("claude-code stderr: [1211] 模型不存在".to_string()),
-                ..base
+                ..base.clone()
             }),
             "worker stderr · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"
+        );
+        assert_eq!(
+            output_title(&TiffanyProgressEvent {
+                content: Some(
+                    "claude-code diff: files changed:\n  - src/lib.rs\n\ndiff --git a/src/lib.rs b/src/lib.rs"
+                        .to_string()
+                ),
+                ..base
+            }),
+            "worker diff · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"
         );
     }
 
