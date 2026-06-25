@@ -37,6 +37,16 @@ impl App {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
+                if self.tiffany_orchestrator.is_some() {
+                    self.chat_widget.add_plain_history_lines(
+                        crate::tiffany_orchestrator::idle_intro_lines(
+                            self.tiffany_orchestrator_turns.len(),
+                        ),
+                    );
+                    tui.frame_requester().schedule_frame();
+                    return Ok(AppRunControl::Continue);
+                }
+
                 self.start_fresh_session_with_summary_hint(
                     tui,
                     app_server,
