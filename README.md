@@ -555,6 +555,7 @@ Default native TUI slash commands:
 - `/role` - open the role-registration form or register one role with `register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`
 - `/roles` - inspect role wiring, select the active worker route, or save role/provider/model/runtime bindings
 - `/thread` - inspect worker/native CLI session reuse; `/thread clear <role>` resets a stuck native session id
+- `/history` - inspect saved Tiffany native conversation turns and synced worker events such as tool output, stderr, and diff
 - `/doctor` - diagnose config, runtimes, API keys, role wiring, local tools, and install surface
 - `/status` - show current session/config status
 - `/help` - show Tiffany command help

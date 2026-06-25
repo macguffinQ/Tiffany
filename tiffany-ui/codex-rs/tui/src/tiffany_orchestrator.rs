@@ -492,7 +492,7 @@ pub(crate) fn idle_intro_lines_with_readiness(
         workflow_line(),
         command_hint_line(
             "setup",
-            &["/provider", "/role", "/roles", "/thread", "/doctor"],
+            &["/provider", "/role", "/roles", "/thread", "/history", "/doctor"],
         ),
         command_hint_line(
             "tools",
@@ -948,6 +948,34 @@ pub(crate) fn load_native_memory_turns(
     Ok(turns)
 }
 
+pub(crate) fn native_history_lines(codex_home: &Path, cwd: &Path, args: &str) -> Vec<Line<'static>> {
+    let opts = match NativeHistoryOptions::parse(args) {
+        Ok(opts) => opts,
+        Err(err) => {
+            return vec![
+                status_line("✗", Color::Red, "history", &err),
+                body_line("Usage: /history [last|full|<count>]", true),
+            ];
+        }
+    };
+    match load_native_chat_conversation(codex_home, cwd) {
+        Ok(Some(conversation)) => native_history_conversation_lines(&conversation, opts),
+        Ok(None) => vec![
+            status_line(
+                "⚠",
+                Color::Yellow,
+                "history",
+                "no Tiffany native conversation saved for this directory",
+            ),
+            next_line("run a prompt", "create a native conversation turn"),
+        ],
+        Err(err) => vec![
+            status_line("✗", Color::Red, "history", "could not read native history"),
+            body_line(&format!("{err:#}"), true),
+        ],
+    }
+}
+
 pub(crate) fn append_native_chat_turn(
     codex_home: &Path,
     cwd: &Path,
@@ -992,6 +1020,129 @@ pub(crate) fn append_native_chat_turn(
     }
     std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NativeHistoryOptions {
+    turn_limit: usize,
+    event_limit_per_turn: usize,
+}
+
+impl NativeHistoryOptions {
+    fn parse(args: &str) -> Result<Self, String> {
+        let trimmed = args.trim();
+        if trimmed.is_empty() || matches!(trimmed, "last" | "summary") {
+            return Ok(Self {
+                turn_limit: 5,
+                event_limit_per_turn: 6,
+            });
+        }
+        if trimmed == "full" || trimmed == "all" {
+            return Ok(Self {
+                turn_limit: 10,
+                event_limit_per_turn: 20,
+            });
+        }
+        if let Ok(count) = trimmed.parse::<usize>() {
+            if count == 0 {
+                return Err("history count must be greater than zero".to_string());
+            }
+            return Ok(Self {
+                turn_limit: count.min(50),
+                event_limit_per_turn: 10,
+            });
+        }
+        Err(format!("unknown /history option '{trimmed}'"))
+    }
+}
+
+fn native_history_conversation_lines(
+    conversation: &TiffanyNativeChatConversation,
+    opts: NativeHistoryOptions,
+) -> Vec<Line<'static>> {
+    let total_turns = conversation.turns.len();
+    let shown_turns = total_turns.min(opts.turn_limit);
+    let mut lines = vec![status_line(
+        "✓",
+        TIFFANY_BLUE,
+        "history",
+        &format!(
+            "{} turn(s) saved · showing latest {shown_turns}",
+            total_turns
+        ),
+    )];
+    lines.push(thread_meta_line("cwd", &conversation.cwd));
+    lines.push(thread_meta_line("session", &conversation.id));
+
+    for (idx, turn) in conversation
+        .turns
+        .iter()
+        .rev()
+        .take(opts.turn_limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .enumerate()
+    {
+        let turn_number = total_turns.saturating_sub(shown_turns) + idx + 1;
+        lines.push(body_line(
+            &format!(
+                "{}. user  {}",
+                turn_number,
+                truncate_text(&one_line(&turn.user_prompt), 120)
+            ),
+            false,
+        ));
+        lines.push(body_line(
+            &format!("   answer {}", truncate_text(&one_line(&turn.result), 140)),
+            true,
+        ));
+        append_native_history_event_lines(&mut lines, turn, opts.event_limit_per_turn);
+    }
+
+    if total_turns > opts.turn_limit {
+        lines.push(body_line(
+            &format!("… {} older turn(s) hidden", total_turns - opts.turn_limit),
+            true,
+        ));
+    }
+    lines.push(next_line("/history full", "show more native process events"));
+    lines.push(next_line("/thread <role>", "inspect native CLI resume command"));
+    lines
+}
+
+fn append_native_history_event_lines(
+    lines: &mut Vec<Line<'static>>,
+    turn: &TiffanyNativeChatTurn,
+    limit: usize,
+) {
+    if turn.events.is_empty() {
+        lines.push(body_line("   native events none captured", true));
+        return;
+    }
+    for event in turn.events.iter().take(limit) {
+        let mut label = format!("   {} {}", status_glyph(&event.status), event.title);
+        if let Some(native) = event.native_session_id.as_deref().and_then(nonempty_trimmed) {
+            label.push_str(" · native ");
+            label.push_str(short_task_id(Some(native)).unwrap_or(native));
+        }
+        lines.push(body_line(&truncate_text(&label, 180), true));
+        if let Some(content) = event.content.as_deref().and_then(nonempty_trimmed) {
+            for line in content.lines().take(4) {
+                lines.push(detail_continuation_line(&truncate_text(line, 180)));
+            }
+            let hidden = content.lines().count().saturating_sub(4);
+            if hidden > 0 {
+                lines.push(detail_continuation_line(&format!("… {hidden} more line(s)")));
+            }
+        }
+    }
+    if turn.events.len() > limit {
+        lines.push(body_line(
+            &format!("   … {} more native event(s)", turn.events.len() - limit),
+            true,
+        ));
+    }
 }
 
 fn memory_path(codex_home: &Path) -> std::path::PathBuf {
@@ -4531,6 +4682,20 @@ fn truncate_text(text: &str, max: usize) -> String {
     out
 }
 
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn status_glyph(status: &str) -> &'static str {
+    match status {
+        "ready" | "done" | "skipped" => "✓",
+        "failed" => "✗",
+        "warning" => "⚠",
+        "output" => "↳",
+        _ => "●",
+    }
+}
+
 fn status_line(symbol: &'static str, color: Color, role: &str, message: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
@@ -4714,7 +4879,7 @@ mod tests {
         assert!(text.contains("status ready  mode native  memory on  context 2 turn(s)"));
         assert!(text.contains("flow  direct / single / full  →  selected per prompt"));
         assert!(!text.contains("status ready\nflow  planner → critic"));
-        assert!(text.contains("setup  /provider  /role  /roles  /thread  /doctor"));
+        assert!(text.contains("setup  /provider  /role  /roles  /thread  /history  /doctor"));
         assert!(text.contains("tools  /status  /copy  /raw  /diff  /clear  /exit"));
         assert_eq!(lines[0].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[0].spans[2].style.fg, Some(TIFFANY_BLUE));
@@ -5030,6 +5195,77 @@ mod tests {
         assert!(events[0].content.as_deref().unwrap().contains("diff --git"));
         assert_eq!(events[0].agent.as_deref(), Some("claude-code"));
         assert_eq!(events[0].native_session_id.as_deref(), Some("native-1"));
+    }
+
+    #[test]
+    fn native_history_lines_show_saved_turns_and_events() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "改一下 README".into(),
+                result: "已更新 README".into(),
+            },
+            vec![
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker diff · worker-cc · claude-code · abc12345".into(),
+                    content: Some(
+                        "files changed:\n  - README.md\n\ndiff --git a/README.md b/README.md"
+                            .into(),
+                    ),
+                    agent: Some("claude-code".into()),
+                    worker_role: Some("worker-cc".into()),
+                    model: Some("claude-sonnet-4-6".into()),
+                    provider: Some("anthropic".into()),
+                    task_id: Some("abc12345".into()),
+                    native_session_id: Some("native-1".into()),
+                },
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "done".into(),
+                    title: "worker-cc done · claude-code · 1s".into(),
+                    content: None,
+                    agent: Some("claude-code".into()),
+                    worker_role: Some("worker-cc".into()),
+                    model: None,
+                    provider: None,
+                    task_id: Some("abc12345".into()),
+                    native_session_id: Some("native-1".into()),
+                },
+            ],
+        )
+        .expect("append");
+
+        let lines = native_history_lines(home.path(), cwd.path(), "");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("history  1 turn(s) saved"));
+        assert!(text.contains("user  改一下 README"));
+        assert!(text.contains("answer 已更新 README"));
+        assert!(text.contains("worker diff"));
+        assert!(text.contains("diff --git a/README.md b/README.md"));
+        assert!(text.contains("/history full"));
+        assert!(text.contains("/thread <role>"));
+    }
+
+    #[test]
+    fn native_history_lines_report_empty_and_bad_args() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+
+        let empty = native_history_lines(home.path(), cwd.path(), "");
+        let empty_text = empty.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(empty_text.contains("no Tiffany native conversation saved"));
+
+        let bad = native_history_lines(home.path(), cwd.path(), "wat");
+        let bad_text = bad.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(bad_text.contains("unknown /history option 'wat'"));
+        assert!(bad_text.contains("Usage: /history [last|full|<count>]"));
     }
 
     #[test]

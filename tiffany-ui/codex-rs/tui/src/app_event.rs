@@ -260,6 +260,11 @@ pub(crate) enum AppEvent {
         args: String,
     },
 
+    /// Inspect saved Tiffany native conversation history for the current workspace.
+    TiffanyOrchestratorHistoryCommand {
+        args: String,
+    },
+
     /// Restore an output-free interrupted turn into the composer and roll it back.
     RestoreCancelledTurn(UserMessage),
 

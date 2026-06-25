@@ -257,6 +257,30 @@ async fn slash_thread_inline_args_dispatch_to_tiffany_orchestrator() {
 }
 
 #[tokio::test]
+async fn slash_history_dispatches_to_tiffany_orchestrator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.handle_slash_command_dispatch(SlashCommand::History);
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorHistoryCommand { args }) => {
+            assert_eq!(args, "");
+        }
+        other => panic!("expected TiffanyOrchestratorHistoryCommand, got {other:?}"),
+    }
+
+    chat.dispatch_command_with_args(SlashCommand::History, "full".to_string(), Vec::new());
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorHistoryCommand { args }) => {
+            assert_eq!(args, "full");
+        }
+        other => panic!("expected TiffanyOrchestratorHistoryCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_thread_guides_when_not_in_orchestrator_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
