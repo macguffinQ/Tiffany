@@ -2560,6 +2560,16 @@ async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
 }
 
 #[tokio::test]
+async fn tiffany_orchestrator_result_updates_copy_source() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.record_tiffany_orchestrator_result_for_copy("  final worker answer  ");
+
+    assert_eq!(chat.last_agent_markdown_text(), Some("final worker answer"));
+}
+
+#[tokio::test]
 async fn slash_copy_state_is_preserved_during_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

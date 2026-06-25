@@ -940,6 +940,13 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn record_tiffany_orchestrator_result_for_copy(&mut self, message: &str) {
+        let message = message.trim();
+        if !message.is_empty() {
+            self.record_agent_markdown(message);
+        }
+    }
+
     fn record_visible_user_turn_for_copy(&mut self) {
         self.transcript.record_visible_user_turn();
     }

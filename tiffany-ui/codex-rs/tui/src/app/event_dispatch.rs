@@ -2302,6 +2302,8 @@ impl App {
         if user_prompt.is_empty() || result.is_empty() {
             return;
         }
+        self.chat_widget
+            .record_tiffany_orchestrator_result_for_copy(&result);
         self.tiffany_orchestrator_turns.push_back(
             crate::tiffany_orchestrator::TiffanyOrchestratorTurn {
                 user_prompt,
