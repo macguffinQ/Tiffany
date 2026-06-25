@@ -47,6 +47,7 @@ pub(super) fn progress_line(
             agent,
             role,
             content,
+            ..
         } => visible_worker_output_line(task_id, role, agent, content, input),
         RunProgress::RoleOutput { role, content } => visible_role_output_line(role, content, input),
         RunProgress::Done { task_count } => {
@@ -153,6 +154,7 @@ fn visible_progress_key_for_event(event: &RunProgress, line: &str) -> String {
             agent,
             role,
             content,
+            ..
         } => visible_output_key(
             &format!("worker:{}:{}:{}", short_task_id(task_id), role, agent),
             &visible_worker_output_dedupe_display(content)
@@ -418,6 +420,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "system".into(),
                 content: "claude system".into(),
             },
             0,
@@ -453,6 +456,7 @@ mod tests {
             task_id,
             agent: "claude-code".into(),
             role: "worker-cc".into(),
+            event_kind: "assistant".into(),
             content: "claude assistant: useful summary".into(),
         };
 
@@ -467,6 +471,7 @@ mod tests {
             task_id,
             agent: "claude-code".into(),
             role: "worker-cc".into(),
+            event_kind: "result".into(),
             content: "claude result: useful summary".into(),
         };
         assert!(progress_line(&duplicate, 0, &input).is_none());
@@ -536,6 +541,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "result".into(),
                 content:
                     r#"claude-code result: {"result":"Implemented it in several paragraphs."}"#
                         .into(),
@@ -560,6 +566,7 @@ mod tests {
                 task_id,
                 agent: "codex".into(),
                 role: "worker-codex".into(),
+                event_kind: "stderr".into(),
                 content: "codex stderr: API Error: 400 [1211][模型不存在，请检查模型代码。]".into(),
             },
             0,
@@ -582,6 +589,7 @@ mod tests {
                 task_id,
                 agent: "worker-codex".into(),
                 role: "worker-codex".into(),
+                event_kind: "local_shell_call".into(),
                 content: "codex local_shell_call: tool shell: cargo test --all".into(),
             },
             0,
@@ -604,6 +612,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "tool_result".into(),
                 content: "claude-code tool_result: tool result: tests passed".into(),
             },
             0,
@@ -621,6 +630,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "assistant".into(),
                 content: "claude-code assistant: permission denied while writing file".into(),
             },
             0,
@@ -643,6 +653,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "tool_use".into(),
                 content: "claude-code tool_use: tool AskUserQuestion".into(),
             },
             0,
@@ -660,6 +671,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "tool_result".into(),
                 content: "claude-code tool_result: tool error: Answer questions?".into(),
             },
             0,

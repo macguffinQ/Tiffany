@@ -273,6 +273,7 @@ struct TiffanyProgressEvent {
     worker_thread_id: Option<String>,
     native_session_id: Option<String>,
     reused: Option<bool>,
+    event_kind: Option<String>,
     task_prompt: Option<String>,
     content: Option<String>,
     approved: Option<bool>,
@@ -3965,10 +3966,7 @@ fn native_event_kind_from_progress(event: &TiffanyProgressEvent) -> Option<Strin
         return Some(event.status.clone());
     }
     if event.role == "worker" {
-        return event
-            .content
-            .as_deref()
-            .and_then(worker_visible_output_kind)
+        return worker_visible_output_kind(event)
             .map(native_event_kind_label)
             .map(str::to_string)
             .or_else(|| Some("output".to_string()));
@@ -4017,7 +4015,7 @@ fn inferred_native_event_kind(title: &str, content: Option<&str>) -> Option<Stri
         }
     }
     content
-        .and_then(worker_visible_output_kind)
+        .and_then(worker_visible_output_kind_from_raw)
         .map(native_event_kind_label)
         .map(str::to_string)
 }
@@ -4483,7 +4481,7 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
     let kind = event
         .content
         .as_deref()
-        .and_then(worker_visible_output_kind);
+        .and_then(|content| worker_visible_output_kind_for_event(event, content));
     let mut lines = vec![Line::from(vec![
         Span::styled(
             "│",
@@ -4770,7 +4768,7 @@ fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
     if looks_like_native_session_recovery(raw) {
         return "session recovery";
     }
-    match worker_visible_output_kind(raw) {
+    match worker_visible_output_kind_for_event(event, raw) {
         Some(event_format::VisibleAgentOutputKind::Final) => "final",
         Some(event_format::VisibleAgentOutputKind::Question) => "question",
         Some(event_format::VisibleAgentOutputKind::ToolCall) => "tool call",
@@ -4784,7 +4782,23 @@ fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
     }
 }
 
-fn worker_visible_output_kind(raw: &str) -> Option<event_format::VisibleAgentOutputKind> {
+fn worker_visible_output_kind(event: &TiffanyProgressEvent) -> Option<event_format::VisibleAgentOutputKind> {
+    let raw = event.content.as_deref()?;
+    worker_visible_output_kind_for_event(event, raw)
+}
+
+fn worker_visible_output_kind_for_event(
+    event: &TiffanyProgressEvent,
+    raw: &str,
+) -> Option<event_format::VisibleAgentOutputKind> {
+    event
+        .event_kind
+        .as_deref()
+        .and_then(event_format::visible_agent_output_kind_for_event_kind)
+        .or_else(|| worker_visible_output_kind_from_raw(raw))
+}
+
+fn worker_visible_output_kind_from_raw(raw: &str) -> Option<event_format::VisibleAgentOutputKind> {
     event_format::visible_agent_output(raw, CONTROL_SUMMARY_MAX_CHARS).map(|view| view.kind)
 }
 
@@ -6026,6 +6040,23 @@ mod tests {
     }
 
     #[test]
+    fn progress_worker_event_kind_drives_native_kind() {
+        let event = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            event_kind: Some("tool_use".to_string()),
+            content: Some("claude-code event: Bash({\"command\":\"cargo test\"})".to_string()),
+            ..worker_output_event("worker output", "claude-code", "placeholder")
+        };
+        let visible = visible_content(&event).expect("tool visible");
+
+        let native = native_chat_event_from_progress(&event, Some(&visible)).expect("native event");
+
+        assert_eq!(native.kind.as_deref(), Some("tool_call"));
+        assert!(native.title.contains("worker tool call"));
+        assert!(native.content.as_deref().unwrap().contains("Bash"));
+    }
+
+    #[test]
     fn native_history_export_can_filter_worker_role() {
         let home = tempfile::tempdir().expect("home");
         let cwd = tempfile::tempdir().expect("cwd");
@@ -6759,6 +6790,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: None,
             approved: None,
@@ -6785,6 +6817,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: None,
             approved: None,
@@ -6811,6 +6844,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: None,
             approved: Some(false),
@@ -7026,6 +7060,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: None,
             approved: None,
@@ -7108,6 +7143,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some(
                 "critic>\n{\"approved\":false,\"issues\":[\"missing test\"]}".to_string(),
@@ -7165,6 +7201,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some("claude-code assistant: 你好".to_string()),
             approved: None,
@@ -7289,6 +7326,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: Some("do the work".to_string()),
             content: None,
             approved: None,
@@ -7317,6 +7355,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some("done".to_string()),
             approved: None,
@@ -7349,6 +7388,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: None,
             approved: None,
@@ -7393,6 +7433,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: Some(task_prompt.to_string()),
             content: None,
             approved: None,
@@ -7450,6 +7491,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: Some(task_prompt.to_string()),
             content: None,
             approved: None,
@@ -7535,6 +7577,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: None,
             approved: None,
@@ -7570,6 +7613,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some("{\"approved\":true}".to_string()),
             approved: None,
@@ -7635,6 +7679,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some("结果\n- done".to_string()),
             approved: None,
@@ -7732,6 +7777,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some("Final result\n你好！\n我可以帮你写代码。".to_string()),
             approved: None,
@@ -7783,6 +7829,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some("Final result\n你好！\n我可以帮你写代码。".to_string()),
             approved: None,
@@ -7908,6 +7955,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some(
                 r#"{"sub_tasks":[{"prompt":"answer in Chinese","agent_hint":"worker-cc"}]}"#
@@ -7945,6 +7993,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some(r#"{"approved":false,"issues":["missing final answer"],"suggestions":["return a concise result"]}"#.to_string()),
             approved: None,
@@ -7981,6 +8030,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some(
                 r#"{"sub_tasks":[{"prompt":"Audit the TUI output path and identify noisy controller messages that are repeated in the visible transcript","agent_hint":"worker-cc"},{"prompt":"Update the forked TUI renderer to keep worker output visible while compacting planner details","agent_hint":"worker-codex"},{"prompt":"Add regression tests for compact planner rendering and preserved reviewer issues","agent_hint":"worker-cc"},{"prompt":"Run the smoke check and summarize the result","agent_hint":"worker-cc"}]}"#
@@ -8025,6 +8075,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some(
                 "critic>\n  {\"approved\": false, \"issues\": [\"Self-contradictory: delegated despite direct-answer instruction\",\n  \"Unnecessary delegation"
@@ -8067,6 +8118,7 @@ mod tests {
             worker_thread_id: None,
             native_session_id: None,
             reused: None,
+            event_kind: None,
             task_prompt: None,
             content: Some(
                 "planner>\n  {\"sub_tasks\": [{\"prompt\": \"Answer in Chinese and keep the result concise"

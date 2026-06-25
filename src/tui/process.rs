@@ -79,6 +79,7 @@ fn recorded_output_key_for_event(event: &RunProgress) -> Option<String> {
             agent,
             role,
             content,
+            ..
         } => Some(format!(
             "worker:{}:{}:{}:{}",
             &task_id.to_string()[..8],
@@ -1532,6 +1533,7 @@ mod tests {
             task_id,
             agent: "claude-code".into(),
             role: "worker-cc".into(),
+            event_kind: "assistant".into(),
             content: r#"claude assistant: {"type":"assistant","message":{"content":[{"type":"text","text":"Working on it"}]}}"#.into(),
         });
 
@@ -1543,6 +1545,7 @@ mod tests {
             task_id,
             agent: "claude-code".into(),
             role: "worker-cc".into(),
+            event_kind: "tool_use".into(),
             content: "claude-code tool_use: tool Bash: cargo test".into(),
         });
 
@@ -1553,6 +1556,7 @@ mod tests {
             task_id,
             agent: "worker-codex".into(),
             role: "worker-codex".into(),
+            event_kind: "local_shell_call".into(),
             content: "codex local_shell_call: tool shell: cargo test --all".into(),
         });
 
@@ -1703,6 +1707,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "assistant".into(),
                 content: "claude assistant: useful summary".into(),
             },
         );
@@ -1712,6 +1717,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "result".into(),
                 content: "claude result: useful summary".into(),
             },
         );

@@ -761,6 +761,7 @@ mod tests {
                 task_id: uuid::Uuid::nil(),
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "result".into(),
                 content: r#"claude-code result: {"result":"final answer body"}"#.into(),
             },
             &mut input,
@@ -1055,6 +1056,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "result".into(),
                 content: r#"claude-code result: {"result":"implemented orchestration flow"}"#
                     .into(),
             },

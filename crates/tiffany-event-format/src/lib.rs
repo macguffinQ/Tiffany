@@ -47,6 +47,25 @@ impl VisibleAgentOutputKind {
     }
 }
 
+pub fn visible_agent_output_kind_for_event_kind(event_kind: &str) -> Option<VisibleAgentOutputKind> {
+    match event_kind.trim().to_ascii_lowercase().as_str() {
+        "stderr" => Some(VisibleAgentOutputKind::Stderr),
+        "tool" | "tool_use" | "exec" | "local_shell_call" | "function_call"
+        | "custom_tool_call" | "tool_search_call" | "web_search_call"
+        | "image_generation_call" | "mcp_tool_call" => Some(VisibleAgentOutputKind::ToolCall),
+        "tool_result" | "function_call_output" | "custom_tool_call_output"
+        | "tool_search_output" => Some(VisibleAgentOutputKind::ToolResult),
+        "diff" => Some(VisibleAgentOutputKind::Diff),
+        "patch" => Some(VisibleAgentOutputKind::Patch),
+        "file_change" | "file_update" => Some(VisibleAgentOutputKind::FileUpdate),
+        "result" | "final" | "final_answer" | "task_complete" | "turn_complete" => {
+            Some(VisibleAgentOutputKind::Final)
+        }
+        "status" | "process_exit" => Some(VisibleAgentOutputKind::Actionable),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VisibleAgentOutput {
     pub kind: VisibleAgentOutputKind,

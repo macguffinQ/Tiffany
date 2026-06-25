@@ -33,6 +33,8 @@ pub struct TiffanyProgressEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reused: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub task_prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -179,11 +181,13 @@ impl From<RunProgress> for TiffanyProgressEvent {
                 task_id,
                 agent,
                 role,
+                event_kind,
                 content,
             } => TiffanyProgressEvent {
                 task_id: Some(task_id.to_string()),
                 agent: Some(agent),
                 worker_role: Some(role.clone()),
+                event_kind: Some(event_kind),
                 content: Some(content),
                 ..progress_event("worker", "output", format!("{role} output"))
             },
@@ -291,6 +295,7 @@ fn progress_event(
         worker_thread_id: None,
         native_session_id: None,
         reused: None,
+        event_kind: None,
         task_prompt: None,
         content: None,
         approved: None,
@@ -353,6 +358,7 @@ impl TiffanyTextProgressFormatter {
                 task_id,
                 agent,
                 role,
+                event_kind: _,
                 content,
             } => {
                 let output =
@@ -465,10 +471,15 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::WorkerOutput {
             task_id,
             agent,
+            event_kind,
             content,
             ..
         } => {
-            let output = visible_non_final_agent_output(content, FULL_MESSAGE_STREAM_MAX_CHARS)?;
+            let output = visible_non_final_agent_output_with_event_kind(
+                content,
+                event_kind,
+                FULL_MESSAGE_STREAM_MAX_CHARS,
+            )?;
             Some(format!(
                 "↳ worker   {} · {agent} · {}\n{}",
                 short_id(task_id),
@@ -625,10 +636,11 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::WorkerOutput {
             task_id,
             agent,
+            event_kind,
             content,
             ..
         } => {
-            let output = visible_non_final_agent_output(content, 160)?;
+            let output = visible_non_final_agent_output_with_event_kind(content, event_kind, 160)?;
             let display = compact_output_summary(&output.display, 160)?;
             Some(format!(
                 "worker  {} · {} {agent}: {display}",
@@ -705,6 +717,20 @@ fn visible_non_final_agent_output(
 ) -> Option<agent_events::VisibleAgentOutput> {
     let output = agent_events::visible_agent_output(content, max)?;
     (output.kind != agent_events::VisibleAgentOutputKind::Final).then_some(output)
+}
+
+fn visible_non_final_agent_output_with_event_kind(
+    content: &str,
+    event_kind: &str,
+    max: usize,
+) -> Option<agent_events::VisibleAgentOutput> {
+    let mut output = visible_non_final_agent_output(content, max)?;
+    if let Some(kind) = agent_events::visible_agent_output_kind_for_event_kind(event_kind) {
+        if kind != agent_events::VisibleAgentOutputKind::Final {
+            output.kind = kind;
+        }
+    }
+    Some(output)
 }
 
 fn compact_output_summary(display: &str, max: usize) -> Option<String> {
@@ -794,6 +820,22 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
+    fn worker_output(
+        task_id: Uuid,
+        agent: &str,
+        role: &str,
+        event_kind: &str,
+        content: impl Into<String>,
+    ) -> RunProgress {
+        RunProgress::WorkerOutput {
+            task_id,
+            agent: agent.into(),
+            role: role.into(),
+            event_kind: event_kind.into(),
+            content: content.into(),
+        }
+    }
+
     #[test]
     fn text_formatter_parses_role_json_without_raw_json() {
         let mut formatter = TiffanyTextProgressFormatter::new();
@@ -816,18 +858,20 @@ mod tests {
     fn text_formatter_hides_duplicate_worker_output() {
         let task_id = Uuid::new_v4();
         let mut formatter = TiffanyTextProgressFormatter::new();
-        let first = RunProgress::WorkerOutput {
+        let first = worker_output(
             task_id,
-            agent: "claude-code".into(),
-            role: "worker-cc".into(),
-            content: "claude assistant: useful summary".into(),
-        };
-        let duplicate = RunProgress::WorkerOutput {
+            "claude-code",
+            "worker-cc",
+            "assistant",
+            "claude assistant: useful summary",
+        );
+        let duplicate = worker_output(
             task_id,
-            agent: "claude-code".into(),
-            role: "worker-cc".into(),
-            content: "claude result: useful summary".into(),
-        };
+            "claude-code",
+            "worker-cc",
+            "result",
+            "claude result: useful summary",
+        );
 
         assert!(formatter.format(&first).is_some());
         assert!(formatter.format(&duplicate).is_none());
@@ -837,23 +881,25 @@ mod tests {
     fn text_formatter_labels_worker_output_kind() {
         let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
 
-        let line = format_text_progress_event(&RunProgress::WorkerOutput {
+        let line = format_text_progress_event(&worker_output(
             task_id,
-            agent: "worker-codex".into(),
-            role: "worker-codex".into(),
-            content: "codex local_shell_call: tool shell: cargo test --all".into(),
-        })
+            "worker-codex",
+            "worker-codex",
+            "local_shell_call",
+            "codex local_shell_call: tool shell: cargo test --all",
+        ))
         .expect("tool call line");
 
         assert!(line.contains("12345678 · worker-codex · tool call"));
         assert!(line.contains("tool shell: cargo test --all"));
 
-        let compact = format_compact_progress_event(&RunProgress::WorkerOutput {
+        let compact = format_compact_progress_event(&worker_output(
             task_id,
-            agent: "worker-codex".into(),
-            role: "worker-codex".into(),
-            content: "codex local_shell_call: tool shell: cargo test --all".into(),
-        })
+            "worker-codex",
+            "worker-codex",
+            "local_shell_call",
+            "codex local_shell_call: tool shell: cargo test --all",
+        ))
         .expect("compact tool call line");
 
         assert!(compact.contains("worker  tool call · 12345678 worker-codex"));
@@ -861,16 +907,33 @@ mod tests {
     }
 
     #[test]
+    fn worker_output_serializes_native_event_kind() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let json = serde_json::to_value(TiffanyProgressEvent::from(worker_output(
+            task_id,
+            "claude-code",
+            "worker-cc",
+            "tool_use",
+            r#"claude-code event: {"type":"tool_use","name":"Bash"}"#,
+        )))
+        .expect("serialize worker output");
+
+        assert_eq!(json["event_kind"], "tool_use");
+        assert_eq!(json["content"], r#"claude-code event: {"type":"tool_use","name":"Bash"}"#);
+    }
+
+    #[test]
     fn text_formatter_does_not_truncate_worker_message_stream() {
         let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
         let long_message = format!("{}END", "x".repeat(TEXT_OUTPUT_SUMMARY_MAX_CHARS + 128));
 
-        let line = format_text_progress_event(&RunProgress::WorkerOutput {
+        let line = format_text_progress_event(&worker_output(
             task_id,
-            agent: "claude-code".into(),
-            role: "worker-cc".into(),
-            content: format!("claude-code assistant: {long_message}"),
-        })
+            "claude-code",
+            "worker-cc",
+            "assistant",
+            format!("claude-code assistant: {long_message}"),
+        ))
         .expect("worker output line");
 
         assert!(line.contains(&long_message));

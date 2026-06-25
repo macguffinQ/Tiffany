@@ -93,6 +93,7 @@ pub enum RunProgress {
         task_id: Uuid,
         agent: String,
         role: String,
+        event_kind: String,
         content: String,
     },
     RoleOutput {
@@ -767,6 +768,7 @@ impl Orchestrator {
                             task_id,
                             agent: output_agent.clone(),
                             role: output_role.clone(),
+                            event_kind: event.kind.clone(),
                             content,
                         });
                     }
@@ -1066,6 +1068,7 @@ impl Orchestrator {
                             task_id,
                             agent: agent.clone(),
                             role: role.clone(),
+                            event_kind: "error".to_string(),
                             content: format!("{} error: {}", agent, error_message),
                         });
                         let _ = tx.send(RunProgress::WorkerDone {
@@ -1099,6 +1102,7 @@ fn worker_diff_progress_event(
         task_id,
         agent: agent.to_string(),
         role: role.to_string(),
+        event_kind: "diff".to_string(),
         content: format!("{agent} diff: {}", summarize_worker_diff(diff, 240_000)),
     })
 }
@@ -1490,6 +1494,7 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
             task_id,
             agent,
             role,
+            event_kind,
             content,
         } => (
             "worker",
@@ -1500,6 +1505,7 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "task_id": task_id,
                 "agent": agent,
                 "worker_role": role,
+                "event_kind": event_kind,
                 "content": content,
             }),
         ),

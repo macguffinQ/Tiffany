@@ -1691,6 +1691,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "system".into(),
                 content: "claude system".into(),
             },
             0,
@@ -1726,6 +1727,7 @@ mod tests {
             task_id,
             agent: "claude-code".into(),
             role: "worker-cc".into(),
+            event_kind: "assistant".into(),
             content: "claude assistant: useful summary".into(),
         };
 
@@ -1739,6 +1741,7 @@ mod tests {
             task_id,
             agent: "claude-code".into(),
             role: "worker-cc".into(),
+            event_kind: "result".into(),
             content: "claude result: useful summary".into(),
         };
         assert!(progress_line(&duplicate, 0, &input).is_none());
@@ -1777,6 +1780,7 @@ mod tests {
                 task_id,
                 agent: "claude-code".into(),
                 role: "worker-cc".into(),
+                event_kind: "result".into(),
                 content:
                     r#"claude-code result: {"result":"Implemented it in several paragraphs."}"#
                         .into(),

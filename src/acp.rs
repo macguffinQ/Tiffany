@@ -1846,6 +1846,7 @@ async fn send_progress_update(
             agent,
             role,
             content,
+            ..
         } => {
             let scope = format!("worker:{role}:{agent}:{}", short_uuid(task_id));
             let Some(text) = capture.should_show_output(&scope, content, 4000) else {
@@ -2792,6 +2793,7 @@ mod tests {
             task_id,
             agent: "claude-code".into(),
             role: "worker-cc".into(),
+            event_kind: "result".into(),
             content: "claude-code result: {\"result\":\"Implemented ACP context memory.\"}".into(),
         });
 
