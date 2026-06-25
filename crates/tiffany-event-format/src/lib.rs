@@ -15,6 +15,9 @@ pub enum VisibleAgentOutputKind {
     Question,
     ToolCall,
     ToolResult,
+    Diff,
+    Patch,
+    FileUpdate,
     Stderr,
     Actionable,
     Normal,
@@ -27,10 +30,20 @@ impl VisibleAgentOutputKind {
             Self::Question => "question",
             Self::ToolCall => "tool call",
             Self::ToolResult => "tool result",
+            Self::Diff => "diff",
+            Self::Patch => "patch",
+            Self::FileUpdate => "file update",
             Self::Stderr => "stderr",
             Self::Actionable => "alert",
             Self::Normal => "output",
         }
+    }
+
+    pub fn is_process_event(self) -> bool {
+        matches!(
+            self,
+            Self::ToolCall | Self::ToolResult | Self::Diff | Self::Patch | Self::FileUpdate
+        )
     }
 }
 
@@ -823,10 +836,7 @@ pub fn clean_visible_agent_output(content: &str, max: usize) -> Option<String> {
 
 pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOutput> {
     let hinted_kind = visible_output_kind_hint(content);
-    let hinted_tool_event = matches!(
-        hinted_kind,
-        Some(VisibleAgentOutputKind::ToolCall | VisibleAgentOutputKind::ToolResult)
-    );
+    let hinted_tool_event = hinted_kind.is_some_and(VisibleAgentOutputKind::is_process_event);
     if !hinted_tool_event {
         if let Some(final_output) = final_output_candidate(content, max) {
             let display = sanitize_text(&normalize_output_summary(&final_output), max);
@@ -876,7 +886,17 @@ fn visible_output_kind_from_display(display: &str) -> Option<VisibleAgentOutputK
         || lower.starts_with("@@ ")
         || lower.starts_with("files changed:")
     {
-        return Some(VisibleAgentOutputKind::ToolResult);
+        return Some(VisibleAgentOutputKind::Diff);
+    }
+    if lower.starts_with("*** begin patch") || lower.starts_with("patch:") {
+        return Some(VisibleAgentOutputKind::Patch);
+    }
+    if lower.starts_with("file changed:")
+        || lower.starts_with("file updated:")
+        || lower.starts_with("file created:")
+        || lower.starts_with("file deleted:")
+    {
+        return Some(VisibleAgentOutputKind::FileUpdate);
     }
     if lower.starts_with("tool result:") || lower == "tool result" {
         return Some(VisibleAgentOutputKind::ToolResult);
@@ -908,13 +928,12 @@ fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
         | "image_generation_call"
         | "mcp_tool_call" => Some(VisibleAgentOutputKind::ToolCall),
         "tool_result"
-        | "diff"
-        | "patch"
-        | "file_change"
-        | "file_update"
         | "function_call_output"
         | "custom_tool_call_output"
         | "tool_search_output" => Some(VisibleAgentOutputKind::ToolResult),
+        "diff" => Some(VisibleAgentOutputKind::Diff),
+        "patch" => Some(VisibleAgentOutputKind::Patch),
+        "file_change" | "file_update" => Some(VisibleAgentOutputKind::FileUpdate),
         "user" => visible_output_kind_from_display(body),
         "status" | "process_exit" => visible_output_kind_from_display(body).or_else(|| {
             looks_like_actionable_output(body).then_some(VisibleAgentOutputKind::Actionable)
@@ -2642,9 +2661,22 @@ mod tests {
             500,
         )
         .expect("worker diff");
-        assert_eq!(diff.kind, VisibleAgentOutputKind::ToolResult);
+        assert_eq!(diff.kind, VisibleAgentOutputKind::Diff);
+        assert_eq!(diff.kind.label(), "diff");
         assert!(diff.display.contains("files changed:"));
         assert!(diff.display.contains("diff --git"));
+
+        let patch =
+            visible_agent_output("codex patch: *** Begin Patch\n*** Update File: README.md", 500)
+                .expect("worker patch");
+        assert_eq!(patch.kind, VisibleAgentOutputKind::Patch);
+        assert_eq!(patch.kind.label(), "patch");
+
+        let file_update =
+            visible_agent_output("gemini file_update: file updated: src/lib.rs", 500)
+                .expect("file update");
+        assert_eq!(file_update.kind, VisibleAgentOutputKind::FileUpdate);
+        assert_eq!(file_update.kind.label(), "file update");
 
         let normal =
             visible_agent_output("claude assistant: useful summary", 500).expect("normal output");

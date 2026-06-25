@@ -4125,6 +4125,7 @@ fn output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec<Line<'
 }
 
 fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec<Line<'static>> {
+    let kind = event.content.as_deref().and_then(worker_visible_output_kind);
     let mut lines = vec![Line::from(vec![
         Span::styled(
             "│",
@@ -4140,7 +4141,7 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
                 .add_modifier(Modifier::BOLD),
         ),
     ])];
-    lines.extend(content.lines().map(output_body_line));
+    lines.extend(content.lines().map(|line| output_body_line_for_kind(line, kind)));
     if let Some(raw) = event.content.as_deref()
         && let Some(hint) = event_format::agent_failure_hint(raw, CONTROL_SUMMARY_MAX_CHARS)
     {
@@ -4407,22 +4408,22 @@ fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
     if looks_like_native_session_recovery(raw) {
         return "session recovery";
     }
-    match event_format::visible_agent_output(raw, CONTROL_SUMMARY_MAX_CHARS).map(|view| view.kind) {
-        _ if event_format::runtime_output_kind(raw).is_some_and(|kind| kind == "diff") => "diff",
-        _ if event_format::runtime_output_kind(raw).is_some_and(|kind| kind == "patch") => "patch",
-        _ if event_format::runtime_output_kind(raw)
-            .is_some_and(|kind| matches!(kind, "file_change" | "file_update")) =>
-        {
-            "file update"
-        }
+    match worker_visible_output_kind(raw) {
         Some(event_format::VisibleAgentOutputKind::Final) => "final",
         Some(event_format::VisibleAgentOutputKind::Question) => "question",
         Some(event_format::VisibleAgentOutputKind::ToolCall) => "tool call",
         Some(event_format::VisibleAgentOutputKind::ToolResult) => "tool result",
+        Some(event_format::VisibleAgentOutputKind::Diff) => "diff",
+        Some(event_format::VisibleAgentOutputKind::Patch) => "patch",
+        Some(event_format::VisibleAgentOutputKind::FileUpdate) => "file update",
         Some(event_format::VisibleAgentOutputKind::Stderr) => "stderr",
         Some(event_format::VisibleAgentOutputKind::Actionable) => "alert",
         Some(event_format::VisibleAgentOutputKind::Normal) | None => "output",
     }
+}
+
+fn worker_visible_output_kind(raw: &str) -> Option<event_format::VisibleAgentOutputKind> {
+    event_format::visible_agent_output(raw, CONTROL_SUMMARY_MAX_CHARS).map(|view| view.kind)
 }
 
 fn looks_like_native_session_recovery(content: &str) -> bool {
@@ -5044,6 +5045,39 @@ fn output_body_line(line: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled("  │ ", Style::default().fg(TIFFANY_DARK)),
         Span::raw(line.to_string()),
+    ])
+}
+
+fn output_body_line_for_kind(
+    line: &str,
+    kind: Option<event_format::VisibleAgentOutputKind>,
+) -> Line<'static> {
+    match kind {
+        Some(event_format::VisibleAgentOutputKind::Diff) => diff_body_line(line),
+        Some(event_format::VisibleAgentOutputKind::Patch)
+        | Some(event_format::VisibleAgentOutputKind::FileUpdate) => Line::from(vec![
+            Span::styled("  │ ", Style::default().fg(TIFFANY_DARK)),
+            Span::styled(line.to_string(), Style::default().fg(Color::Gray)),
+        ]),
+        _ => output_body_line(line),
+    }
+}
+
+fn diff_body_line(line: &str) -> Line<'static> {
+    let color = if line.starts_with('+') && !line.starts_with("+++") {
+        TIFFANY_BLUE
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        Color::Red
+    } else if line.starts_with("@@") {
+        TIFFANY_SOFT
+    } else if line.starts_with("diff --git") || line.starts_with("files changed:") {
+        Color::Gray
+    } else {
+        Color::DarkGray
+    };
+    Line::from(vec![
+        Span::styled("  │ ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(line.to_string(), Style::default().fg(color)),
     ])
 }
 
