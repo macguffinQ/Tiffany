@@ -2934,9 +2934,28 @@ fn event_detail_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        lines.extend(labeled_detail_block("task", prompt));
+        lines.extend(labeled_detail_block("task", &visible_task_prompt(prompt)));
     }
     lines
+}
+
+fn visible_task_prompt(prompt: &str) -> String {
+    let trimmed = prompt.trim();
+    let request = event_format::current_user_request(trimmed);
+    if request != trimmed {
+        return request.trim().to_string();
+    }
+
+    for marker in ["User message:", "Current request:", "Task:"] {
+        if let Some(idx) = trimmed.rfind(marker) {
+            let visible = trimmed[idx + marker.len()..].trim();
+            if !visible.is_empty() {
+                return visible.to_string();
+            }
+        }
+    }
+
+    trimmed.to_string()
 }
 
 fn reviewer_lifecycle_title(event: &TiffanyProgressEvent) -> String {
@@ -4585,6 +4604,69 @@ mod tests {
         assert!(text.contains("  │ 保留上下文里的关键约束"));
         assert!(text.contains("  │ 最后用中文总结。"));
         assert!(!text.contains('…'));
+    }
+
+    #[test]
+    fn worker_started_task_hides_internal_context_prompt() {
+        let task_prompt = "Answer the user's message directly in the same language.\n\
+            Do not inspect repository state.\n\n\
+            User message:\n\
+            You are continuing a multi-turn tiffany-loop orchestrator conversation.\n\
+            Use the previous turns to resolve follow-ups.\n\n\
+            Previous turns:\n\
+            user:\n\
+            你好\n\n\
+            assistant result:\n\
+            你好！有什么我可以帮你的吗？\n\n\
+            ---\n\
+            Current user request:\n\
+            你叫啥\n\
+            你能干啥";
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "running".to_string(),
+            message: "worker-cc started".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: Some("claude-code".to_string()),
+            cc_agent: None,
+            model: Some("claude-sonnet-4-6".to_string()),
+            provider: Some("anthropic".to_string()),
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
+            task_prompt: Some(task_prompt.to_string()),
+            content: None,
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+            reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
+        };
+
+        let details = event_detail_lines(&event);
+        let text = details.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("task  你叫啥"));
+        assert!(text.contains("  │ 你能干啥"));
+        assert!(!text.contains("Previous turns"));
+        assert!(!text.contains("assistant result"));
+        assert!(!text.contains("Do not inspect repository state"));
+    }
+
+    #[test]
+    fn worker_started_task_hides_direct_answer_instruction() {
+        let task_prompt = "Answer the user's message directly in the same language.\n\
+            This is a conversational or explanatory request.\n\n\
+            User message:\n\
+            你好";
+
+        assert_eq!(visible_task_prompt(task_prompt), "你好");
     }
 
     #[test]
