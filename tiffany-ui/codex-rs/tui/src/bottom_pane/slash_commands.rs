@@ -76,6 +76,7 @@ pub(crate) const TIFFANY_ORCHESTRATOR_COMMANDS: &[SlashCommand] = &[
     SlashCommand::Status,
     SlashCommand::Help,
     SlashCommand::Copy,
+    SlashCommand::Raw,
     SlashCommand::Clear,
     SlashCommand::Quit,
     SlashCommand::Exit,
@@ -204,6 +205,7 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
         SlashCommand::Status => "show Tiffany orchestration status",
         SlashCommand::Help => "show this command list",
         SlashCommand::Copy => "copy the last assistant answer",
+        SlashCommand::Raw => "toggle copy-friendly raw scrollback",
         SlashCommand::Clear => "clear the visible UI",
         SlashCommand::Exit => "exit tiffany-loop",
         SlashCommand::Quit => "alias for /exit",
@@ -482,6 +484,7 @@ mod tests {
                 SlashCommand::Status,
                 SlashCommand::Help,
                 SlashCommand::Copy,
+                SlashCommand::Raw,
                 SlashCommand::Clear,
                 SlashCommand::Quit,
                 SlashCommand::Exit,
@@ -489,7 +492,6 @@ mod tests {
         );
         assert!(!commands.contains(&SlashCommand::Model));
         assert!(!commands.contains(&SlashCommand::Permissions));
-        assert!(!commands.contains(&SlashCommand::Raw));
         assert!(!commands.contains(&SlashCommand::Diff));
         assert!(!commands.contains(&SlashCommand::Init));
         assert!(!commands.contains(&SlashCommand::Compact));
@@ -547,11 +549,7 @@ mod tests {
                 .expect("legacy result command should be explained")
                 .contains("/copy")
         );
-        assert!(
-            tiffany_orchestrator_unsupported_command_message("raw")
-                .expect("raw should be known but hidden")
-                .contains("not available in Tiffany orchestrator mode")
-        );
+        assert!(tiffany_orchestrator_unsupported_command_message("raw").is_none());
         assert!(
             tiffany_orchestrator_unsupported_command_message("diff")
                 .expect("diff should be known but hidden")
@@ -586,7 +584,7 @@ mod tests {
             );
         }
         assert!(!help.contains("/quit"));
-        assert!(!help.contains("/raw"));
+        assert!(help.contains("/raw"));
         assert!(!help.contains("/diff"));
         assert!(!help.contains("/model"));
         assert!(!help.contains("/permissions"));

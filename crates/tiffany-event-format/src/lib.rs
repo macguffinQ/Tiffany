@@ -864,11 +864,9 @@ fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
         | "custom_tool_call_output"
         | "tool_search_output" => Some(VisibleAgentOutputKind::ToolResult),
         "user" => visible_output_kind_from_display(body),
-        "status" | "process_exit" => {
-            visible_output_kind_from_display(body).or_else(|| {
-                looks_like_actionable_output(body).then_some(VisibleAgentOutputKind::Actionable)
-            })
-        }
+        "status" | "process_exit" => visible_output_kind_from_display(body).or_else(|| {
+            looks_like_actionable_output(body).then_some(VisibleAgentOutputKind::Actionable)
+        }),
         _ => None,
     }
 }
@@ -2551,9 +2549,11 @@ mod tests {
         assert_eq!(recovery.kind, VisibleAgentOutputKind::Actionable);
         assert!(recovery.display.contains("native session busy"));
 
-        let process_exit =
-            visible_agent_output("claude-code process_exit: claude exited with status exit status: 1", 500)
-                .expect("process exit");
+        let process_exit = visible_agent_output(
+            "claude-code process_exit: claude exited with status exit status: 1",
+            500,
+        )
+        .expect("process exit");
         assert_eq!(process_exit.kind, VisibleAgentOutputKind::Actionable);
 
         let question_call = visible_agent_output("claude-code tool_use: tool AskUserQuestion", 500)

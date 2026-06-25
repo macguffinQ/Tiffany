@@ -133,8 +133,8 @@ set.
   tiffany-loop orchestrator adapter.
 - Follow-up prompts entered during a run stay queued at the bottom until they execute.
 - Native slash commands expose provider setup, role registration, stable worker
-  sessions, diagnostics, status, diff, copy/raw mode, clear, and exit. Older
-  process/log/queue/history helpers remain in the legacy fallback runner.
+  sessions, diagnostics, status, copy/raw mode, clear, and exit. Older
+  process/log/diff/queue/history helpers remain in the legacy fallback runner.
 - Typing `/` opens a command menu. `Up`/`Down` select and `Enter` confirms.
 
 ## Webhook

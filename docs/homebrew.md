@@ -28,7 +28,6 @@ After install, initialize runtime config and configure providers/roles from the
 TUI-facing command:
 
 ```bash
-tiffany-loop init
 tiffany-loop setup
 tiffany-loop
 ```

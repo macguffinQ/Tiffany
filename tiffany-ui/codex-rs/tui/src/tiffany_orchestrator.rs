@@ -344,7 +344,7 @@ pub(crate) fn idle_intro_lines(context_turn_count: usize) -> Vec<Line<'static>> 
             "setup",
             &["/provider", "/role", "/roles", "/thread", "/doctor"],
         ),
-        command_hint_line("tools", &["/status", "/copy", "/clear", "/exit"]),
+        command_hint_line("tools", &["/status", "/copy", "/raw", "/clear", "/exit"]),
     ]
 }
 
@@ -3579,9 +3579,8 @@ mod tests {
         assert!(text.contains("flow  direct / single / full  →  selected per prompt"));
         assert!(!text.contains("status ready\nflow  planner → critic"));
         assert!(text.contains("setup  /provider  /role  /roles  /thread  /doctor"));
-        assert!(text.contains("tools  /status  /copy  /clear  /exit"));
+        assert!(text.contains("tools  /status  /copy  /raw  /clear  /exit"));
         assert!(!text.contains("/diff"));
-        assert!(!text.contains("/raw"));
         assert_eq!(lines[0].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[0].spans[2].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[0].spans[3].style.fg, Some(TIFFANY_SOFT));

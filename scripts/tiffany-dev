@@ -74,7 +74,6 @@ In the TUI:
   /thread       inspect or clear stable worker sessions
   /doctor       diagnose provider/model/key/runtime problems
   /status       show current orchestration status
-  /diff         show git changes
   /copy         copy the last assistant answer
   /raw          toggle copy-friendly raw scrollback mode
 
