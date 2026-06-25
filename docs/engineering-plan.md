@@ -23,6 +23,9 @@ storage, roles, providers, and diagnostics.
   `/thread`.
 - Worker session history can be exported from the native TUI with
   `/thread export <role>` for handoff or manual continuation.
+- `/roles` and `/thread` summaries expose inline next actions so users can edit
+  role bindings, inspect sessions, export handoffs, or clear native session ids
+  without guessing subcommands.
 - Orchestration control events are grouped into compact run timeline cells,
   while worker/tool/stderr output remains visible as waterfall text.
 - Role profiles can save multiple planner, critic, worker, and reviewer
@@ -65,6 +68,6 @@ storage, roles, providers, and diagnostics.
 
 - Trim any remaining upstream-only command affordances that can still appear in
   Tiffany mode during queued or edge-case dispatch.
-- Add a session inspector view that shows each role's persisted native session
-  id, last run status, and export path without leaving the TUI.
+- Add a denser session inspector popup if inline `/thread` summaries become too
+  wide for small terminals.
 - Add upstream sync notes for each pulled Codex UI update.
