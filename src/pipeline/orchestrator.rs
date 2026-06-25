@@ -751,6 +751,7 @@ impl Orchestrator {
                     prompt: t.prompt.clone(),
                 });
                 let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+                let pipeline_event_tx = event_tx.clone();
                 let progress_tx = tx.clone();
                 let output_agent = agent.clone();
                 let output_role = worker_role.clone();
@@ -786,6 +787,7 @@ impl Orchestrator {
                         Ok(lease) => lease,
                         Err(err) => {
                             drop(event_tx);
+                            drop(pipeline_event_tx);
                             let _ = forwarder.await;
                             return (
                                 task_id,
@@ -808,6 +810,7 @@ impl Orchestrator {
                                     session_store.clear_worker_thread_native_session(thread.id)
                                 {
                                     drop(event_tx);
+                                    drop(pipeline_event_tx);
                                     let _ = forwarder.await;
                                     return (
                                         task_id,
@@ -834,6 +837,7 @@ impl Orchestrator {
                         Ok(None) => {}
                         Err(err) => {
                             drop(event_tx);
+                            drop(pipeline_event_tx);
                             let _ = forwarder.await;
                             return (
                                 task_id,
@@ -845,7 +849,37 @@ impl Orchestrator {
                             );
                         }
                     }
-                    let res = adapter.start(&locked_task, Some(event_tx)).await;
+                    let mut res = adapter.start(&locked_task, Some(event_tx.clone())).await;
+                    if let Err(err) = &res {
+                        let raw_error = format!("{err:#}");
+                        if is_native_session_occupied(&raw_error)
+                            && locked_task.native_session_id.is_some()
+                        {
+                            let previous_native = locked_task.native_session_id.take();
+                            match session_store.clear_worker_thread_native_session(thread.id) {
+                                Ok(()) => {
+                                    emit_worker_recovery_event(
+                                        &pipeline_event_tx,
+                                        task_id,
+                                        &agent,
+                                        &worker_role,
+                                        &format!(
+                                            "native session {} is already in use; cleared saved session and retrying once",
+                                            previous_native.as_deref().unwrap_or("unknown")
+                                        ),
+                                    );
+                                    res = adapter.start(&locked_task, Some(event_tx.clone())).await;
+                                }
+                                Err(clear_err) => {
+                                    res = Err(clear_err.context(
+                                        "clearing occupied native session before retry",
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    drop(event_tx);
+                    drop(pipeline_event_tx);
                     let _ = forwarder.await;
                     let res = res.map(|h| h.session).and_then(|session| {
                         if let Some(thread_id) = session.worker_thread_id {
@@ -1019,7 +1053,7 @@ fn enrich_worker_error(
     thread_id: Option<Uuid>,
     session_store: &SessionStore,
 ) -> String {
-    if !is_claude_native_session_occupied(raw) {
+    if !is_native_session_occupied(raw) {
         return raw.to_string();
     }
 
@@ -1031,14 +1065,47 @@ fn enrich_worker_error(
         .unwrap_or_else(|| "unknown".into());
     let native = native_session_id
         .unwrap_or_else(|| extract_occupied_session_id(raw).unwrap_or_else(|| "unknown".into()));
+    let resume = native_resume_command(agent, &native);
     format!(
-        "Claude native session is already in use; agent={agent}; role={role}; worker_thread={thread}; native_session={native}; wait for the current run to finish, inspect `/thread {role}`, clear it with `/thread clear {role}` for a fresh next run, or resume manually with `claude --resume {native}`. Raw error: {raw}"
+        "Native session is already in use; agent={agent}; role={role}; worker_thread={thread}; native_session={native}; Tiffany already retries once with a fresh native session when possible. If it still fails, wait for the current native run to finish, inspect `/thread {role}`, clear it with `/thread clear {role}`, or resume manually with `{resume}`. Raw error: {raw}"
     )
 }
 
-fn is_claude_native_session_occupied(message: &str) -> bool {
+fn is_native_session_occupied(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("session id") && lower.contains("already in use")
+}
+
+fn emit_worker_recovery_event(
+    event_tx: &UnboundedSender<Event>,
+    task_id: Uuid,
+    agent: &str,
+    role: &str,
+    message: &str,
+) {
+    let event = Event {
+        session_id: Uuid::new_v4(),
+        task_id,
+        ts: chrono::Utc::now(),
+        kind: "status".into(),
+        payload: serde_json::json!({
+            "source": "orchestrator",
+            "agent": agent,
+            "role": role,
+            "line": message,
+        }),
+    };
+    let _ = event_tx.send(event);
+}
+
+fn native_resume_command(agent: &str, native_session_id: &str) -> String {
+    if agent == "claude-code" {
+        return format!("claude --resume {native_session_id}");
+    }
+    if agent == "codex" {
+        return format!("codex exec resume {native_session_id}");
+    }
+    format!("{agent} resume {native_session_id}")
 }
 
 fn extract_occupied_session_id(message: &str) -> Option<String> {
@@ -1566,7 +1633,7 @@ mod tests {
             &store,
         );
 
-        assert!(message.contains("Claude native session is already in use"));
+        assert!(message.contains("Native session is already in use"));
         assert!(message.contains("agent=claude-code"));
         assert!(message.contains("role=worker-cc"));
         assert!(message.contains("native_session=native-123"));
@@ -1874,6 +1941,7 @@ mod tests {
     struct NativeSessionAdapter {
         seen: Arc<std::sync::Mutex<Vec<Option<String>>>>,
         next_native: Option<String>,
+        fail_once_on_native: Option<String>,
     }
 
     #[async_trait::async_trait]
@@ -1887,10 +1955,22 @@ mod tests {
             task: &Task,
             _event_tx: Option<tokio::sync::mpsc::UnboundedSender<Event>>,
         ) -> Result<WorkerHandle> {
-            self.seen
-                .lock()
-                .unwrap()
-                .push(task.native_session_id.clone());
+            let matching_native_seen = {
+                let mut seen = self.seen.lock().unwrap();
+                seen.push(task.native_session_id.clone());
+                seen.iter()
+                    .filter(|native| native.as_deref() == task.native_session_id.as_deref())
+                    .count()
+            };
+            if matching_native_seen == 1
+                && self
+                    .fail_once_on_native
+                    .as_ref()
+                    .is_some_and(|native| task.native_session_id.as_deref() == Some(native))
+            {
+                let native = task.native_session_id.as_deref().unwrap_or("unknown");
+                anyhow::bail!("Error: Session ID {native} is already in use.");
+            }
             let mut session = Session::new(task.id, self.name(), Role::Worker);
             session.model = task.model_hint.clone().unwrap_or_default();
             session.parent_session_ids = task.parent_session_ids.clone();
@@ -3213,6 +3293,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                 Arc::new(NativeSessionAdapter {
                     seen: seen.clone(),
                     next_native: Some("native-from-first-run".into()),
+                    fail_once_on_native: None,
                 }),
             );
 
@@ -3263,6 +3344,99 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             Some("native-updated-before-second-start"),
             "worker start should see the latest native session after acquiring the thread lease"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_dag_clears_occupied_native_session_and_retries_once() {
+        let (_tmp, mut orch) =
+            test_orchestrator_with_runtime(Arc::new(ApprovingCritic), "test-runtime");
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert(
+                "test-runtime".to_string(),
+                Arc::new(NativeSessionAdapter {
+                    seen: seen.clone(),
+                    next_native: Some("native-fresh".into()),
+                    fail_once_on_native: Some("native-busy".into()),
+                }),
+            );
+
+        let first_task = Task::new("first turn");
+        let first_task_id = first_task.id;
+        let (first_tx, _first_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch.execute_dag(vec![first_task], first_tx).await.unwrap();
+        let first_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == first_task_id)
+            .expect("first worker session");
+        let thread_id = first_session
+            .worker_thread_id
+            .expect("first session should record worker thread");
+        orch.session_store
+            .update_worker_thread_after_session(
+                thread_id,
+                Some("native-busy"),
+                first_session.id,
+                first_session.worktree_path.as_deref(),
+            )
+            .unwrap();
+
+        let second_task = Task::new("second turn");
+        let second_task_id = second_task.id;
+        let (second_tx, mut second_rx) = tokio::sync::mpsc::unbounded_channel();
+        let completed = orch
+            .execute_dag(vec![second_task], second_tx)
+            .await
+            .expect("occupied native session should be retried once");
+        assert_eq!(completed.len(), 1);
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.first().cloned().flatten(), None);
+        assert_eq!(
+            seen.get(1).cloned().flatten().as_deref(),
+            Some("native-busy")
+        );
+        assert_eq!(seen.get(2).cloned().flatten(), None);
+
+        let second_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == second_task_id)
+            .expect("second worker session");
+        assert_eq!(second_session.worker_thread_id, Some(thread_id));
+        assert_eq!(
+            second_session.native_session_id.as_deref(),
+            Some("native-fresh")
+        );
+        let thread = orch
+            .session_store
+            .worker_thread_by_role("worker-cc")
+            .unwrap()
+            .expect("worker thread");
+        assert_eq!(thread.native_session_id.as_deref(), Some("native-fresh"));
+
+        let mut saw_retry_notice = false;
+        let mut saw_success = false;
+        while let Ok(event) = second_rx.try_recv() {
+            match event {
+                RunProgress::WorkerOutput { content, .. } => {
+                    saw_retry_notice |=
+                        content.contains("retrying once") && content.contains("native-busy");
+                }
+                RunProgress::WorkerDone { ok, .. } => {
+                    saw_success |= ok;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_retry_notice, "expected native session retry progress");
+        assert!(saw_success, "expected worker to succeed after retry");
     }
 
     #[tokio::test]

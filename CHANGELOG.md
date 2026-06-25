@@ -9,6 +9,8 @@ All notable changes to this project will be documented in this file.
   session history.
 - Improved Claude `Session ID ... is already in use` diagnostics with the new
   `/thread clear <role>` recovery command.
+- Automatically clears a saved busy native session id and retries the worker
+  once when Claude/Codex reports `Session ID ... is already in use`.
 - Hid unsupported upstream slash commands from Tiffany orchestrator
   command menus and help output, while keeping legacy handlers available for
   direct compatibility.
