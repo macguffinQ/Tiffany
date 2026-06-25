@@ -733,26 +733,10 @@ impl Orchestrator {
                 let agent = adapter.name().to_string();
                 let worker_role = assignment.role.clone();
                 let worker_start = std::time::Instant::now();
-                let _ = tx.send(RunProgress::WorkerThreadReady {
-                    task_id,
-                    role: worker_role.clone(),
-                    thread_id: thread.id,
-                    native_session_id: t.native_session_id.clone(),
-                    reused,
-                });
-                let _ = tx.send(RunProgress::WorkerStarted {
-                    task_id,
-                    agent: agent.clone(),
-                    role: worker_role.clone(),
-                    runtime: assignment.runtime.clone(),
-                    cc_agent: t.cc_agent_hint.clone(),
-                    model: assignment.model.clone(),
-                    provider: assignment.provider.clone(),
-                    prompt: t.prompt.clone(),
-                });
                 let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
                 let pipeline_event_tx = event_tx.clone();
-                let progress_tx = tx.clone();
+                let event_progress_tx = tx.clone();
+                let lifecycle_tx = tx.clone();
                 let output_agent = agent.clone();
                 let output_role = worker_role.clone();
                 let forwarder = tokio::spawn(async move {
@@ -771,7 +755,7 @@ impl Orchestrator {
                             }
                             last_output_key = Some(key);
                         }
-                        let _ = progress_tx.send(RunProgress::WorkerOutput {
+                        let _ = event_progress_tx.send(RunProgress::WorkerOutput {
                             task_id,
                             agent: output_agent.clone(),
                             role: output_role.clone(),
@@ -800,8 +784,11 @@ impl Orchestrator {
                         }
                     };
                     let mut locked_task = t;
+                    let mut latest_last_session_id = None;
+                    let mut refreshed_thread = false;
                     match session_store.worker_thread_by_id(thread.id) {
                         Ok(Some(latest_thread)) => {
+                            refreshed_thread = true;
                             locked_task.native_session_id = latest_thread.native_session_id.clone();
                             if runtime == "claude-code"
                                 && is_stale_claude_native_session_id(&latest_thread)
@@ -826,6 +813,7 @@ impl Orchestrator {
                                 locked_task.native_session_id = None;
                             }
                             if let Some(parent_id) = latest_thread.last_session_id {
+                                latest_last_session_id = Some(parent_id);
                                 if !locked_task.parent_session_ids.contains(&parent_id) {
                                     locked_task.parent_session_ids.push(parent_id);
                                 }
@@ -849,6 +837,28 @@ impl Orchestrator {
                             );
                         }
                     }
+                    let locked_reused = if refreshed_thread {
+                        latest_last_session_id.is_some() || locked_task.native_session_id.is_some()
+                    } else {
+                        reused
+                    };
+                    let _ = lifecycle_tx.send(RunProgress::WorkerThreadReady {
+                        task_id,
+                        role: worker_role.clone(),
+                        thread_id: thread.id,
+                        native_session_id: locked_task.native_session_id.clone(),
+                        reused: locked_reused,
+                    });
+                    let _ = lifecycle_tx.send(RunProgress::WorkerStarted {
+                        task_id,
+                        agent: agent.clone(),
+                        role: worker_role.clone(),
+                        runtime: runtime.clone(),
+                        cc_agent: locked_task.cc_agent_hint.clone(),
+                        model: locked_task.model_hint.clone().unwrap_or_default(),
+                        provider: locked_task.model_provider_hint.clone(),
+                        prompt: locked_task.prompt.clone(),
+                    });
                     let mut res = adapter.start(&locked_task, Some(event_tx.clone())).await;
                     if let Err(err) = &res {
                         let raw_error = format!("{err:#}");
@@ -3394,7 +3404,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             .unwrap();
 
         let second_task = Task::new("second turn");
-        let (second_tx, _second_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (second_tx, mut second_rx) = tokio::sync::mpsc::unbounded_channel();
         let _ = orch
             .execute_dag(vec![second_task], second_tx)
             .await
@@ -3406,6 +3416,20 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             seen.get(1).cloned().flatten().as_deref(),
             Some("native-updated-before-second-start"),
             "worker start should see the latest native session after acquiring the thread lease"
+        );
+        let mut ready_native = None;
+        while let Ok(event) = second_rx.try_recv() {
+            if let RunProgress::WorkerThreadReady {
+                native_session_id, ..
+            } = event
+            {
+                ready_native = native_session_id;
+            }
+        }
+        assert_eq!(
+            ready_native.as_deref(),
+            Some("native-updated-before-second-start"),
+            "UI ready event should report the same refreshed native session passed to worker"
         );
     }
 
