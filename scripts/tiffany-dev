@@ -77,6 +77,8 @@ In the TUI:
   /copy         copy the last assistant answer
   /raw          toggle copy-friendly raw scrollback mode
   /diff         show git changes
+  /clear        clear the current chat surface
+  /exit         leave the UI
 
 Environment:
   TIFFANY_HOME              UI config/state root, default: ~/.tiffany
