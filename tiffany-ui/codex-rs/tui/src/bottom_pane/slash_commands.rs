@@ -104,6 +104,7 @@ fn tiffany_orchestrator_commands() -> Vec<(&'static str, SlashCommand)> {
         SlashCommand::Raw,
         SlashCommand::Diff,
         SlashCommand::Clear,
+        SlashCommand::Quit,
         SlashCommand::Exit,
     ]
     .into_iter()
@@ -422,6 +423,7 @@ mod tests {
                 SlashCommand::Raw,
                 SlashCommand::Diff,
                 SlashCommand::Clear,
+                SlashCommand::Quit,
                 SlashCommand::Exit,
             ]
         );

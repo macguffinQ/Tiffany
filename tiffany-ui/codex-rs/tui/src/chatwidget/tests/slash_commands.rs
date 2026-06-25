@@ -371,6 +371,28 @@ async fn tiffany_orchestrator_help_lists_supported_commands() {
 }
 
 #[tokio::test]
+async fn tiffany_orchestrator_status_uses_native_orchestration_summary() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    submit_composer_text(&mut chat, "/status");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("tiffany-loop orchestrator"));
+    assert!(rendered.contains("status"));
+    assert!(rendered.contains("direct / single / full"));
+    assert!(rendered.contains("/provider  /role  /roles  /thread  /doctor"));
+    assert!(!rendered.contains("ChatGPT"));
+    assert!(!rendered.contains("Reasoning"));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn tiffany_orchestrator_rejects_hidden_codex_command_when_dequeued() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);

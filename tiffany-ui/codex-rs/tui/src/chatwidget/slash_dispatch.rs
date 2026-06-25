@@ -56,11 +56,11 @@ Tiffany orchestrator commands:
 /roles      inspect registered roles
 /thread     inspect or clear stable worker sessions
 /doctor     diagnose setup
-/status     show current session status
-/copy       copy the last answer
-/raw        toggle copy-friendly raw scrollback
+/status     show Tiffany orchestration status
+/copy       copy the last assistant answer
+/raw        toggle raw scrollback for native selection
 /diff       show git diff
-/clear      clear the UI
+/clear      clear the visible UI
 /exit       exit tiffany-loop";
 
 impl ChatWidget {
@@ -576,7 +576,9 @@ impl ChatWidget {
                 self.add_hooks_output();
             }
             SlashCommand::Status => {
-                if self.should_prefetch_rate_limits() {
+                if self.tiffany_orchestrator_shell {
+                    self.add_tiffany_orchestrator_status_output();
+                } else if self.should_prefetch_rate_limits() {
                     let request_id = self.next_status_refresh_request_id;
                     self.next_status_refresh_request_id =
                         self.next_status_refresh_request_id.wrapping_add(1);
@@ -679,6 +681,47 @@ impl ChatWidget {
                 );
             }
         }
+    }
+
+    fn add_tiffany_orchestrator_status_output(&mut self) {
+        let mode = if self.turn_lifecycle.agent_turn_running {
+            "running"
+        } else {
+            "ready"
+        };
+        let raw_mode = if self.raw_output_mode { "on" } else { "off" };
+        let queued = self.input_queue.queued_user_messages.len()
+            + self.input_queue.rejected_steers_queue.len();
+        let bin = self
+            .tiffany_orchestrator_config
+            .as_ref()
+            .map(|config| config.bin.as_str())
+            .filter(|bin| !bin.is_empty())
+            .unwrap_or("orchestrator");
+        let config = self
+            .tiffany_orchestrator_config
+            .as_ref()
+            .and_then(|config| config.config_path.as_deref())
+            .unwrap_or("default");
+
+        let mut lines: Vec<Line<'static>> = vec![
+            vec!["◆ ".fg(crate::tiffany_orchestrator::TIFFANY_BLUE).bold(), "T>_ ".bold(), "tiffany-loop orchestrator".into()].into(),
+            vec!["status  ".dim(), mode.into(), "  queue ".dim(), queued.to_string().into(), "  raw ".dim(), raw_mode.into()].into(),
+            vec!["flow    ".dim(), "direct / single / full  →  selected per prompt".into()].into(),
+            vec!["worker  ".dim(), "registered roles route to Claude Code, Codex CLI, or compatible runtimes".into()].into(),
+            vec!["bin     ".dim(), bin.to_string().into()].into(),
+            vec!["config  ".dim(), config.to_string().into()].into(),
+            vec!["cmd     ".dim(), "/provider  /role  /roles  /thread  /doctor".into()].into(),
+        ];
+        if queued > 0 {
+            lines.push(vec![
+                "next    ".dim(),
+                "queued prompts will run one at a time after the current orchestration finishes"
+                    .into(),
+            ]
+            .into());
+        }
+        self.add_to_history(history_cell::PlainHistoryCell::new(lines));
     }
 
     /// Run an inline slash command.

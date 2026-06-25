@@ -21,7 +21,7 @@ use crate::history_cell::PlainHistoryCell;
 use codex_app_server_protocol::UserInput;
 
 #[allow(clippy::disallowed_methods)]
-const TIFFANY_BLUE: Color = Color::Rgb(10, 186, 181);
+pub(crate) const TIFFANY_BLUE: Color = Color::Rgb(10, 186, 181);
 #[allow(clippy::disallowed_methods)]
 const TIFFANY_DARK: Color = Color::Rgb(7, 94, 91);
 #[allow(clippy::disallowed_methods)]

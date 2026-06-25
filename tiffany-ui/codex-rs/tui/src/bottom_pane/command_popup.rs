@@ -648,7 +648,7 @@ mod tests {
             .collect();
 
         assert_eq!(
-            cmds.iter().take(12).map(String::as_str).collect::<Vec<_>>(),
+            cmds.iter().map(String::as_str).collect::<Vec<_>>(),
             vec![
                 "provider", "role", "roles", "thread", "doctor", "status", "help", "copy", "raw",
                 "diff", "clear", "exit",
