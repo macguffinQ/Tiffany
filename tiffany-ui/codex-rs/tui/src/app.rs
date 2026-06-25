@@ -1097,9 +1097,13 @@ See the Codex keymap documentation for supported actions and examples."
         if let Some(launch) = tiffany_orchestrator {
             let prompt = launch.prompt.trim().to_string();
             if prompt.is_empty() {
+                let readiness = crate::tiffany_orchestrator::startup_readiness(
+                    app.tiffany_orchestrator.as_ref(),
+                );
                 app.chat_widget.add_plain_history_lines(
-                    crate::tiffany_orchestrator::idle_intro_lines(
+                    crate::tiffany_orchestrator::idle_intro_lines_with_readiness(
                         app.tiffany_orchestrator_turns.len(),
+                        Some(&readiness),
                     ),
                 );
             } else {

@@ -38,9 +38,13 @@ impl App {
                 self.reset_app_ui_state_after_clear();
 
                 if self.tiffany_orchestrator.is_some() {
+                    let readiness = crate::tiffany_orchestrator::startup_readiness(
+                        self.tiffany_orchestrator.as_ref(),
+                    );
                     self.chat_widget.add_plain_history_lines(
-                        crate::tiffany_orchestrator::idle_intro_lines(
+                        crate::tiffany_orchestrator::idle_intro_lines_with_readiness(
                             self.tiffany_orchestrator_turns.len(),
+                            Some(&readiness),
                         ),
                     );
                     tui.frame_requester().schedule_frame();

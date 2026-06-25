@@ -54,6 +54,50 @@ pub(crate) struct TiffanyOrchestratorConfig {
     pub(crate) config_path: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TiffanyOrchestratorRuntimeStatus {
+    pub(crate) requested: String,
+    pub(crate) resolved: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TiffanyStartupReadiness {
+    pub(crate) runtime: TiffanyOrchestratorRuntimeStatus,
+    config: TiffanyConfigReadiness,
+}
+
+#[derive(Debug, Clone)]
+enum TiffanyConfigReadiness {
+    Missing { path: String },
+    Invalid { path: String, message: String },
+    Ready(TiffanyConfigSummary),
+}
+
+#[derive(Debug, Clone)]
+struct TiffanyConfigSummary {
+    providers: usize,
+    models: usize,
+    roles: usize,
+    runtimes: usize,
+    default_worker: Option<TiffanyDefaultWorkerSummary>,
+}
+
+#[derive(Debug, Clone)]
+struct TiffanyDefaultWorkerSummary {
+    role: String,
+    runtime: String,
+    binary: String,
+    status: TiffanyWorkerReadinessStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TiffanyWorkerReadinessStatus {
+    Ready,
+    ModelMissing,
+    ProviderMissing,
+    RuntimeMissing,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct TiffanyOrchestratorTurn {
     pub(crate) user_prompt: String,
@@ -78,6 +122,50 @@ struct TiffanyOrchestratorMemoryConversation {
 struct TiffanyOrchestratorMemoryTurn {
     user_prompt: String,
     result: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTiffanyOrchestratorConfig {
+    #[serde(default)]
+    providers: HashMap<String, RawTiffanyProviderConfig>,
+    #[serde(default)]
+    runtimes: HashMap<String, RawTiffanyRuntimeConfig>,
+    #[serde(default)]
+    models: Vec<RawTiffanyModelConfig>,
+    #[serde(default)]
+    roles: HashMap<String, RawTiffanyRoleConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTiffanyProviderConfig {
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTiffanyRuntimeConfig {
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    kind: Option<String>,
+    binary: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTiffanyModelConfig {
+    #[allow(dead_code)]
+    id: String,
+    #[allow(dead_code)]
+    provider: String,
+    #[allow(dead_code)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTiffanyRoleConfig {
+    #[allow(dead_code)]
+    model: String,
+    runtime: String,
 }
 
 fn memory_schema_version() -> u32 {
@@ -335,10 +423,18 @@ pub(crate) fn spawn_thread_command(
     });
 }
 
-pub(crate) fn idle_intro_lines(context_turn_count: usize) -> Vec<Line<'static>> {
-    vec![
+pub(crate) fn idle_intro_lines_with_readiness(
+    context_turn_count: usize,
+    readiness: Option<&TiffanyStartupReadiness>,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![
         brand_line("orchestration shell"),
         idle_status_line(context_turn_count),
+    ];
+    if let Some(readiness) = readiness {
+        lines.extend(startup_readiness_lines(readiness));
+    }
+    lines.extend([
         workflow_line(),
         command_hint_line(
             "setup",
@@ -348,7 +444,289 @@ pub(crate) fn idle_intro_lines(context_turn_count: usize) -> Vec<Line<'static>> 
             "tools",
             &["/status", "/copy", "/raw", "/diff", "/clear", "/exit"],
         ),
-    ]
+    ]);
+    lines
+}
+
+pub(crate) fn startup_readiness(
+    config: Option<&TiffanyOrchestratorConfig>,
+) -> TiffanyStartupReadiness {
+    let bin = config
+        .map(|config| config.bin.as_str())
+        .filter(|bin| !bin.trim().is_empty())
+        .unwrap_or("orchestrator");
+    let runtime = runtime_status(bin);
+    let config_path = config
+        .and_then(|config| config.config_path.as_deref())
+        .filter(|path| !path.trim().is_empty())
+        .map(expand_home_path)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".orchestrator/config.yaml")));
+    let config = match config_path {
+        Some(path) => config_readiness_from_path(path),
+        None => TiffanyConfigReadiness::Invalid {
+            path: "~/.orchestrator/config.yaml".to_string(),
+            message: "home directory unavailable".to_string(),
+        },
+    };
+    TiffanyStartupReadiness { runtime, config }
+}
+
+fn config_readiness_from_path(path: std::path::PathBuf) -> TiffanyConfigReadiness {
+    let display_path = path.to_string_lossy().into_owned();
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return TiffanyConfigReadiness::Missing { path: display_path };
+        }
+        Err(err) => {
+            return TiffanyConfigReadiness::Invalid {
+                path: display_path,
+                message: err.to_string(),
+            };
+        }
+    };
+    let config = match serde_yaml::from_str::<RawTiffanyOrchestratorConfig>(&raw) {
+        Ok(config) => config,
+        Err(err) => {
+            return TiffanyConfigReadiness::Invalid {
+                path: display_path,
+                message: err.to_string(),
+            };
+        }
+    };
+    let default_worker = default_worker_summary(&config);
+    TiffanyConfigReadiness::Ready(TiffanyConfigSummary {
+        providers: config.providers.len(),
+        models: config.models.len(),
+        roles: config.roles.len(),
+        runtimes: config.runtimes.len(),
+        default_worker,
+    })
+}
+
+fn default_worker_summary(
+    config: &RawTiffanyOrchestratorConfig,
+) -> Option<TiffanyDefaultWorkerSummary> {
+    let role = default_worker_role(&config.roles)?;
+    let role_cfg = config.roles.get(&role)?;
+    let runtime_cfg = runtime_config(config, &role_cfg.runtime);
+    let binary = runtime_cfg
+        .and_then(|runtime| runtime.binary.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| default_binary_for_runtime(&role_cfg.runtime));
+    let status = default_worker_status(config, role_cfg, runtime_cfg, &binary);
+    Some(TiffanyDefaultWorkerSummary {
+        role,
+        runtime: role_cfg.runtime.clone(),
+        binary,
+        status,
+    })
+}
+
+fn default_worker_status(
+    config: &RawTiffanyOrchestratorConfig,
+    role: &RawTiffanyRoleConfig,
+    runtime: Option<&RawTiffanyRuntimeConfig>,
+    binary: &str,
+) -> TiffanyWorkerReadinessStatus {
+    let Some(model) = config.models.iter().find(|model| model.id == role.model) else {
+        return TiffanyWorkerReadinessStatus::ModelMissing;
+    };
+    if !config.providers.contains_key(&model.provider) {
+        return TiffanyWorkerReadinessStatus::ProviderMissing;
+    }
+    if runtime.is_none() || runtime_status(binary).resolved.is_none() {
+        return TiffanyWorkerReadinessStatus::RuntimeMissing;
+    }
+    TiffanyWorkerReadinessStatus::Ready
+}
+
+fn runtime_config<'a>(
+    config: &'a RawTiffanyOrchestratorConfig,
+    runtime: &str,
+) -> Option<&'a RawTiffanyRuntimeConfig> {
+    config.runtimes.get(runtime).or_else(|| {
+        runtime_aliases(runtime)
+            .iter()
+            .find_map(|alias| config.runtimes.get(*alias))
+    })
+}
+
+fn runtime_aliases(runtime: &str) -> &'static [&'static str] {
+    match runtime {
+        "codex" => &["codex"],
+        "claude-code" | "claude" | "cc" => &["claude-code", "claude", "cc"],
+        _ => &[],
+    }
+}
+
+fn default_binary_for_runtime(runtime: &str) -> String {
+    if is_claude_runtime(runtime) {
+        "claude".to_string()
+    } else if is_codex_runtime(runtime) {
+        "codex".to_string()
+    } else {
+        runtime.to_string()
+    }
+}
+
+fn default_worker_role(roles: &HashMap<String, RawTiffanyRoleConfig>) -> Option<String> {
+    default_worker_role_for_runtime(roles, is_claude_runtime, "worker-cc")
+        .or_else(|| default_worker_role_for_runtime(roles, is_codex_runtime, "worker-codex"))
+}
+
+fn default_worker_role_for_runtime(
+    roles: &HashMap<String, RawTiffanyRoleConfig>,
+    runtime_matches: impl Fn(&str) -> bool,
+    preferred: &str,
+) -> Option<String> {
+    if roles.contains_key(preferred) {
+        return Some(preferred.to_string());
+    }
+    let mut candidates = roles
+        .iter()
+        .filter(|(name, role)| is_worker_role_name(name) && runtime_matches(&role.runtime))
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().next()
+}
+
+fn is_claude_runtime(runtime: &str) -> bool {
+    matches!(runtime, "claude-code" | "claude" | "cc")
+}
+
+fn is_codex_runtime(runtime: &str) -> bool {
+    runtime == "codex"
+}
+
+fn is_worker_role_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    (name.contains("worker") || name.contains("executor")) && !name.contains("reviewer")
+}
+
+fn startup_readiness_lines(readiness: &TiffanyStartupReadiness) -> Vec<Line<'static>> {
+    let runtime_state = if readiness.runtime.resolved.is_some() {
+        "ok"
+    } else {
+        "missing"
+    };
+    let mut lines = vec![readiness_line(
+        "runtime",
+        runtime_state,
+        readiness.runtime.requested.clone(),
+        if readiness.runtime.resolved.is_some() {
+            TIFFANY_SOFT
+        } else {
+            Color::Red
+        },
+    )];
+    match &readiness.config {
+        TiffanyConfigReadiness::Missing { path } => {
+            lines.push(readiness_line(
+                "config",
+                "missing",
+                path.clone(),
+                Color::Red,
+            ));
+            lines.push(readiness_line(
+                "next",
+                "/provider",
+                "/role then /doctor".to_string(),
+                TIFFANY_SOFT,
+            ));
+        }
+        TiffanyConfigReadiness::Invalid { path, message } => {
+            lines.push(readiness_line(
+                "config",
+                "invalid",
+                path.clone(),
+                Color::Red,
+            ));
+            lines.push(readiness_line(
+                "error",
+                "parse",
+                truncate_for_status(message, 80),
+                Color::Red,
+            ));
+        }
+        TiffanyConfigReadiness::Ready(summary) => {
+            lines.push(readiness_line(
+                "config",
+                "ok",
+                format!(
+                    "{} providers · {} models · {} roles · {} runtimes",
+                    summary.providers, summary.models, summary.roles, summary.runtimes
+                ),
+                TIFFANY_SOFT,
+            ));
+            let (state, detail, color) = match &summary.default_worker {
+                Some(worker) => (
+                    worker.status.label(),
+                    format!("{} · {} · {}", worker.role, worker.runtime, worker.binary),
+                    worker.status.color(),
+                ),
+                None => (
+                    "missing",
+                    "register worker-cc or worker-codex".to_string(),
+                    Color::Red,
+                ),
+            };
+            lines.push(readiness_line("worker", state, detail, color));
+        }
+    }
+    lines
+}
+
+impl TiffanyWorkerReadinessStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::ModelMissing => "model-missing",
+            Self::ProviderMissing => "provider-missing",
+            Self::RuntimeMissing => "runtime-missing",
+        }
+    }
+
+    fn color(self) -> Color {
+        match self {
+            Self::Ready => TIFFANY_SOFT,
+            Self::ModelMissing | Self::ProviderMissing | Self::RuntimeMissing => Color::Red,
+        }
+    }
+}
+
+fn readiness_line(
+    label: &'static str,
+    state: &'static str,
+    detail: String,
+    state_color: Color,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            label,
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(state, Style::default().fg(state_color)),
+        Span::raw("  "),
+        Span::styled(detail, Style::default().fg(TIFFANY_DARK)),
+    ])
+}
+
+fn truncate_for_status(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut out = trimmed
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    out.push('…');
+    out
 }
 
 pub(crate) fn contextual_prompt(
@@ -631,6 +1009,93 @@ fn orchestrator_command(bin: &str, config_path: Option<&str>) -> Command {
 fn normalized_orchestrator_bin(bin: &str) -> &str {
     let bin = bin.trim();
     if bin.is_empty() { "orchestrator" } else { bin }
+}
+
+pub(crate) fn runtime_status(bin: &str) -> TiffanyOrchestratorRuntimeStatus {
+    let requested = normalized_orchestrator_bin(bin).to_string();
+    let resolved =
+        resolve_orchestrator_runtime(&requested).map(|path| path.to_string_lossy().into_owned());
+    TiffanyOrchestratorRuntimeStatus {
+        requested,
+        resolved,
+    }
+}
+
+fn resolve_orchestrator_runtime(bin: &str) -> Option<std::path::PathBuf> {
+    let path = expand_home_path(bin);
+    if bin_has_path_separator(bin) || path.is_absolute() {
+        return is_launchable_file(&path).then_some(path);
+    }
+
+    if bin == "orchestrator"
+        && let Ok(current_exe) = std::env::current_exe()
+        && let Some(parent) = current_exe.parent()
+    {
+        let adjacent = parent.join(executable_name("orchestrator"));
+        if is_launchable_file(&adjacent) {
+            return Some(adjacent);
+        }
+    }
+
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .flat_map(|dir| executable_candidates(&dir, bin))
+        .find(|path| is_launchable_file(path))
+}
+
+pub(crate) fn expand_home_path(path: &str) -> std::path::PathBuf {
+    if path == "~" {
+        return dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(path));
+    }
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+    std::path::PathBuf::from(path)
+}
+
+fn bin_has_path_separator(bin: &str) -> bool {
+    bin.contains('/') || bin.contains('\\')
+}
+
+fn executable_candidates(dir: &std::path::Path, bin: &str) -> Vec<std::path::PathBuf> {
+    if cfg!(windows) && std::path::Path::new(bin).extension().is_none() {
+        let pathext = std::env::var_os("PATHEXT")
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+        pathext
+            .split(';')
+            .filter(|ext| !ext.trim().is_empty())
+            .map(|ext| dir.join(format!("{bin}{ext}")))
+            .collect()
+    } else {
+        vec![dir.join(bin)]
+    }
+}
+
+#[cfg(unix)]
+fn is_launchable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.is_file()
+        && path
+            .metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_launchable_file(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
+fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
 }
 
 fn roles_command_args(args: &str) -> Result<Vec<String>, String> {
@@ -3584,7 +4049,7 @@ mod tests {
 
     #[test]
     fn intro_lines_have_tiffany_blue_structure() {
-        let lines = idle_intro_lines(2);
+        let lines = idle_intro_lines_with_readiness(2, None);
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
         assert!(text.contains("◆ T>_  tiffany-loop orchestrator"));
@@ -3599,6 +4064,105 @@ mod tests {
         assert_eq!(lines[2].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[3].spans[2].style.fg, Some(TIFFANY_SOFT));
         assert_eq!(lines[4].spans[2].style.fg, Some(TIFFANY_SOFT));
+    }
+
+    #[test]
+    fn intro_lines_show_missing_startup_readiness() {
+        let missing = std::env::temp_dir().join(format!(
+            "definitely-missing-tiffany-config-{}",
+            std::process::id()
+        ));
+        let config = TiffanyOrchestratorConfig {
+            bin: "definitely-missing-orchestrator".to_string(),
+            extra_args: Vec::new(),
+            config_path: Some(missing.display().to_string()),
+        };
+        let readiness = startup_readiness(Some(&config));
+
+        let lines = idle_intro_lines_with_readiness(0, Some(&readiness));
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("runtime  missing  definitely-missing-orchestrator"));
+        assert!(text.contains("config  missing"));
+        assert!(text.contains("next  /provider  /role then /doctor"));
+        assert!(text.contains("flow  direct / single / full"));
+    }
+
+    #[test]
+    fn intro_lines_show_role_runtime_readiness() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let config_path = temp.path().join("config.yaml");
+        let runtime = temp.path().join(executable_name("claude"));
+        std::fs::write(&runtime, "")?;
+        make_launchable(&runtime)?;
+        std::fs::write(
+            &config_path,
+            format!(
+                "providers:\n  minimax:\n    type: openai\nruntimes:\n  claude-code:\n    type: subprocess\n    binary: {}\nmodels:\n  - id: sonnet\n    provider: minimax\n    name: MiniMax-M3\nroles:\n  worker-cc:\n    model: sonnet\n    runtime: claude-code\nbehavior: {{}}\n",
+                runtime.display()
+            ),
+        )?;
+        let config = TiffanyOrchestratorConfig {
+            bin: "orchestrator".to_string(),
+            extra_args: Vec::new(),
+            config_path: Some(config_path.display().to_string()),
+        };
+        let readiness = startup_readiness(Some(&config));
+
+        let lines = idle_intro_lines_with_readiness(1, Some(&readiness));
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("config  ok  1 providers · 1 models · 1 roles · 1 runtimes"));
+        assert!(text.contains("worker  ready  worker-cc · claude-code"));
+        Ok(())
+    }
+
+    #[test]
+    fn intro_lines_show_worker_runtime_missing() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let config_path = temp.path().join("config.yaml");
+        std::fs::write(
+            &config_path,
+            "providers:\n  minimax:\n    type: openai\nruntimes:\n  codex:\n    type: subprocess\n    binary: definitely-missing-codex\nmodels:\n  - id: minimax-m3-codex\n    provider: minimax\n    name: MiniMax-M3\nroles:\n  worker-codex:\n    model: minimax-m3-codex\n    runtime: codex\nbehavior: {}\n",
+        )?;
+        let config = TiffanyOrchestratorConfig {
+            bin: "orchestrator".to_string(),
+            extra_args: Vec::new(),
+            config_path: Some(config_path.display().to_string()),
+        };
+        let readiness = startup_readiness(Some(&config));
+
+        let lines = idle_intro_lines_with_readiness(0, Some(&readiness));
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(
+            text.contains(
+                "worker  runtime-missing  worker-codex · codex · definitely-missing-codex"
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn intro_lines_show_worker_provider_missing() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let config_path = temp.path().join("config.yaml");
+        std::fs::write(
+            &config_path,
+            "providers: {}\nruntimes:\n  codex:\n    type: subprocess\nmodels:\n  - id: minimax-m3-codex\n    provider: minimax\n    name: MiniMax-M3\nroles:\n  worker-codex:\n    model: minimax-m3-codex\n    runtime: codex\nbehavior: {}\n",
+        )?;
+        let config = TiffanyOrchestratorConfig {
+            bin: "orchestrator".to_string(),
+            extra_args: Vec::new(),
+            config_path: Some(config_path.display().to_string()),
+        };
+        let readiness = startup_readiness(Some(&config));
+
+        let lines = idle_intro_lines_with_readiness(0, Some(&readiness));
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("worker  provider-missing  worker-codex · codex · codex"));
+        Ok(())
     }
 
     #[test]
@@ -5635,6 +6199,55 @@ mod tests {
             orchestrator_command("   ", None).as_std().get_program(),
             "orchestrator"
         );
+    }
+
+    #[test]
+    fn runtime_status_normalizes_empty_bin() {
+        let status = runtime_status("   ");
+
+        assert_eq!(status.requested, "orchestrator");
+    }
+
+    #[test]
+    fn runtime_status_rejects_missing_explicit_path() {
+        let missing = std::env::temp_dir().join(format!(
+            "definitely-missing-tiffany-orchestrator-runtime-{}",
+            std::process::id()
+        ));
+
+        let status = runtime_status(&missing.to_string_lossy());
+
+        assert_eq!(status.resolved, None);
+    }
+
+    #[test]
+    fn runtime_status_accepts_launchable_explicit_path() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let runtime = temp.path().join(executable_name("orchestrator"));
+        std::fs::write(&runtime, "")?;
+        make_launchable(&runtime)?;
+
+        let status = runtime_status(&runtime.to_string_lossy());
+
+        assert_eq!(
+            status.resolved.as_deref(),
+            Some(runtime.to_string_lossy().as_ref())
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn make_launchable(path: &std::path::Path) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(path)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions)
+    }
+
+    #[cfg(not(unix))]
+    fn make_launchable(_path: &std::path::Path) -> std::io::Result<()> {
+        Ok(())
     }
 
     #[test]

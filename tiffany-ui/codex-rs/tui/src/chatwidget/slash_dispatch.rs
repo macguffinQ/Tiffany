@@ -713,7 +713,7 @@ impl ChatWidget {
             .map(|config| config.bin.as_str())
             .filter(|bin| !bin.is_empty())
             .unwrap_or("orchestrator");
-        let runtime = tiffany_orchestrator_runtime_status(bin);
+        let runtime = crate::tiffany_orchestrator::runtime_status(bin);
         let config = self
             .tiffany_orchestrator_config
             .as_ref()
@@ -1568,40 +1568,14 @@ fn orchestrator_config_path(
         .as_deref()
         .filter(|path| !path.trim().is_empty())
     {
-        Some(path) => Some(expand_home_path(path)),
+        Some(path) => Some(crate::tiffany_orchestrator::expand_home_path(path)),
         None => dirs::home_dir().map(|home| home.join(".orchestrator/config.yaml")),
     }
 }
 
-fn expand_home_path(path: &str) -> std::path::PathBuf {
-    if path == "~" {
-        return dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(path));
-    }
-    if let Some(rest) = path.strip_prefix("~/")
-        && let Some(home) = dirs::home_dir()
-    {
-        return home.join(rest);
-    }
-    std::path::PathBuf::from(path)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TiffanyOrchestratorRuntimeStatus {
-    requested: String,
-    resolved: Option<String>,
-}
-
-fn tiffany_orchestrator_runtime_status(bin: &str) -> TiffanyOrchestratorRuntimeStatus {
-    let requested = normalized_tiffany_orchestrator_bin(bin).to_string();
-    let resolved = resolve_tiffany_orchestrator_runtime(&requested)
-        .map(|path| path.to_string_lossy().into_owned());
-    TiffanyOrchestratorRuntimeStatus {
-        requested,
-        resolved,
-    }
-}
-
-fn runtime_status_line(status: &TiffanyOrchestratorRuntimeStatus) -> Line<'static> {
+fn runtime_status_line(
+    status: &crate::tiffany_orchestrator::TiffanyOrchestratorRuntimeStatus,
+) -> Line<'static> {
     if let Some(path) = &status.resolved {
         vec![
             "runtime ".dim(),
@@ -1624,76 +1598,6 @@ fn runtime_status_line(status: &TiffanyOrchestratorRuntimeStatus) -> Line<'stati
             "TIFFANY_ORCHESTRATOR_BIN".bold(),
         ]
         .into()
-    }
-}
-
-fn normalized_tiffany_orchestrator_bin(bin: &str) -> &str {
-    let bin = bin.trim();
-    if bin.is_empty() { "orchestrator" } else { bin }
-}
-
-fn resolve_tiffany_orchestrator_runtime(bin: &str) -> Option<std::path::PathBuf> {
-    let path = expand_home_path(bin);
-    if bin_has_path_separator(bin) || path.is_absolute() {
-        return is_launchable_file(&path).then_some(path);
-    }
-
-    if bin == "orchestrator"
-        && let Ok(current_exe) = std::env::current_exe()
-        && let Some(parent) = current_exe.parent()
-    {
-        let adjacent = parent.join(executable_name("orchestrator"));
-        if is_launchable_file(&adjacent) {
-            return Some(adjacent);
-        }
-    }
-
-    let paths = std::env::var_os("PATH")?;
-    std::env::split_paths(&paths)
-        .flat_map(|dir| executable_candidates(&dir, bin))
-        .find(|path| is_launchable_file(path))
-}
-
-fn bin_has_path_separator(bin: &str) -> bool {
-    bin.contains('/') || bin.contains('\\')
-}
-
-fn executable_candidates(dir: &std::path::Path, bin: &str) -> Vec<std::path::PathBuf> {
-    if cfg!(windows) && std::path::Path::new(bin).extension().is_none() {
-        let pathext = std::env::var_os("PATHEXT")
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
-        pathext
-            .split(';')
-            .filter(|ext| !ext.trim().is_empty())
-            .map(|ext| dir.join(format!("{bin}{ext}")))
-            .collect()
-    } else {
-        vec![dir.join(bin)]
-    }
-}
-
-#[cfg(unix)]
-fn is_launchable_file(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    path.is_file()
-        && path
-            .metadata()
-            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn is_launchable_file(path: &std::path::Path) -> bool {
-    path.is_file()
-}
-
-fn executable_name(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
     }
 }
 
@@ -1899,58 +1803,4 @@ pub(super) fn role_setup_draft_args(draft: &RoleSetupDraft) -> Result<String, St
 fn is_keep_key_marker(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     matches!(normalized.as_str(), "<unchanged>" | "unchanged" | "keep")
-}
-
-#[cfg(test)]
-mod tiffany_orchestrator_runtime_status_tests {
-    use super::*;
-
-    #[test]
-    fn runtime_status_normalizes_empty_bin() {
-        let status = tiffany_orchestrator_runtime_status("   ");
-
-        assert_eq!(status.requested, "orchestrator");
-    }
-
-    #[test]
-    fn runtime_status_rejects_missing_explicit_path() {
-        let missing = std::env::temp_dir().join(format!(
-            "definitely-missing-tiffany-orchestrator-runtime-{}",
-            std::process::id()
-        ));
-
-        let status = tiffany_orchestrator_runtime_status(&missing.to_string_lossy());
-
-        assert_eq!(status.resolved, None);
-    }
-
-    #[test]
-    fn runtime_status_accepts_launchable_explicit_path() -> std::io::Result<()> {
-        let temp = tempfile::tempdir()?;
-        let runtime = temp.path().join(executable_name("orchestrator"));
-        std::fs::write(&runtime, "")?;
-        make_launchable(&runtime)?;
-
-        let status = tiffany_orchestrator_runtime_status(&runtime.to_string_lossy());
-
-        assert_eq!(
-            status.resolved.as_deref(),
-            Some(runtime.to_string_lossy().as_ref())
-        );
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    fn make_launchable(path: &std::path::Path) -> std::io::Result<()> {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = std::fs::metadata(path)?.permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(path, permissions)
-    }
-
-    #[cfg(not(unix))]
-    fn make_launchable(_path: &std::path::Path) -> std::io::Result<()> {
-        Ok(())
-    }
 }
