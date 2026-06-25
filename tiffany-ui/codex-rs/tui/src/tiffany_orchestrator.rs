@@ -82,7 +82,7 @@ impl TiffanyOrchestratorConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 struct TiffanyProgressEvent {
     role: String,
     status: String,
@@ -94,6 +94,9 @@ struct TiffanyProgressEvent {
     cc_agent: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    worker_thread_id: Option<String>,
+    native_session_id: Option<String>,
+    reused: Option<bool>,
     task_prompt: Option<String>,
     content: Option<String>,
     approved: Option<bool>,
@@ -101,6 +104,10 @@ struct TiffanyProgressEvent {
     count: Option<usize>,
     duration_ms: Option<u64>,
     reason: Option<String>,
+    route: Option<String>,
+    route_label: Option<String>,
+    route_reason_label: Option<String>,
+    flow_steps: Option<String>,
 }
 
 #[derive(Default)]
@@ -120,6 +127,9 @@ struct WorkerMeta {
     cc_agent: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    worker_thread_id: Option<String>,
+    native_session_id: Option<String>,
+    reused: Option<bool>,
 }
 
 pub(crate) fn spawn_event_bridge(app_event_tx: AppEventSender, launch: TiffanyOrchestratorLaunch) {
@@ -1754,6 +1764,11 @@ impl BridgeState {
         fill_present(&mut meta.cc_agent, event.cc_agent.as_deref());
         fill_present(&mut meta.model, event.model.as_deref());
         fill_present(&mut meta.provider, event.provider.as_deref());
+        fill_present(&mut meta.worker_thread_id, event.worker_thread_id.as_deref());
+        fill_present(&mut meta.native_session_id, event.native_session_id.as_deref());
+        if event.reused.is_some() {
+            meta.reused = event.reused;
+        }
     }
 
     fn apply_worker_metadata(&self, event: &mut TiffanyProgressEvent) {
@@ -1773,6 +1788,11 @@ impl BridgeState {
         fill_missing(&mut event.cc_agent, meta.cc_agent.as_deref());
         fill_missing(&mut event.model, meta.model.as_deref());
         fill_missing(&mut event.provider, meta.provider.as_deref());
+        fill_missing(&mut event.worker_thread_id, meta.worker_thread_id.as_deref());
+        fill_missing(&mut event.native_session_id, meta.native_session_id.as_deref());
+        if event.reused.is_none() {
+            event.reused = meta.reused;
+        }
     }
 
     fn worker_context_lines(&self) -> Vec<String> {
@@ -1805,6 +1825,17 @@ fn worker_context_line(task_id: &str, meta: &WorkerMeta) -> String {
     }
     if let Some(provider_model) = worker_meta_provider_model_label(meta) {
         parts.push(provider_model);
+    }
+    if let Some(thread_id) = meta.worker_thread_id.as_deref().and_then(nonempty_trimmed) {
+        let state = if meta.reused == Some(true) {
+            "reused"
+        } else {
+            "thread"
+        };
+        parts.push(format!("{state} {}", short_task_id(Some(thread_id)).unwrap_or(thread_id)));
+    }
+    if let Some(native) = meta.native_session_id.as_deref().and_then(nonempty_trimmed) {
+        parts.push(format!("native {}", short_task_id(Some(native)).unwrap_or(native)));
     }
     if let Some(id) = short_task_id(Some(task_id)) {
         parts.push(id.to_string());
@@ -2167,6 +2198,7 @@ fn emit_lines(app_event_tx: &AppEventSender, lines: Vec<Line<'static>>) {
 
 fn status_symbol(event: &TiffanyProgressEvent) -> &'static str {
     match event.status.as_str() {
+        "ready" => "✓",
         "done" => "✓",
         "skipped" => "✓",
         "failed" => "✗",
@@ -2178,6 +2210,7 @@ fn status_symbol(event: &TiffanyProgressEvent) -> &'static str {
 
 fn status_color(event: &TiffanyProgressEvent) -> Color {
     match event.status.as_str() {
+        "ready" => TIFFANY_BLUE,
         "done" => TIFFANY_BLUE,
         "skipped" => TIFFANY_BLUE,
         "failed" => Color::Red,
@@ -2188,8 +2221,11 @@ fn status_color(event: &TiffanyProgressEvent) -> Color {
 }
 
 fn waterfall_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
-    if event.role == "worker" && event.task_id.is_some() {
+    if event.role == "worker" && (event.task_id.is_some() || event.status == "ready") {
         return worker_status_line(event);
+    }
+    if event.role == "orchestrator" && event.route.is_some() {
+        return route_status_line(event);
     }
     if event.role == "reviewer" && event.task_id.is_some() {
         return reviewer_status_line(event);
@@ -2218,6 +2254,25 @@ fn waterfall_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
     ])
 }
 
+fn route_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
+    let color = status_color(event);
+    Line::from(vec![
+        Span::styled(
+            status_symbol(event),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            "route",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(route_lifecycle_title(event), Style::default()),
+    ])
+}
+
 fn reviewer_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
     let color = status_color(event);
     Line::from(vec![
@@ -2239,6 +2294,11 @@ fn reviewer_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
 
 fn worker_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
     let color = status_color(event);
+    let title = if event.status == "ready" && event.task_id.is_none() {
+        worker_ready_title(event)
+    } else {
+        worker_lifecycle_title(event)
+    };
     Line::from(vec![
         Span::styled(
             status_symbol(event),
@@ -2252,7 +2312,7 @@ fn worker_status_line(event: &TiffanyProgressEvent) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(worker_lifecycle_title(event), Style::default()),
+        Span::styled(title, Style::default()),
     ])
 }
 
@@ -2268,6 +2328,12 @@ fn stage_label(event: &TiffanyProgressEvent) -> &'static str {
 }
 
 fn event_title(event: &TiffanyProgressEvent) -> String {
+    if event.role == "orchestrator" && event.route.is_some() {
+        return route_lifecycle_title(event);
+    }
+    if event.role == "worker" && event.status == "ready" && event.task_id.is_none() {
+        return worker_ready_title(event);
+    }
     if event.role == "worker"
         && matches!(event.status.as_str(), "running" | "done" | "failed")
         && event.task_id.is_some()
@@ -2308,6 +2374,52 @@ fn event_title(event: &TiffanyProgressEvent) -> String {
         title = format!("{title} - approved={approved}");
     }
     title
+}
+
+fn worker_ready_title(event: &TiffanyProgressEvent) -> String {
+    let mut parts = vec!["ready".to_string()];
+    if let Some(count) = event.count {
+        parts.push(format!("{count} run(s)"));
+    }
+    if let Some(route) = event
+        .route_label
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .or_else(|| event.route.as_deref().and_then(nonempty_trimmed))
+    {
+        parts.push(route.to_string());
+    }
+    if let Some(flow) = event.flow_steps.as_deref().and_then(nonempty_trimmed) {
+        parts.push(flow.to_string());
+    }
+    parts.join(" · ")
+}
+
+fn route_lifecycle_title(event: &TiffanyProgressEvent) -> String {
+    let route = event
+        .route_label
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .or_else(|| event.route.as_deref().and_then(nonempty_trimmed))
+        .unwrap_or("selected");
+    let action = if event.message.contains("updated") {
+        "updated"
+    } else {
+        "selected"
+    };
+    let mut parts = vec![format!("{action} · {route}")];
+    if let Some(reason) = event
+        .route_reason_label
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .or_else(|| event.reason.as_deref().and_then(nonempty_trimmed))
+    {
+        parts.push(reason.to_string());
+    }
+    if let Some(flow) = event.flow_steps.as_deref().and_then(nonempty_trimmed) {
+        parts.push(flow.to_string());
+    }
+    parts.join(" · ")
 }
 
 fn output_title(event: &TiffanyProgressEvent) -> String {
@@ -2422,6 +2534,11 @@ fn reviewer_lifecycle_title(event: &TiffanyProgressEvent) -> String {
 fn worker_lifecycle_title(event: &TiffanyProgressEvent) -> String {
     let role = worker_role_label(event);
     let action = match event.status.as_str() {
+        "ready" if event.worker_thread_id.is_some() && event.reused == Some(true) => {
+            "thread reused"
+        }
+        "ready" if event.worker_thread_id.is_some() => "thread created",
+        "ready" => "ready",
         "running" => "started",
         "done" => "done",
         "failed" => "failed",
@@ -2440,6 +2557,26 @@ fn worker_lifecycle_title(event: &TiffanyProgressEvent) -> String {
     }
     if let Some(model) = provider_model_label(event) {
         parts.push(model);
+    }
+    if let Some(thread_id) = event
+        .worker_thread_id
+        .as_deref()
+        .and_then(nonempty_trimmed)
+    {
+        parts.push(format!(
+            "thread {}",
+            short_task_id(Some(thread_id)).unwrap_or(thread_id)
+        ));
+    }
+    if let Some(native) = event
+        .native_session_id
+        .as_deref()
+        .and_then(nonempty_trimmed)
+    {
+        parts.push(format!(
+            "native {}",
+            short_task_id(Some(native)).unwrap_or(native)
+        ));
     }
     if let Some(id) = short_task_id(event.task_id.as_deref()) {
         parts.push(id.to_string());
@@ -3264,6 +3401,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("done".to_string()),
             approved: None,
@@ -3271,6 +3411,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         let lines = output_event_lines(&event, "done");
@@ -3298,6 +3442,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: None,
             approved: None,
@@ -3305,6 +3452,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         let worker = TiffanyProgressEvent {
             role: "worker".to_string(),
@@ -3317,6 +3468,9 @@ mod tests {
             cc_agent: None,
             model: Some("MiniMax-M3".to_string()),
             provider: Some("minimax".to_string()),
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: None,
             approved: None,
@@ -3324,6 +3478,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         let reviewer = TiffanyProgressEvent {
             role: "reviewer".to_string(),
@@ -3336,6 +3494,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: None,
             approved: Some(false),
@@ -3343,6 +3504,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         assert_eq!(
@@ -3360,6 +3525,73 @@ mod tests {
     }
 
     #[test]
+    fn route_status_line_uses_route_metadata_without_result_step_noise() {
+        let selected = TiffanyProgressEvent {
+            role: "orchestrator".to_string(),
+            status: "running".to_string(),
+            message: "route selected - direct-answer".to_string(),
+            route: Some("direct-answer".to_string()),
+            route_label: Some("direct".to_string()),
+            route_reason_label: Some("chat/explain".to_string()),
+            flow_steps: Some("worker -> answer".to_string()),
+            ..TiffanyProgressEvent::default()
+        };
+        let updated = TiffanyProgressEvent {
+            status: "warning".to_string(),
+            message: "route updated - single-worker".to_string(),
+            route: Some("single-worker".to_string()),
+            route_label: Some("single".to_string()),
+            route_reason_label: Some("atomic worker".to_string()),
+            flow_steps: Some("worker -> answer".to_string()),
+            ..selected.clone()
+        };
+
+        assert_eq!(
+            line_text(&waterfall_status_line(&selected)),
+            "● route  selected · direct · chat/explain · worker -> answer"
+        );
+        assert_eq!(
+            line_text(&waterfall_status_line(&updated)),
+            "⚠ route  updated · single · atomic worker · worker -> answer"
+        );
+        assert!(!line_text(&waterfall_status_line(&selected)).contains("05 result"));
+    }
+
+    #[test]
+    fn worker_ready_lines_show_route_and_thread_reuse_metadata() {
+        let route_ready = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "ready".to_string(),
+            message: "worker ready - 1 run(s)".to_string(),
+            count: Some(1),
+            route: Some("single-worker".to_string()),
+            route_label: Some("single".to_string()),
+            flow_steps: Some("worker -> answer".to_string()),
+            ..TiffanyProgressEvent::default()
+        };
+        let thread_ready = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "ready".to_string(),
+            message: "worker-cc worker thread reused".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".to_string()),
+            native_session_id: Some("5cee8032-e580-49f9-b0b8-95b0940c5692".to_string()),
+            reused: Some(true),
+            ..TiffanyProgressEvent::default()
+        };
+
+        assert_eq!(
+            line_text(&waterfall_status_line(&route_ready)),
+            "✓ worker  ready · 1 run(s) · single · worker -> answer"
+        );
+        assert_eq!(
+            line_text(&waterfall_status_line(&thread_ready)),
+            "✓ worker  worker-cc thread reused · thread abcdef12 · native 5cee8032 · 12345678"
+        );
+    }
+
+    #[test]
     fn reviewer_status_lines_track_worker_review_lifecycle() {
         let checking = TiffanyProgressEvent {
             role: "reviewer".to_string(),
@@ -3372,6 +3604,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: None,
             approved: None,
@@ -3379,6 +3614,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         assert_eq!(
             line_text(&waterfall_status_line(&checking)),
@@ -3447,6 +3686,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some(
                 "critic>\n{\"approved\":false,\"issues\":[\"missing test\"]}".to_string(),
@@ -3456,6 +3698,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         let visible = visible_content(&event).expect("critic output visible");
         let lines = output_event_lines(&event, &visible);
@@ -3482,6 +3728,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("running tests".to_string()),
             approved: None,
@@ -3489,6 +3738,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         let lines = output_event_lines(&event, "running tests");
@@ -3512,6 +3765,9 @@ mod tests {
             cc_agent: None,
             model: Some("MiniMax-M3".to_string()),
             provider: Some("minimax".to_string()),
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("claude-code assistant: 你好".to_string()),
             approved: None,
@@ -3519,6 +3775,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         assert_eq!(
@@ -3568,6 +3828,9 @@ mod tests {
             cc_agent: None,
             model: Some("MiniMax-M3".to_string()),
             provider: Some("minimax".to_string()),
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("worker-codex stderr: API Error: 400 [1211][模型不存在]".to_string()),
             approved: None,
@@ -3575,6 +3838,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         let visible = visible_content(&event).expect("visible worker error");
@@ -3600,6 +3867,9 @@ mod tests {
             cc_agent: Some("reviewer".to_string()),
             model: Some("MiniMax-M3".to_string()),
             provider: Some("minimax".to_string()),
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: Some("do the work".to_string()),
             content: None,
             approved: None,
@@ -3607,6 +3877,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         state.remember_worker_metadata(&started);
 
@@ -3621,6 +3895,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("done".to_string()),
             approved: None,
@@ -3628,6 +3905,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         state.apply_worker_metadata(&mut output);
         assert_eq!(
@@ -3646,6 +3927,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: None,
             approved: None,
@@ -3653,6 +3937,10 @@ mod tests {
             count: None,
             duration_ms: Some(1_250),
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         state.apply_worker_metadata(&mut done);
         assert_eq!(
@@ -3683,6 +3971,9 @@ mod tests {
             cc_agent: Some("reviewer".to_string()),
             model: Some("MiniMax-M3".to_string()),
             provider: Some("minimax".to_string()),
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: Some(task_prompt.to_string()),
             content: None,
             approved: None,
@@ -3690,6 +3981,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         let mut lines = vec![waterfall_status_line(&event)];
@@ -3719,6 +4014,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: None,
             approved: None,
@@ -3726,6 +4024,10 @@ mod tests {
             count: None,
             duration_ms: Some(1_250),
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         assert_eq!(
@@ -3747,6 +4049,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("{\"approved\":true}".to_string()),
             approved: None,
@@ -3754,6 +4059,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         assert_eq!(
             visible_content(&event).as_deref(),
@@ -3776,6 +4085,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some(
                 r#"{"approved":false,"issues":["worker prompt conflicts with direct answer"],"suggestions":["answer in Chinese"]}"#
@@ -3786,6 +4098,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         let visible = visible_content(&event).expect("visible critic output");
@@ -3809,6 +4125,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("worker-codex stderr: [1211] 模型不存在".to_string()),
             approved: None,
@@ -3816,6 +4135,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         assert_eq!(
@@ -3837,6 +4160,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("结果\n- done".to_string()),
             approved: None,
@@ -3844,6 +4170,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         assert_eq!(visible_content(&event).as_deref(), Some("结果\n- done"));
         assert_eq!(
@@ -3866,6 +4196,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some(format!("claude-code assistant: {long_message}")),
             approved: None,
@@ -3873,6 +4206,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         let visible = visible_content(&event).expect("worker output visible");
@@ -3894,6 +4231,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("claude-code assistant: done".to_string()),
             approved: None,
@@ -3901,6 +4241,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         assert_eq!(visible_content(&event).as_deref(), Some("done"));
@@ -3924,6 +4268,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("claude-code tool_use: tool Bash: cargo test".to_string()),
             approved: None,
@@ -3931,6 +4278,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         assert_eq!(
@@ -3949,6 +4300,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("codex local_shell_call: tool shell: cargo test --all".to_string()),
             approved: None,
@@ -3956,6 +4310,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         assert_eq!(
@@ -3977,6 +4335,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("Final result\n你好！\n我可以帮你写代码。".to_string()),
             approved: None,
@@ -3984,6 +4345,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         assert_eq!(
@@ -4021,6 +4386,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("Final result\n你好！\n我可以帮你写代码。".to_string()),
             approved: None,
@@ -4028,6 +4396,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         let visible = visible_content(&event).expect("visible final result");
 
@@ -4050,6 +4422,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("claude-code assistant: 你好！".to_string()),
             approved: None,
@@ -4057,6 +4432,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         let assistant_visible = visible_content(&assistant).expect("assistant visible");
         assert_eq!(
@@ -4092,6 +4471,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some("claude-code assistant: useful summary".to_string()),
             approved: None,
@@ -4099,6 +4481,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         let result = TiffanyProgressEvent {
             content: Some("claude-code result: useful summary".to_string()),
@@ -4164,6 +4550,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some(
                 r#"{"sub_tasks":[{"prompt":"answer in Chinese","agent_hint":"worker-cc"}]}"#
@@ -4174,6 +4563,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         let planner_visible = visible_content(&planner).expect("planner details visible");
         assert!(planner_visible.contains("plan ready"));
@@ -4194,6 +4587,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some(r#"{"approved":false,"issues":["missing final answer"],"suggestions":["return a concise result"]}"#.to_string()),
             approved: None,
@@ -4201,6 +4597,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
         let reviewer_visible = visible_content(&reviewer).expect("review issue visible");
         assert!(reviewer_visible.contains("needs changes"));
@@ -4223,6 +4623,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some(
                 r#"{"sub_tasks":[{"prompt":"Audit the TUI output path and identify noisy controller messages that are repeated in the visible transcript","agent_hint":"worker-cc"},{"prompt":"Update the forked TUI renderer to keep worker output visible while compacting planner details","agent_hint":"worker-codex"},{"prompt":"Add regression tests for compact planner rendering and preserved reviewer issues","agent_hint":"worker-cc"},{"prompt":"Run the smoke check and summarize the result","agent_hint":"worker-cc"}]}"#
@@ -4233,6 +4636,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         let visible = visible_content(&planner).expect("visible compact plan");
@@ -4260,6 +4667,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some(
                 "critic>\n  {\"approved\": false, \"issues\": [\"Self-contradictory: delegated despite direct-answer instruction\",\n  \"Unnecessary delegation"
@@ -4270,6 +4680,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         let visible = visible_content(&critic).expect("visible critic output");
@@ -4295,6 +4709,9 @@ mod tests {
             cc_agent: None,
             model: None,
             provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
             task_prompt: None,
             content: Some(
                 "planner>\n  {\"sub_tasks\": [{\"prompt\": \"Answer in Chinese and keep the result concise"
@@ -4305,6 +4722,10 @@ mod tests {
             count: None,
             duration_ms: None,
             reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
         };
 
         let visible = visible_content(&planner).expect("visible planner output");
