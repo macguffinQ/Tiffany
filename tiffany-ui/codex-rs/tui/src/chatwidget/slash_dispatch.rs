@@ -233,7 +233,7 @@ impl ChatWidget {
             return;
         }
 
-        let provider = provider.unwrap_or("openai");
+        let provider = provider.unwrap_or("custom");
         let draft =
             provider_setup_initial_draft(provider, self.tiffany_orchestrator_config.as_ref());
         let tx = self.app_event_tx.clone();
@@ -1484,7 +1484,7 @@ fn provider_setup_initial_draft(
 ) -> ProviderSetupDraft {
     let provider = provider.trim();
     let provider = if provider.is_empty() {
-        "openai"
+        "custom"
     } else {
         provider
     };
@@ -1629,7 +1629,7 @@ fn provider_default_env(provider: &str) -> Option<&'static str> {
         "custom" => Some("CUSTOM_API_KEY"),
         "google" | "gemini" => Some("GOOGLE_API_KEY"),
         "ollama" => None,
-        _ => Some("OPENAI_API_KEY"),
+        _ => Some("CUSTOM_API_KEY"),
     }
 }
 

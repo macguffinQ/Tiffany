@@ -573,7 +573,7 @@ AGENTS.md > CLAUDE.md > orchestrator history > Claude Code prior sessions
 7. Entry layer          CLI / terminal chat / ACP / webhook module
 ```
 
-更多细节见 [docs/architecture.md](docs/architecture.md)。
+更多细节见 [docs/architecture.md](docs/architecture.md)，当前工程取舍和后续优先级见 [docs/engineering-plan.md](docs/engineering-plan.md)。
 
 ## 开发
 

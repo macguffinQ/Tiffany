@@ -667,11 +667,11 @@ impl ProviderSetupFieldKind {
     fn choices(self) -> Vec<ProviderSetupChoice> {
         match self {
             ProviderSetupFieldKind::Provider => vec![
-                choice("openai", "openai", "hosted · OPENAI_API_KEY"),
+                choice("custom", "custom", "OpenAI-compatible · custom endpoint"),
+                choice("minimax", "minimax", "OpenAI-compatible · MINIMAX_API_KEY"),
                 choice("anthropic", "anthropic", "hosted · ANTHROPIC_API_KEY"),
                 choice("google", "google", "hosted · GOOGLE_API_KEY"),
                 choice("ollama", "ollama", "local · no api key"),
-                choice("minimax", "minimax", "OpenAI-compatible · MINIMAX_API_KEY"),
                 choice(
                     "deepseek",
                     "deepseek",
@@ -688,7 +688,7 @@ impl ProviderSetupFieldKind {
                     "OpenAI-compatible · MOONSHOT_API_KEY",
                 ),
                 choice("mistral", "mistral", "OpenAI-compatible · MISTRAL_API_KEY"),
-                choice("custom", "custom", "OpenAI-compatible · custom endpoint"),
+                choice("openai", "openai", "hosted · OPENAI_API_KEY"),
             ],
             ProviderSetupFieldKind::Kind => vec![
                 choice("openai-compatible", "openai", "Chat Completions style"),
@@ -743,7 +743,7 @@ fn default_env_for_provider(provider: &str) -> &'static str {
         "mistral" => "MISTRAL_API_KEY",
         "custom" => "CUSTOM_API_KEY",
         "ollama" => "",
-        _ => "OPENAI_API_KEY",
+        _ => "CUSTOM_API_KEY",
     }
 }
 

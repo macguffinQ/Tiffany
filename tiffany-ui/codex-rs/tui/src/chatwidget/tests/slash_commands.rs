@@ -768,17 +768,17 @@ async fn slash_provider_bare_opens_setup_prompt() {
     assert!(popup.contains("Writes"));
     assert!(popup.contains("config provider setup"));
     assert!(popup.contains("Provider"));
-    assert!(popup.contains("openai"));
+    assert!(popup.contains("custom"));
     assert!(popup.contains("Type"));
     assert!(popup.contains("Env"));
-    assert!(popup.contains("OPENAI_API_KEY"));
+    assert!(popup.contains("CUSTOM_API_KEY"));
     assert!(popup.contains("Key"));
     assert!(popup.contains("Endpoint"));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     match rx.try_recv() {
         Ok(AppEvent::TiffanyOrchestratorProviderCommand { args }) => {
-            assert_eq!(args, "setup openai --type openai --env OPENAI_API_KEY");
+            assert_eq!(args, "setup custom --type openai --env CUSTOM_API_KEY");
         }
         other => panic!("expected TiffanyOrchestratorProviderCommand, got {other:?}"),
     }
@@ -800,7 +800,7 @@ async fn slash_provider_setup_dropdown_selects_provider_defaults() {
     assert!(popup.contains("deepseek"));
     assert!(popup.contains("OpenAI-compatible"));
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert!(popup.contains("MiniMax"));
     assert!(popup.contains("MINIMAX_API_KEY"));
@@ -831,7 +831,7 @@ async fn slash_provider_selection_fields_ignore_direct_typing() {
 
     match rx.try_recv() {
         Ok(AppEvent::TiffanyOrchestratorProviderCommand { args }) => {
-            assert_eq!(args, "setup openai --type openai --env OPENAI_API_KEY");
+            assert_eq!(args, "setup custom --type openai --env CUSTOM_API_KEY");
         }
         other => panic!("expected TiffanyOrchestratorProviderCommand, got {other:?}"),
     }

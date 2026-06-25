@@ -706,7 +706,8 @@ Orchestrator auto-merges these into its MCP pool, so workers have access to `git
 
 ## Architecture in depth
 
-See `docs/architecture.md` for the full layered architecture.
+See `docs/architecture.md` for the full layered architecture and
+`docs/engineering-plan.md` for the current product/engineering priorities.
 
 ### Why Rust?
 
