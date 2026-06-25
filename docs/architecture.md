@@ -129,11 +129,12 @@ set.
 
 - The tiffany-loop UI preserves upstream Ratatui/Crossterm rendering, resize,
   history cells, bottom pane, overlays, and exit rendering behavior.
-- Planner, critic, worker, reviewer, and final result events stream through the
+- Planner, critic, worker, reviewer, and worker answer events stream through the
   tiffany-loop orchestrator adapter.
 - Follow-up prompts entered during a run stay queued at the bottom until they execute.
-- Slash commands expose provider setup, role registration, sessions, logs,
-  process capture, routing, context memory, and usage.
+- Native slash commands expose provider setup, role registration, stable worker
+  sessions, diagnostics, status, diff, copy/raw mode, clear, and exit. Older
+  process/log/queue/history helpers remain in the legacy fallback runner.
 - Typing `/` opens a command menu. `Up`/`Down` select and `Enter` confirms.
 
 ## Webhook

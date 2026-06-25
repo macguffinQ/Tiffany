@@ -143,11 +143,11 @@ tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.
 - **多运行时**：Claude Code、Codex CLI、直接 API。
 - **多模型/多提供商**：Anthropic、OpenAI、Google Gemini、Ollama、本地或 OpenAI 兼容端点。
 - **终端 TUI**：主线切到完整 tiffany-loop UI；旧 `orchestrator tui` 仅保留兼容。
-- **tiffany-loop 原生事件流**：`tiffany-loop "..."` 把 route、实际用到的 planner/critic、worker、实际用到的 reviewer 和最终结果写入 tiffany-loop history cell。
+- **tiffany-loop 原生事件流**：`tiffany-loop "..."` 把 route、实际用到的 planner/critic、worker、实际用到的 reviewer 和 worker 回答写入 tiffany-loop history cell。
 - **对话直答策略**：问候、解释、普通问答会直接给出 worker 回答，只展示 route/worker/done 过程；旧 session 日志中可能仍有 `review skipped` 兼容事件。
 - **原生多轮编排**：在 orchestrator mode 下，tiffany-loop 输入框提交会被路由到 orchestrator adapter，不再走普通 tiffany-loop 模型回合。
-- **过程透明**：灰色滚动展示运行过程，`/o` 可折叠或展开后续过程详情。
-- **最终结果清晰**：最终输出为纯文本结果块，方便选中复制；`/result` 可重新输出完整结果。
+- **过程透明**：灰色滚动展示 route、worker、tool call/tool result、stderr 和完成状态；旧 fallback runner 里的 `/o` 仍保留，但不是原生 TUI 主路径命令。
+- **最终结果清晰**：worker 最终输出以对话里的纯文本展示，方便系统选中复制；旧 fallback runner 里的 `/result` 仍保留，但不是原生 TUI 主路径命令。
 - **worker 输出更可读**：worker 流式输出会标记为 `final`、`tool call`、`tool result`、`stderr` 或 `alert`，常见模型、权限、认证、runtime 错误会直接显示一行修复提示。
 - **队列与多轮**：运行中继续输入会进入 tiffany-loop 底部 pending queue，普通消息在当前轮结束后合并为下一批一起执行。
 - **上下文记忆**：支持紧凑/完整/关闭/清空上下文。
@@ -630,7 +630,7 @@ cargo run -- config
 - 运行过程捕获
 - 排队消息
 - 上下文记忆
-- 纯文本最终结果
+- 纯文本最终回答
 - handoff 到 Claude/Codex CLI
 - ACP stdio server
 - 对话流程图摘要

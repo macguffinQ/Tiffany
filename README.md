@@ -189,7 +189,7 @@ Providers: **Anthropic**, **OpenAI**, **Google Gemini**, **Ollama** (local), or 
        │                │            └──────┬───────┘        │
        └────────────────┴───────────────────┴────────────────┘
                           ▼
-                    answer/result
+                    answer
                           │
                           ▼
         Layer 4.5: Session log (consumed by next agent)
@@ -224,18 +224,18 @@ All injected as system-prompt sections, in priority order: **AGENTS.md > CLAUDE.
 ### Terminal Chat
 
 - The active UI direction is the full tiffany-loop UI under `tiffany-ui/`.
-- `tiffany-loop "..."` streams route, planner/critic when used, worker, reviewer when used, and final-result events into tiffany-loop history cells.
+- `tiffany-loop "..."` streams route, planner/critic when used, worker, reviewer when used, and the worker answer into tiffany-loop history cells.
 - Conversational turns are shown as direct worker answers with route/worker/done events only. Older session logs may still contain `review skipped` compatibility events.
 - In orchestrator mode, the tiffany-loop input box submits follow-up prompts to the orchestrator adapter instead of the normal tiffany-loop model turn.
 - The legacy runner keeps a single conversation view with normal terminal scrollback.
 - Native text selection, copy, paste, and mouse scrolling are handled by your terminal.
 - The legacy runner still has upstream-derived terminal primitives, but new UI behavior belongs in the fork.
 - Follow-up messages entered during a run stay in tiffany-loop bottom pending queue; plain prompts merge into the next orchestrator run when the current run finishes.
-- Final worker output is shown as a plain selectable result block.
+- Final worker output is shown as plain selectable text in the conversation.
 - Worker stream rows are labeled as `final`, `tool call`, `tool result`,
   `stderr`, or `alert`, and common failures include a one-line fix hint instead
   of raw adapter JSON.
-- Slash commands cover routing, context memory, process capture, sessions, logs, queue control, and usage.
+- Native slash commands cover provider setup, role registration, stable worker sessions, diagnostics, status, diff, copy/raw mode, clear, and exit. Older process/log/queue/history helper commands remain only in the legacy fallback runner.
 - In tiffany-loop orchestrator mode, `/provider` is native to the tiffany-loop TUI: `/provider` opens a setup form with separate provider/type/env/key/endpoint fields, `/provider edit openai` edits an existing provider with prefilled values, `/provider list` shows config, `/provider env openai OPENAI_API_KEY` stores an env-var reference, and `/provider endpoint openai https://api.openai.com/v1` stores the endpoint.
 - In tiffany-loop orchestrator mode, `/role` opens a dedicated role-registration form with role/provider/model/runtime/team fields; `/roles` remains the list/CLI-style command surface.
 - Typing `/` opens a command menu; `Up`/`Down` selects and `Enter` confirms.
@@ -834,7 +834,7 @@ orchestrator/
 - [x] Single-pane terminal chat
 - [x] Real-time process progress in terminal chat
 - [x] Pauseable/editable terminal follow-up queue
-- [x] Final result replay/copy
+- [x] Plain selectable final answer
 - [x] Terminal `/diff` and `/tests` helpers
 - [x] Role registry view and per-session role selection
 - [x] Claude/Codex CLI handoff packages
