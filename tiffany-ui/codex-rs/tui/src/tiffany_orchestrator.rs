@@ -2011,6 +2011,16 @@ fn diagnostic_hint(error: &str) -> Option<&'static str> {
             "hint: check file permissions, executable bit, macOS privacy access, or run /doctor",
         );
     }
+    if lower.contains("codex")
+        && (lower.contains("unexpected argument")
+            || lower.contains("unknown option")
+            || lower.contains("unrecognized option"))
+        && (lower.contains("--cwd") || lower.contains("--cd"))
+    {
+        return Some(
+            "hint: upgrade Codex CLI or set the role runtime binary to one that supports `codex exec --cd`; then run `/doctor`",
+        );
+    }
     if lower.contains("model not found")
         || lower.contains("unknown model")
         || lower.contains("invalid model")
@@ -3973,6 +3983,25 @@ mod tests {
         assert!(text.contains("next  /doctor  verify the orchestration chain"));
         assert!(!text.contains("Registered roles:"));
         assert!(!text.contains("Register: orchestrator"));
+    }
+
+    #[test]
+    fn failure_lines_suggest_codex_exec_compatibility_fix() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let lines = orchestrator_failure_lines(
+            ExitStatus::from_raw(1 << 8),
+            "codex stderr: error: unexpected argument '--cwd' found\n\
+             Usage: codex exec --cd <DIR> [PROMPT]",
+            "",
+            &[],
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("unexpected argument '--cwd'"));
+        assert!(text.contains("upgrade Codex CLI"));
+        assert!(text.contains("codex exec --cd"));
+        assert!(text.contains("/doctor"));
     }
 
     #[test]
