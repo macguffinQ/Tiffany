@@ -2539,6 +2539,10 @@ fn worker_lifecycle_title(event: &TiffanyProgressEvent) -> String {
         }
         "ready" if event.worker_thread_id.is_some() => "thread created",
         "ready" => "ready",
+        "running" if event.worker_thread_id.is_some() && event.reused == Some(true) => {
+            "started with reused session"
+        }
+        "running" if event.worker_thread_id.is_some() => "started with new session",
         "running" => "started",
         "done" => "done",
         "failed" => "failed",
@@ -3968,6 +3972,42 @@ mod tests {
         assert!(text.contains("  │ 保留上下文里的关键约束"));
         assert!(text.contains("  │ 最后用中文总结。"));
         assert!(!text.contains('…'));
+    }
+
+    #[test]
+    fn worker_started_title_shows_reused_native_session_after_metadata_fill() {
+        let mut state = BridgeState::default();
+        let thread_ready = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "ready".to_string(),
+            message: "worker-cc worker thread reused".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".to_string()),
+            native_session_id: Some("5cee8032-e580-49f9-b0b8-95b0940c5692".to_string()),
+            reused: Some(true),
+            ..TiffanyProgressEvent::default()
+        };
+        state.remember_worker_metadata(&thread_ready);
+
+        let mut started = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "running".to_string(),
+            message: "worker-cc started".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: Some("claude-code".to_string()),
+            model: Some("MiniMax-M3".to_string()),
+            provider: Some("minimax".to_string()),
+            ..TiffanyProgressEvent::default()
+        };
+        state.apply_worker_metadata(&mut started);
+
+        assert_eq!(
+            line_text(&waterfall_status_line(&started)),
+            "● worker  worker-cc started with reused session · claude-code · minimax/MiniMax-M3 · thread abcdef12 · native 5cee8032 · 12345678"
+        );
     }
 
     #[test]
