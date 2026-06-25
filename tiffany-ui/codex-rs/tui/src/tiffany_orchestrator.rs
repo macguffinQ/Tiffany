@@ -3037,6 +3037,38 @@ mod tests {
             .collect::<String>()
     }
 
+    const WORKER_TASK_ID: &str = "12345678-0000-0000-0000-000000000000";
+    fn test_event(role: &str, status: &str, message: &str) -> TiffanyProgressEvent {
+        TiffanyProgressEvent {
+            role: role.to_string(),
+            status: status.to_string(),
+            message: message.to_string(),
+            ..TiffanyProgressEvent::default()
+        }
+    }
+
+    fn worker_event(status: &str, message: &str) -> TiffanyProgressEvent {
+        TiffanyProgressEvent {
+            task_id: Some(WORKER_TASK_ID.to_string()),
+            ..test_event("worker", status, message)
+        }
+    }
+
+    fn worker_output_event(message: &str, agent: &str, content: &str) -> TiffanyProgressEvent {
+        TiffanyProgressEvent {
+            agent: Some(agent.to_string()),
+            content: Some(content.to_string()),
+            ..worker_event("output", message)
+        }
+    }
+
+    fn role_output_event(role: &str, content: &str) -> TiffanyProgressEvent {
+        TiffanyProgressEvent {
+            content: Some(content.to_string()),
+            ..test_event(role, "output", &format!("{role} output"))
+        }
+    }
+
     #[test]
     fn intro_lines_have_tiffany_blue_structure() {
         let lines = idle_intro_lines();
@@ -3390,32 +3422,7 @@ mod tests {
 
     #[test]
     fn output_lines_use_tiffany_blue_source_and_gutter() {
-        let event = TiffanyProgressEvent {
-            role: "worker".to_string(),
-            status: "output".to_string(),
-            message: "claude output".to_string(),
-            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
-            agent: Some("claude-code".to_string()),
-            worker_role: None,
-            runtime: None,
-            cc_agent: None,
-            model: None,
-            provider: None,
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some("done".to_string()),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
-        };
+        let event = worker_output_event("claude output", "claude-code", "done");
 
         let lines = output_event_lines(&event, "done");
 
@@ -3718,30 +3725,8 @@ mod tests {
     #[test]
     fn worker_output_title_keeps_route_and_runtime() {
         let event = TiffanyProgressEvent {
-            role: "worker".to_string(),
-            status: "output".to_string(),
-            message: "worker output".to_string(),
-            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
-            agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
-            runtime: None,
-            cc_agent: None,
-            model: None,
-            provider: None,
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some("running tests".to_string()),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
+            ..worker_output_event("worker output", "claude-code", "running tests")
         };
 
         let lines = output_event_lines(&event, "running tests");
@@ -3818,30 +3803,14 @@ mod tests {
     #[test]
     fn worker_error_output_adds_actionable_fix_line() {
         let event = TiffanyProgressEvent {
-            role: "worker".to_string(),
-            status: "output".to_string(),
-            message: "worker output".to_string(),
-            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
-            agent: Some("worker-codex".to_string()),
             worker_role: Some("worker-codex".to_string()),
-            runtime: None,
-            cc_agent: None,
             model: Some("MiniMax-M3".to_string()),
             provider: Some("minimax".to_string()),
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some("worker-codex stderr: API Error: 400 [1211][模型不存在]".to_string()),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
+            ..worker_output_event(
+                "worker output",
+                "worker-codex",
+                "worker-codex stderr: API Error: 400 [1211][模型不存在]",
+            )
         };
 
         let visible = visible_content(&event).expect("visible worker error");
@@ -4074,35 +4043,10 @@ mod tests {
 
     #[test]
     fn expands_structured_reviewer_issues() {
-        let event = TiffanyProgressEvent {
-            role: "critic".to_string(),
-            status: "output".to_string(),
-            message: "critic output".to_string(),
-            task_id: None,
-            agent: None,
-            worker_role: None,
-            runtime: None,
-            cc_agent: None,
-            model: None,
-            provider: None,
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some(
-                r#"{"approved":false,"issues":["worker prompt conflicts with direct answer"],"suggestions":["answer in Chinese"]}"#
-                    .to_string(),
-            ),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
-        };
+        let event = role_output_event(
+            "critic",
+            r#"{"approved":false,"issues":["worker prompt conflicts with direct answer"],"suggestions":["answer in Chinese"]}"#,
+        );
 
         let visible = visible_content(&event).expect("visible critic output");
 
@@ -4114,32 +4058,11 @@ mod tests {
 
     #[test]
     fn shows_actionable_stderr_instead_of_hiding_model_errors() {
-        let event = TiffanyProgressEvent {
-            role: "worker".to_string(),
-            status: "output".to_string(),
-            message: "codex output".to_string(),
-            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
-            agent: Some("worker-codex".to_string()),
-            worker_role: None,
-            runtime: None,
-            cc_agent: None,
-            model: None,
-            provider: None,
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some("worker-codex stderr: [1211] 模型不存在".to_string()),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
-        };
+        let event = worker_output_event(
+            "codex output",
+            "worker-codex",
+            "worker-codex stderr: [1211] 模型不存在",
+        );
 
         assert_eq!(
             visible_content(&event).as_deref(),
@@ -4185,32 +4108,11 @@ mod tests {
     #[test]
     fn keeps_full_worker_message_stream_without_truncation() {
         let long_message = format!("{}END", "x".repeat(CONTROL_SUMMARY_MAX_CHARS + 128));
-        let event = TiffanyProgressEvent {
-            role: "worker".to_string(),
-            status: "output".to_string(),
-            message: "claude output".to_string(),
-            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
-            agent: Some("claude-code".to_string()),
-            worker_role: None,
-            runtime: None,
-            cc_agent: None,
-            model: None,
-            provider: None,
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some(format!("claude-code assistant: {long_message}")),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
-        };
+        let event = worker_output_event(
+            "claude output",
+            "claude-code",
+            &format!("claude-code assistant: {long_message}"),
+        );
 
         let visible = visible_content(&event).expect("worker output visible");
 
@@ -4220,32 +4122,11 @@ mod tests {
 
     #[test]
     fn strips_runtime_prefix_for_manual_style_output() {
-        let event = TiffanyProgressEvent {
-            role: "worker".to_string(),
-            status: "output".to_string(),
-            message: "claude output".to_string(),
-            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
-            agent: Some("claude-code".to_string()),
-            worker_role: None,
-            runtime: None,
-            cc_agent: None,
-            model: None,
-            provider: None,
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some("claude-code assistant: done".to_string()),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
-        };
+        let event = worker_output_event(
+            "claude output",
+            "claude-code",
+            "claude-code assistant: done",
+        );
 
         assert_eq!(visible_content(&event).as_deref(), Some("done"));
         assert_eq!(output_label(&event), "claude-code · 12345678");
@@ -4258,30 +4139,12 @@ mod tests {
     #[test]
     fn strips_runtime_prefix_for_tool_output() {
         let event = TiffanyProgressEvent {
-            role: "worker".to_string(),
-            status: "output".to_string(),
-            message: "claude output".to_string(),
-            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
-            agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
-            runtime: None,
-            cc_agent: None,
-            model: None,
-            provider: None,
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some("claude-code tool_use: tool Bash: cargo test".to_string()),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
+            ..worker_output_event(
+                "claude output",
+                "claude-code",
+                "claude-code tool_use: tool Bash: cargo test",
+            )
         };
 
         assert_eq!(
@@ -4290,30 +4153,12 @@ mod tests {
         );
 
         let event = TiffanyProgressEvent {
-            role: "worker".to_string(),
-            status: "output".to_string(),
-            message: "codex output".to_string(),
-            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
-            agent: Some("worker-codex".to_string()),
             worker_role: Some("worker-codex".to_string()),
-            runtime: None,
-            cc_agent: None,
-            model: None,
-            provider: None,
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some("codex local_shell_call: tool shell: cargo test --all".to_string()),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
+            ..worker_output_event(
+                "codex output",
+                "worker-codex",
+                "codex local_shell_call: tool shell: cargo test --all",
+            )
         };
 
         assert_eq!(
@@ -4412,30 +4257,8 @@ mod tests {
     #[test]
     fn captures_assistant_output_but_not_worker_process_noise_for_memory() {
         let assistant = TiffanyProgressEvent {
-            role: "worker".to_string(),
-            status: "output".to_string(),
-            message: "worker output".to_string(),
-            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
-            agent: Some("claude-code".to_string()),
             worker_role: Some("worker-cc".to_string()),
-            runtime: None,
-            cc_agent: None,
-            model: None,
-            provider: None,
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some("claude-code assistant: 你好！".to_string()),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
+            ..worker_output_event("worker output", "claude-code", "claude-code assistant: 你好！")
         };
         let assistant_visible = visible_content(&assistant).expect("assistant visible");
         assert_eq!(
@@ -4460,32 +4283,11 @@ mod tests {
 
     #[test]
     fn output_dedupe_key_ignores_runtime_event_kind_after_visible_cleanup() {
-        let assistant = TiffanyProgressEvent {
-            role: "worker".to_string(),
-            status: "output".to_string(),
-            message: "claude output".to_string(),
-            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
-            agent: Some("claude-code".to_string()),
-            worker_role: None,
-            runtime: None,
-            cc_agent: None,
-            model: None,
-            provider: None,
-            worker_thread_id: None,
-            native_session_id: None,
-            reused: None,
-            task_prompt: None,
-            content: Some("claude-code assistant: useful summary".to_string()),
-            approved: None,
-            issues: None,
-            count: None,
-            duration_ms: None,
-            reason: None,
-            route: None,
-            route_label: None,
-            route_reason_label: None,
-            flow_steps: None,
-        };
+        let assistant = worker_output_event(
+            "claude output",
+            "claude-code",
+            "claude-code assistant: useful summary",
+        );
         let result = TiffanyProgressEvent {
             content: Some("claude-code result: useful summary".to_string()),
             ..assistant.clone()
