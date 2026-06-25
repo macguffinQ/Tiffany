@@ -874,7 +874,7 @@ impl Orchestrator {
                                         &agent,
                                         &worker_role,
                                         &format!(
-                                            "native session {} is already in use; cleared saved session and retrying once",
+                                            "native session busy · cleared saved session {} and retrying once with a fresh native session",
                                             previous_native.as_deref().unwrap_or("unknown")
                                         ),
                                     );
@@ -3513,8 +3513,9 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         while let Ok(event) = second_rx.try_recv() {
             match event {
                 RunProgress::WorkerOutput { content, .. } => {
-                    saw_retry_notice |=
-                        content.contains("retrying once") && content.contains("native-busy");
+                    saw_retry_notice |= content.contains("native session busy")
+                        && content.contains("retrying once")
+                        && content.contains("native-busy");
                 }
                 RunProgress::WorkerDone { ok, .. } => {
                     saw_success |= ok;

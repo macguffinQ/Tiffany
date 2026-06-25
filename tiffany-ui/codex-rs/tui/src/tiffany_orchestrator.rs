@@ -2882,6 +2882,9 @@ fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
     let Some(raw) = event.content.as_deref() else {
         return "output";
     };
+    if looks_like_native_session_recovery(raw) {
+        return "session recovery";
+    }
     match event_format::visible_agent_output(raw, CONTROL_SUMMARY_MAX_CHARS).map(|view| view.kind) {
         Some(event_format::VisibleAgentOutputKind::Final) => "final",
         Some(event_format::VisibleAgentOutputKind::Question) => "question",
@@ -2891,6 +2894,13 @@ fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
         Some(event_format::VisibleAgentOutputKind::Actionable) => "alert",
         Some(event_format::VisibleAgentOutputKind::Normal) | None => "output",
     }
+}
+
+fn looks_like_native_session_recovery(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    lower.contains("native session busy")
+        && lower.contains("cleared saved session")
+        && lower.contains("retrying once")
 }
 
 fn output_label(event: &TiffanyProgressEvent) -> String {
@@ -3148,6 +3158,13 @@ fn final_output_candidate(content: &str) -> Option<String> {
 
 fn final_output_from_event(event: &TiffanyProgressEvent, visible: &str) -> Option<String> {
     if event.role != "worker" || event.status != "output" {
+        return None;
+    }
+    if event
+        .content
+        .as_deref()
+        .is_some_and(looks_like_native_session_recovery)
+    {
         return None;
     }
     if let Some(result) = event.content.as_deref().and_then(final_output_candidate) {
@@ -4456,6 +4473,34 @@ mod tests {
         assert!(text.contains("worker stderr · worker-codex · minimax/MiniMax-M3 · 12345678"));
         assert!(text.contains("fix model not found"));
         assert!(text.contains("Check the role's provider/model in /role"));
+    }
+
+    #[test]
+    fn worker_native_session_recovery_output_is_labeled_and_not_captured_as_final() {
+        let event = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            model: Some("claude-sonnet-4-6".to_string()),
+            provider: Some("anthropic".to_string()),
+            worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".to_string()),
+            native_session_id: Some("native-fresh".to_string()),
+            reused: Some(true),
+            ..worker_output_event(
+                "worker output",
+                "claude-code",
+                "claude-code status: native session busy · cleared saved session native-busy and retrying once with a fresh native session",
+            )
+        };
+
+        let visible = visible_content(&event).expect("visible recovery output");
+        let lines = output_event_lines(&event, &visible);
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains(
+            "worker session recovery · worker-cc · claude-code · anthropic/claude-sonnet-4-6 · 12345678"
+        ));
+        assert!(text.contains("native session busy"));
+        assert!(text.contains("retrying once with a fresh native session"));
+        assert_eq!(final_output_from_event(&event, &visible), None);
     }
 
     #[test]
