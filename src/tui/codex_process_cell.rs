@@ -164,7 +164,7 @@ fn visible_progress_key_for_event(event: &RunProgress, line: &str) -> String {
                 agent,
                 event_kind
             ),
-            &visible_worker_output_dedupe_display(content)
+            &visible_worker_output_dedupe_display(event_kind, content)
                 .unwrap_or_else(|| truncate_chars(line.trim(), 240)),
         ),
         RunProgress::RoleOutput { role, content } => visible_output_key(
@@ -189,7 +189,7 @@ fn visible_worker_output_line(
     } else {
         PROGRESS_OUTPUT_EXPANDED_LIMIT
     };
-    let output = visible_worker_output_display(content, max)?;
+    let output = visible_worker_output_display(event_kind, content, max)?;
     let scope = format!(
         "worker:{}:{}:{}:{}",
         short_task_id(task_id),
@@ -197,8 +197,8 @@ fn visible_worker_output_line(
         agent,
         event_kind
     );
-    let dedupe_display =
-        visible_worker_output_dedupe_display(content).unwrap_or_else(|| output.display.clone());
+    let dedupe_display = visible_worker_output_dedupe_display(event_kind, content)
+        .unwrap_or_else(|| output.display.clone());
     if output_was_already_visible(input, &scope, &dedupe_display) {
         return None;
     }
@@ -317,17 +317,28 @@ struct VisibleWorkerOutputDisplay {
     display: String,
 }
 
-fn visible_worker_output_display(content: &str, max: usize) -> Option<VisibleWorkerOutputDisplay> {
-    if let Some(final_output) = agent_events::visible_agent_output(content, FINAL_OUTPUT_MAX_CHARS)
-        .filter(|output| output.kind == agent_events::VisibleAgentOutputKind::Final)
-    {
-        return Some(VisibleWorkerOutputDisplay {
-            kind: final_output.kind,
-            display: format_captured_final_result(&final_output.display),
-        });
+fn visible_worker_output_display(
+    event_kind: &str,
+    content: &str,
+    max: usize,
+) -> Option<VisibleWorkerOutputDisplay> {
+    let event_kind_output_kind = agent_events::visible_agent_output_kind_for_event_kind(event_kind);
+    if !event_kind_output_kind.is_some_and(agent_events::VisibleAgentOutputKind::is_process_event) {
+        if let Some(final_output) =
+            agent_events::visible_agent_output(content, FINAL_OUTPUT_MAX_CHARS)
+                .filter(|output| output.kind == agent_events::VisibleAgentOutputKind::Final)
+        {
+            return Some(VisibleWorkerOutputDisplay {
+                kind: final_output.kind,
+                display: format_captured_final_result(&final_output.display),
+            });
+        }
     }
 
-    let output = agent_events::visible_agent_output(content, max)?;
+    let mut output = agent_events::visible_agent_output(content, max)?;
+    if let Some(kind) = event_kind_output_kind {
+        output.kind = kind;
+    }
     if output.kind == agent_events::VisibleAgentOutputKind::Normal
         && worker_output_is_final_like_display(&output.display)
     {
@@ -342,9 +353,14 @@ fn visible_worker_output_display(content: &str, max: usize) -> Option<VisibleWor
     })
 }
 
-fn visible_worker_output_dedupe_display(content: &str) -> Option<String> {
-    agent_events::visible_agent_output(content, PROGRESS_OUTPUT_EXPANDED_LIMIT)
-        .map(|output| output.dedupe_key)
+fn visible_worker_output_dedupe_display(event_kind: &str, content: &str) -> Option<String> {
+    agent_events::visible_agent_output(content, PROGRESS_OUTPUT_EXPANDED_LIMIT).map(|output| {
+        format!(
+            "{}:{}",
+            event_kind.trim(),
+            truncate_chars(&output.dedupe_key, PROGRESS_OUTPUT_EXPANDED_LIMIT)
+        )
+    })
 }
 
 fn visible_role_output_display(role: &str, content: &str, max: usize) -> Option<String> {
@@ -683,6 +699,35 @@ mod tests {
         assert_eq!(result.0, "✓");
         assert!(result.2.contains("END"));
         assert!(!result.2.contains("…"));
+    }
+
+    #[test]
+    fn event_kind_keeps_long_tool_result_out_of_final_capture() {
+        let task_id = uuid::Uuid::nil();
+        let long = format!("first line\n{}\nEND", "x".repeat(4_500));
+        let input = InputState {
+            history_folded: false,
+            ..InputState::default()
+        };
+
+        let result = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "tool_result".into(),
+                content: format!("tool result: {long}"),
+            },
+            0,
+            &input,
+        )
+        .expect("long tool result should be visible");
+
+        assert_eq!(result.0, "✓");
+        assert!(result.2.contains("worker-cc · claude-code · tool result"));
+        assert!(result.2.contains("first line"));
+        assert!(result.2.contains("END"));
+        assert!(!result.2.contains("final response captured"));
     }
 
     #[test]

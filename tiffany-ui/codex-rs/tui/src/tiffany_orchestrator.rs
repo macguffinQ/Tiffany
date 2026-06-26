@@ -1107,6 +1107,7 @@ pub(crate) fn spawn_native_history_import(
 struct NativeHistoryOptions {
     turn_limit: usize,
     event_limit_per_turn: usize,
+    full_event_content: bool,
     filter: Option<NativeHistoryFilter>,
 }
 
@@ -1158,11 +1159,13 @@ impl NativeHistoryCommand {
             [] | ["last"] | ["summary"] => Ok(Self::Show(NativeHistoryOptions {
                 turn_limit: 5,
                 event_limit_per_turn: 6,
+                full_event_content: false,
                 filter: None,
             })),
             ["full"] | ["all"] => Ok(Self::Show(NativeHistoryOptions {
                 turn_limit: 10,
-                event_limit_per_turn: 20,
+                event_limit_per_turn: usize::MAX,
+                full_event_content: true,
                 filter: None,
             })),
             [count] if count.parse::<usize>().is_ok() => {
@@ -1173,18 +1176,21 @@ impl NativeHistoryCommand {
                 Ok(Self::Show(NativeHistoryOptions {
                     turn_limit: count.min(50),
                     event_limit_per_turn: 10,
+                    full_event_content: false,
                     filter: None,
                 }))
             }
             ["role", role] => Ok(Self::Show(NativeHistoryOptions {
                 turn_limit: 20,
-                event_limit_per_turn: 20,
+                event_limit_per_turn: usize::MAX,
+                full_event_content: true,
                 filter: Some(NativeHistoryFilter::Role(role.to_string())),
             })),
             ["role", ..] => Err("history role needs <role>".to_string()),
             ["thread", thread] => Ok(Self::Show(NativeHistoryOptions {
                 turn_limit: 20,
-                event_limit_per_turn: 20,
+                event_limit_per_turn: usize::MAX,
+                full_event_content: true,
                 filter: Some(NativeHistoryFilter::Thread(thread.to_string())),
             })),
             ["thread", ..] => Err("history thread needs <id>".to_string()),
@@ -1295,7 +1301,12 @@ fn native_history_conversation_lines(
             &format!("   answer {}", truncate_text(&one_line(&turn.result), 140)),
             true,
         ));
-        append_native_history_event_lines(&mut lines, turn, opts.event_limit_per_turn);
+        append_native_history_event_lines(
+            &mut lines,
+            turn,
+            opts.event_limit_per_turn,
+            opts.full_event_content,
+        );
     }
 
     if total_turns > opts.turn_limit {
@@ -1618,6 +1629,7 @@ fn append_native_history_event_lines(
     lines: &mut Vec<Line<'static>>,
     turn: &NativeHistoryTurnView<'_>,
     limit: usize,
+    full_event_content: bool,
 ) {
     if turn.events.is_empty() {
         lines.push(body_line("   native events none captured", true));
@@ -1642,14 +1654,20 @@ fn append_native_history_event_lines(
             lines.push(detail_continuation_line(&format!("kind: {kind}")));
         }
         if let Some(content) = event.content.as_deref().and_then(nonempty_trimmed) {
-            for line in content.lines().take(4) {
-                lines.push(detail_continuation_line(&truncate_text(line, 180)));
-            }
-            let hidden = content.lines().count().saturating_sub(4);
-            if hidden > 0 {
-                lines.push(detail_continuation_line(&format!(
-                    "… {hidden} more line(s)"
-                )));
+            if full_event_content {
+                for line in content.lines() {
+                    lines.push(detail_continuation_line(line));
+                }
+            } else {
+                for line in content.lines().take(4) {
+                    lines.push(detail_continuation_line(&truncate_text(line, 180)));
+                }
+                let hidden = content.lines().count().saturating_sub(4);
+                if hidden > 0 {
+                    lines.push(detail_continuation_line(&format!(
+                        "… {hidden} more line(s); /history full shows complete content"
+                    )));
+                }
             }
         }
     }
@@ -6147,6 +6165,58 @@ mod tests {
         assert!(text.contains("thread abcdef12"));
         assert!(text.contains("/history full"));
         assert!(text.contains("/thread <role>"));
+    }
+
+    #[test]
+    fn native_history_full_expands_complete_event_content() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let long_content = (1..=8)
+            .map(|idx| format!("line {idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "跑测试".into(),
+                result: "测试完成".into(),
+            },
+            vec![TiffanyNativeChatEvent {
+                role: "worker".into(),
+                status: "output".into(),
+                title: "worker tool result · worker-cc · claude-code".into(),
+                kind: Some("tool_result".into()),
+                content: Some(long_content),
+                agent: Some("claude-code".into()),
+                worker_role: Some("worker-cc".into()),
+                model: Some("claude-sonnet-4-6".into()),
+                provider: Some("anthropic".into()),
+                task_id: Some("abc12345".into()),
+                worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
+                native_session_id: Some("native-1".into()),
+            }],
+        )
+        .expect("append");
+
+        let summary = native_history_lines(home.path(), cwd.path(), "")
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(summary.contains("line 1"));
+        assert!(!summary.contains("line 8"));
+        assert!(summary.contains("/history full shows complete content"));
+
+        let full = native_history_lines(home.path(), cwd.path(), "full")
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(full.contains("line 1"));
+        assert!(full.contains("line 8"));
+        assert!(!full.contains("more line(s)"));
     }
 
     #[test]

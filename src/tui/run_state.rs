@@ -24,7 +24,7 @@ use unicode_width::UnicodeWidthChar;
 
 const FINAL_RESULT_WRAP_WIDTH: usize = 100;
 const FINAL_OUTPUT_MAX_CHARS: usize = 240_000;
-const RUN_CHAT_OUTPUT_MAX_CHARS: usize = 8_000;
+const RUN_CHAT_OUTPUT_MAX_CHARS: usize = FINAL_OUTPUT_MAX_CHARS;
 
 pub(super) struct RunController {
     orch: Arc<Orchestrator>,
@@ -243,9 +243,13 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
         | RunProgress::WorkerStarted { .. }
         | RunProgress::Reviewing { .. }
         | RunProgress::ReviewSkipped { .. } => {}
-        RunProgress::WorkerOutput { content, .. } => {
-            remember_worker_output(input, &content);
-            capture_worker_output_as_chat(input, &content);
+        RunProgress::WorkerOutput {
+            event_kind,
+            content,
+            ..
+        } => {
+            remember_worker_output(input, &event_kind, &content);
+            capture_worker_output_as_chat(input, &event_kind, &content);
         }
         RunProgress::RoleOutput { .. } => {}
         RunProgress::WorkerDone {
@@ -414,13 +418,13 @@ fn update_last_assistant(input: &mut InputState, content: String, status: &str) 
     }
 }
 
-fn remember_worker_output(input: &mut InputState, content: &str) {
+fn remember_worker_output(input: &mut InputState, event_kind: &str, content: &str) {
     let display = humanize_jsonish(content, FINAL_OUTPUT_MAX_CHARS);
     if display.trim().is_empty() || is_low_value_worker_output(&display) {
         return;
     }
 
-    if let Some(final_output) = worker_final_output_candidate(content) {
+    if let Some(final_output) = worker_final_output_candidate(event_kind, content) {
         remember_better_text(&mut input.run_final_output, final_output);
     }
     let normalized = normalize_chat_worker_output(&display);
@@ -429,8 +433,8 @@ fn remember_worker_output(input: &mut InputState, content: &str) {
     }
 }
 
-fn capture_worker_output_as_chat(input: &mut InputState, content: &str) {
-    if worker_final_output_candidate(content).is_some() {
+fn capture_worker_output_as_chat(input: &mut InputState, event_kind: &str, content: &str) {
+    if worker_final_output_candidate(event_kind, content).is_some() {
         return;
     }
 
@@ -443,7 +447,7 @@ fn capture_worker_output_as_chat(input: &mut InputState, content: &str) {
     if normalized.trim().is_empty() || is_low_value_worker_output(&normalized) {
         return;
     }
-    if looks_like_final_answer(&normalized) {
+    if looks_like_final_answer(event_kind, &normalized) {
         return;
     }
 
@@ -458,7 +462,7 @@ fn capture_worker_output_as_chat(input: &mut InputState, content: &str) {
 
     let msg = ChatMsg {
         role: "tool".into(),
-        content: truncate_chars(&normalized, RUN_CHAT_OUTPUT_MAX_CHARS),
+        content: normalized,
         ts: std::time::SystemTime::now(),
         status: "complete".into(),
     };
@@ -474,7 +478,12 @@ fn capture_worker_output_as_chat(input: &mut InputState, content: &str) {
     }
 }
 
-fn looks_like_final_answer(text: &str) -> bool {
+fn looks_like_final_answer(event_kind: &str, text: &str) -> bool {
+    if agent_events::visible_agent_output_kind_for_event_kind(event_kind)
+        .is_some_and(|kind| kind.is_process_event())
+    {
+        return false;
+    }
     let text = text.trim();
     text.lines().filter(|line| !line.trim().is_empty()).count() >= 2 || text.chars().count() > 180
 }
@@ -507,7 +516,12 @@ fn remember_better_text(slot: &mut Option<String>, candidate: String) {
     }
 }
 
-fn worker_final_output_candidate(content: &str) -> Option<String> {
+fn worker_final_output_candidate(event_kind: &str, content: &str) -> Option<String> {
+    if agent_events::visible_agent_output_kind_for_event_kind(event_kind)
+        .is_some_and(|kind| kind.is_process_event())
+    {
+        return None;
+    }
     agent_events::final_output_candidate(content, FINAL_OUTPUT_MAX_CHARS)
 }
 
@@ -733,6 +747,7 @@ mod tests {
     #[test]
     fn final_result_is_extracted_from_worker_result_output() {
         let result = worker_final_output_candidate(
+            "result",
             "claude-code result: {\"result\":\"Implemented the requested TUI changes.\"}",
         )
         .expect("final result");
@@ -784,9 +799,10 @@ mod tests {
 
         remember_worker_output(
             &mut input,
+            "result",
             "claude-code result: first paragraph\nsecond paragraph",
         );
-        remember_worker_output(&mut input, "claude-code result: short");
+        remember_worker_output(&mut input, "result", "claude-code result: short");
 
         let result = final_output_for_run(&input).expect("final output");
         assert_eq!(result, "first paragraph\nsecond paragraph");
@@ -798,9 +814,10 @@ mod tests {
 
         remember_worker_output(
             &mut input,
+            "assistant",
             "claude-code assistant: full answer paragraph one\nfull answer paragraph two",
         );
-        remember_worker_output(&mut input, "claude-code result: done");
+        remember_worker_output(&mut input, "result", "claude-code result: done");
 
         let result = final_output_for_run(&input).expect("final output");
         assert_eq!(
@@ -813,12 +830,36 @@ mod tests {
     fn worker_process_output_is_captured_as_tool_message() {
         let mut input = InputState::default();
 
-        capture_worker_output_as_chat(&mut input, "claude-code tool_use: Bash(cargo test)");
-        capture_worker_output_as_chat(&mut input, "claude-code tool_use: Bash(cargo test)");
+        capture_worker_output_as_chat(
+            &mut input,
+            "tool_use",
+            "claude-code tool_use: Bash(cargo test)",
+        );
+        capture_worker_output_as_chat(
+            &mut input,
+            "tool_use",
+            "claude-code tool_use: Bash(cargo test)",
+        );
 
         assert_eq!(input.transcript.len(), 1);
         assert_eq!(input.transcript[0].role, "tool");
         assert_eq!(input.transcript[0].content, "Bash(cargo test)");
+    }
+
+    #[test]
+    fn long_tool_result_is_not_hidden_as_final_answer() {
+        let mut input = InputState::default();
+        let long_tool_result = format!(
+            "claude-code tool_result: tool result: first line\n{}\nEND",
+            "x".repeat(12_000)
+        );
+
+        capture_worker_output_as_chat(&mut input, "tool_result", &long_tool_result);
+
+        assert_eq!(input.transcript.len(), 1);
+        assert_eq!(input.transcript[0].role, "tool");
+        assert!(input.transcript[0].content.contains("first line"));
+        assert!(input.transcript[0].content.contains("END"));
     }
 
     #[test]
@@ -979,6 +1020,7 @@ mod tests {
 
         capture_worker_output_as_chat(
             &mut input,
+            "assistant",
             "claude-code assistant: paragraph one\nparagraph two",
         );
 
