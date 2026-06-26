@@ -3047,6 +3047,7 @@ fn thread_detail_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
     push_thread_meta(&mut lines, "model", fields.get("model"));
     push_thread_meta(&mut lines, "native", Some(&native));
     push_thread_meta(&mut lines, "resume", fields.get("native resume"));
+    push_thread_meta(&mut lines, "handoff", fields.get("native handoff"));
     push_thread_meta(&mut lines, "thread", fields.get("tiffany thread"));
     push_thread_meta(&mut lines, "last", fields.get("last tiffany session"));
     push_thread_meta(&mut lines, "work", fields.get("worktree"));
@@ -6946,6 +6947,7 @@ mod tests {
                Tiffany thread: 00000000-0000-0000-0000-000000000123\n\
                native session: codex-native-session\n\
                native resume: codex exec resume codex-native-session\n\
+               native handoff: cd /tmp/tiffany-worker && codex resume codex-native-session\n\
                last Tiffany session: 00000000-0000-0000-0000-000000000456\n\
                worktree: /tmp/tiffany-worker\n\
              \n\
@@ -6962,6 +6964,9 @@ mod tests {
         assert!(text.contains("model  openai/gpt-4o"));
         assert!(text.contains("native  codex-native-session"));
         assert!(text.contains("resume  codex exec resume codex-native-session"));
+        assert!(
+            text.contains("handoff  cd /tmp/tiffany-worker && codex resume codex-native-session")
+        );
         assert!(text.contains("last  00000000-0000-0000-0000-000000000456"));
         assert!(text.contains("next  /history role worker-codex"));
         assert!(text.contains("next  /history thread 00000000"));

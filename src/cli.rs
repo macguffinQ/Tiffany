@@ -2358,7 +2358,7 @@ fn worker_thread_detail(cfg: &Config, thread: &WorkerThread) -> String {
         .map(uuid::Uuid::to_string)
         .unwrap_or_else(|| "none".to_string());
     format!(
-        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n  Tiffany thread: {}\n  native session: {}\n  native resume: {}\n  last Tiffany session: {}\n  worktree: {}\n  created: {}\n  updated: {}\n\nStatus: {}\nAction: orchestrator thread export {} writes the last Tiffany session for handoff.\nAction: orchestrator thread clear {} resets only the native CLI session id for a fresh next run.",
+        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n  Tiffany thread: {}\n  native session: {}\n  native resume: {}\n  native handoff: {}\n  last Tiffany session: {}\n  worktree: {}\n  created: {}\n  updated: {}\n\nStatus: {}\nAction: orchestrator thread export {} writes the last Tiffany session for handoff.\nAction: orchestrator thread clear {} resets only the native CLI session id for a fresh next run.",
         short_uuid(&thread.id),
         thread.role,
         thread.runtime,
@@ -2368,6 +2368,7 @@ fn worker_thread_detail(cfg: &Config, thread: &WorkerThread) -> String {
         thread.id,
         native_session,
         native_thread_resume_command(thread),
+        native_thread_handoff_command(thread),
         last_session,
         thread
             .worktree_path
@@ -2428,6 +2429,53 @@ fn native_thread_resume_command(thread: &WorkerThread) -> String {
         return format!("codex exec resume {native_session_id}");
     }
     "none".to_string()
+}
+
+fn native_thread_handoff_command(thread: &WorkerThread) -> String {
+    let cwd = thread
+        .worktree_path
+        .as_deref()
+        .map(shell_quote_path)
+        .unwrap_or_else(|| ".".to_string());
+    let command = native_thread_interactive_resume_command(thread);
+    if command == "none" {
+        return "none".to_string();
+    }
+    format!("cd {cwd} && {command}")
+}
+
+fn native_thread_interactive_resume_command(thread: &WorkerThread) -> String {
+    if thread.agent == "gemini" || thread.runtime == "gemini" {
+        return "gemini --resume latest".to_string();
+    }
+    let Some(native_session_id) = thread
+        .native_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return "none".to_string();
+    };
+    if thread.agent == "claude-code" || thread.runtime == "claude-code" {
+        return format!("claude --resume {}", shell_quote_arg(native_session_id));
+    }
+    if thread.agent == "codex" || thread.runtime == "codex" {
+        return format!("codex resume {}", shell_quote_arg(native_session_id));
+    }
+    "none".to_string()
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    shell_quote_arg(&path.display().to_string())
+}
+
+fn shell_quote_arg(value: &str) -> String {
+    if value.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | '=' | '+')
+    }) {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn worker_thread_status_hint(thread: &WorkerThread) -> &'static str {
@@ -6039,9 +6087,34 @@ mod tests {
 
         assert!(detail.contains("native session: codex-native-session"));
         assert!(detail.contains("native resume: codex exec resume codex-native-session"));
+        assert!(detail.contains(
+            "native handoff: cd /tmp/tiffany-worker && codex resume codex-native-session"
+        ));
         assert!(detail.contains("Status: ready for native resume"));
         assert!(detail.contains("Action: orchestrator thread clear worker-codex"));
         assert!(detail.contains("/tmp/tiffany-worker"));
+    }
+
+    #[test]
+    fn worker_thread_cli_handoff_quotes_paths_and_targets_native_tui() {
+        let thread = WorkerThread {
+            id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap(),
+            role: "worker-cc".to_string(),
+            runtime: "claude-code".to_string(),
+            agent: "claude-code".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            provider: Some("anthropic".to_string()),
+            worktree_path: Some(std::path::PathBuf::from("/tmp/tiffany worker")),
+            native_session_id: Some("native session".to_string()),
+            last_session_id: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        assert_eq!(
+            native_thread_handoff_command(&thread),
+            "cd '/tmp/tiffany worker' && claude --resume 'native session'"
+        );
     }
 
     #[test]
