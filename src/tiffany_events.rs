@@ -726,7 +726,14 @@ fn visible_non_final_agent_output_with_event_kind(
 ) -> Option<agent_events::VisibleAgentOutput> {
     let mut output = visible_non_final_agent_output(content, max)?;
     if let Some(kind) = agent_events::visible_agent_output_kind_for_event_kind(event_kind) {
-        if kind != agent_events::VisibleAgentOutputKind::Final {
+        if kind != agent_events::VisibleAgentOutputKind::Final
+            && !matches!(
+                output.kind,
+                agent_events::VisibleAgentOutputKind::Question
+                    | agent_events::VisibleAgentOutputKind::Approval
+                    | agent_events::VisibleAgentOutputKind::Actionable
+            )
+        {
             output.kind = kind;
         }
     }

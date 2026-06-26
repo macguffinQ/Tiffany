@@ -4199,6 +4199,7 @@ fn native_event_kind_label(kind: event_format::VisibleAgentOutputKind) -> &'stat
     match kind {
         event_format::VisibleAgentOutputKind::Final => "final",
         event_format::VisibleAgentOutputKind::Question => "question",
+        event_format::VisibleAgentOutputKind::Approval => "approval",
         event_format::VisibleAgentOutputKind::ToolCall => "tool_call",
         event_format::VisibleAgentOutputKind::ToolResult => "tool_result",
         event_format::VisibleAgentOutputKind::Diff => "diff",
@@ -4215,6 +4216,7 @@ fn inferred_native_event_kind(title: &str, content: Option<&str>) -> Option<Stri
     for (needle, kind) in [
         ("worker final", "final"),
         ("worker question", "question"),
+        ("worker approval", "approval"),
         ("worker tool call", "tool_call"),
         ("worker tool result", "tool_result"),
         ("worker diff", "diff"),
@@ -4708,7 +4710,11 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
         ),
     ])];
     lines.extend(output_body_lines_for_kind(content, kind));
-    if kind == Some(event_format::VisibleAgentOutputKind::Question) {
+    if matches!(
+        kind,
+        Some(event_format::VisibleAgentOutputKind::Question)
+            | Some(event_format::VisibleAgentOutputKind::Approval)
+    ) {
         lines.extend(worker_question_hint_lines(event));
     }
     if let Some(raw) = event.content.as_deref()
@@ -4724,6 +4730,7 @@ fn worker_output_kind_marker(
 ) -> (&'static str, Color) {
     match kind {
         Some(event_format::VisibleAgentOutputKind::Question) => ("?", TIFFANY_BLUE),
+        Some(event_format::VisibleAgentOutputKind::Approval) => ("?", TIFFANY_BLUE),
         Some(event_format::VisibleAgentOutputKind::ToolCall) => ("↳", TIFFANY_BLUE),
         Some(event_format::VisibleAgentOutputKind::ToolResult) => ("✓", Color::Gray),
         Some(event_format::VisibleAgentOutputKind::Diff)
@@ -4997,6 +5004,7 @@ fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
     match worker_visible_output_kind_for_event(event, raw) {
         Some(event_format::VisibleAgentOutputKind::Final) => "final",
         Some(event_format::VisibleAgentOutputKind::Question) => "question",
+        Some(event_format::VisibleAgentOutputKind::Approval) => "approval",
         Some(event_format::VisibleAgentOutputKind::ToolCall) => "tool call",
         Some(event_format::VisibleAgentOutputKind::ToolResult) => "tool result",
         Some(event_format::VisibleAgentOutputKind::Diff) => "diff",
@@ -5020,7 +5028,11 @@ fn worker_visible_output_kind_for_event(
     raw: &str,
 ) -> Option<event_format::VisibleAgentOutputKind> {
     let raw_kind = worker_visible_output_kind_from_raw(raw);
-    if raw_kind == Some(event_format::VisibleAgentOutputKind::Question) {
+    if matches!(
+        raw_kind,
+        Some(event_format::VisibleAgentOutputKind::Question)
+            | Some(event_format::VisibleAgentOutputKind::Approval)
+    ) {
         return raw_kind;
     }
     event
@@ -5673,6 +5685,13 @@ fn output_body_line_for_kind(
     match kind {
         Some(event_format::VisibleAgentOutputKind::Diff) => diff_body_line(line),
         Some(event_format::VisibleAgentOutputKind::Question) => process_body_line(
+            line,
+            "?",
+            TIFFANY_BLUE,
+            Style::default().fg(TIFFANY_BLUE),
+            first_line,
+        ),
+        Some(event_format::VisibleAgentOutputKind::Approval) => process_body_line(
             line,
             "?",
             TIFFANY_BLUE,
@@ -7754,6 +7773,13 @@ mod tests {
             content: Some("claude-code tool_use: tool Bash: cargo test".to_string()),
             ..base.clone()
         };
+        let approval = TiffanyProgressEvent {
+            event_kind: Some("tool_use".to_string()),
+            content: Some(
+                "claude-code tool_use: tool request_permissions: write access".to_string(),
+            ),
+            ..base.clone()
+        };
         let stderr = TiffanyProgressEvent {
             event_kind: Some("stderr".to_string()),
             content: Some("claude-code stderr: model not found".to_string()),
@@ -7768,6 +7794,16 @@ mod tests {
         assert_eq!(
             line_text(&output_event_lines(&tool, "tool Bash: cargo test")[0]),
             "↳ worker tool call · worker-cc · claude-code · 12345678"
+        );
+        assert_eq!(
+            line_text(
+                &output_event_lines(&approval, "waiting for permission approval: write access")[0]
+            ),
+            "? worker approval · worker-cc · claude-code · 12345678"
+        );
+        assert_eq!(
+            native_event_kind_from_progress(&approval).as_deref(),
+            Some("approval")
         );
         assert_eq!(
             line_text(&output_event_lines(&stderr, "model not found")[0]),

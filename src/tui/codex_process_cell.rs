@@ -207,6 +207,7 @@ fn visible_worker_output_line(
 fn worker_output_style(kind: agent_events::VisibleAgentOutputKind) -> (&'static str, &'static str) {
     match kind {
         agent_events::VisibleAgentOutputKind::Question => ("?", TIFFANY),
+        agent_events::VisibleAgentOutputKind::Approval => ("?", TIFFANY),
         agent_events::VisibleAgentOutputKind::ToolCall => ("↳", CYAN),
         agent_events::VisibleAgentOutputKind::ToolResult => ("✓", DIM),
         agent_events::VisibleAgentOutputKind::Diff => ("±", TIFFANY),
@@ -328,6 +329,7 @@ fn visible_worker_output_display(
         if !matches!(
             output.kind,
             agent_events::VisibleAgentOutputKind::Question
+                | agent_events::VisibleAgentOutputKind::Approval
                 | agent_events::VisibleAgentOutputKind::Actionable
         ) {
             output.kind = kind;

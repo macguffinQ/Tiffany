@@ -16,6 +16,7 @@ pub struct AgentEventSummary {
 pub enum VisibleAgentOutputKind {
     Final,
     Question,
+    Approval,
     ToolCall,
     ToolResult,
     Diff,
@@ -31,6 +32,7 @@ impl VisibleAgentOutputKind {
         match self {
             Self::Final => "final",
             Self::Question => "question",
+            Self::Approval => "approval",
             Self::ToolCall => "tool call",
             Self::ToolResult => "tool result",
             Self::Diff => "diff",
@@ -45,7 +47,12 @@ impl VisibleAgentOutputKind {
     pub fn is_process_event(self) -> bool {
         matches!(
             self,
-            Self::ToolCall | Self::ToolResult | Self::Diff | Self::Patch | Self::FileUpdate
+            Self::Approval
+                | Self::ToolCall
+                | Self::ToolResult
+                | Self::Diff
+                | Self::Patch
+                | Self::FileUpdate
         )
     }
 }
@@ -55,6 +62,9 @@ pub fn visible_agent_output_kind_for_event_kind(
 ) -> Option<VisibleAgentOutputKind> {
     match event_kind.trim().to_ascii_lowercase().as_str() {
         "stderr" => Some(VisibleAgentOutputKind::Stderr),
+        "approval" | "permission_request" | "command_approval" | "patch_approval" => {
+            Some(VisibleAgentOutputKind::Approval)
+        }
         "tool"
         | "tool_use"
         | "exec"
@@ -889,6 +899,13 @@ pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOut
     }
 
     let display = clean_visible_agent_output(content, max)?;
+    if let Some(approval) = user_action_request_display(content, &display, max) {
+        return Some(VisibleAgentOutput {
+            kind: VisibleAgentOutputKind::Approval,
+            dedupe_key: sanitize_text(&normalize_output_summary(&approval), max),
+            display: approval,
+        });
+    }
     if let Some(question) = question_output_display(content, &display, max) {
         return Some(VisibleAgentOutput {
             kind: VisibleAgentOutputKind::Question,
@@ -971,7 +988,11 @@ fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
         "file_change" | "file_update" => Some(VisibleAgentOutputKind::FileUpdate),
         "user" => visible_output_kind_from_display(body),
         "status" | "process_exit" => visible_output_kind_from_display(body).or_else(|| {
-            looks_like_actionable_output(body).then_some(VisibleAgentOutputKind::Actionable)
+            if user_action_request_display(content, body, TOOL_DETAIL_MAX_CHARS).is_some() {
+                Some(VisibleAgentOutputKind::Approval)
+            } else {
+                looks_like_actionable_output(body).then_some(VisibleAgentOutputKind::Actionable)
+            }
         }),
         _ => None,
     }
@@ -1008,10 +1029,6 @@ fn question_output_display(content: &str, display: &str, max: usize) -> Option<S
             .starts_with("waiting for user input")
     {
         return Some(sanitize_text(normalized, max));
-    }
-
-    if let Some(waiting) = user_action_request_display(content, normalized, max) {
-        return Some(waiting);
     }
 
     None
@@ -2839,7 +2856,8 @@ mod tests {
             500,
         )
         .expect("permissions wait");
-        assert_eq!(permissions.kind, VisibleAgentOutputKind::Question);
+        assert_eq!(permissions.kind, VisibleAgentOutputKind::Approval);
+        assert_eq!(permissions.kind.label(), "approval");
         assert_eq!(
             permissions.display,
             "waiting for permission approval: network access and write access"
@@ -2850,7 +2868,7 @@ mod tests {
             500,
         )
         .expect("command approval wait");
-        assert_eq!(command_approval.kind, VisibleAgentOutputKind::Question);
+        assert_eq!(command_approval.kind, VisibleAgentOutputKind::Approval);
         assert_eq!(
             command_approval.display,
             "waiting for command approval: rm -rf target"
