@@ -4709,7 +4709,7 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
     ])];
     lines.extend(output_body_lines_for_kind(content, kind));
     if kind == Some(event_format::VisibleAgentOutputKind::Question) {
-        lines.push(worker_question_hint_line(event));
+        lines.extend(worker_question_hint_lines(event));
     }
     if let Some(raw) = event.content.as_deref()
         && let Some(hint) = event_format::agent_failure_hint(raw, CONTROL_SUMMARY_MAX_CHARS)
@@ -5786,16 +5786,35 @@ fn failure_hint_line(title: &str, action: &str) -> Line<'static> {
     ])
 }
 
-fn worker_question_hint_line(event: &TiffanyProgressEvent) -> Line<'static> {
+fn worker_question_hint_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>> {
     let target = event
         .worker_role
         .as_deref()
         .and_then(nonempty_trimmed)
         .or_else(|| event.agent.as_deref().and_then(nonempty_trimmed))
         .unwrap_or("worker");
-    Line::from(vec![
+    vec![Line::from(vec![
         Span::styled(
             "  next ",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("/continue {target}"),
+            Style::default()
+                .fg(TIFFANY_SOFT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "answer or approve in the native CLI session",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]),
+    Line::from(vec![
+        Span::styled(
+            "  info ",
             Style::default()
                 .fg(TIFFANY_BLUE)
                 .add_modifier(Modifier::BOLD),
@@ -5808,10 +5827,10 @@ fn worker_question_hint_line(event: &TiffanyProgressEvent) -> Line<'static> {
         ),
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            "inspect or resume the native worker prompt",
+            "inspect session, native id, and handoff state",
             Style::default().fg(Color::DarkGray),
         ),
-    ])
+    ])]
 }
 
 fn short_task_id(task_id: Option<&str>) -> Option<&str> {
@@ -7781,6 +7800,13 @@ mod tests {
             content: Some("claude-code tool_result: tool error: Answer questions?".to_string()),
             ..base.clone()
         };
+        let approval = TiffanyProgressEvent {
+            event_kind: Some("tool_use".to_string()),
+            content: Some(
+                "claude-code tool_use: tool request_permissions: write access".to_string(),
+            ),
+            ..base.clone()
+        };
         let stderr = TiffanyProgressEvent {
             event_kind: Some("stderr".to_string()),
             content: Some("claude-code stderr: permission denied".to_string()),
@@ -7804,7 +7830,22 @@ mod tests {
         );
         assert_eq!(
             line_text(&question_lines[2]),
-            "  next /thread worker-cc · inspect or resume the native worker prompt"
+            "  next /continue worker-cc · answer or approve in the native CLI session"
+        );
+        assert_eq!(
+            line_text(&question_lines[3]),
+            "  info /thread worker-cc · inspect session, native id, and handoff state"
+        );
+
+        let approval_visible = visible_content(&approval).expect("approval visible");
+        let approval_lines = output_event_lines(&approval, &approval_visible);
+        assert_eq!(
+            line_text(&approval_lines[1]),
+            "  ? waiting for permission approval: write access"
+        );
+        assert_eq!(
+            line_text(&approval_lines[2]),
+            "  next /continue worker-cc · answer or approve in the native CLI session"
         );
 
         let stderr_visible = visible_content(&stderr).expect("stderr visible");
