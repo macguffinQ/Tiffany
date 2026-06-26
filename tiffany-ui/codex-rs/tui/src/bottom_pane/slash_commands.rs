@@ -241,8 +241,8 @@ fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> 
         "context" | "ctx" | "continue" => {
             "Continue by typing the next prompt directly. Stable worker sessions can be inspected with /thread."
         }
-        "sessions" | "history" => {
-            "Use /thread for active worker sessions, /thread export <role> for persisted logs, or run orchestrator sessions list/show from the shell."
+        "sessions" => {
+            "Use /history for saved native conversation history, /thread for active worker sessions, or run orchestrator sessions list/show from the shell."
         }
         "handoff" => {
             "Ask for a handoff in chat, or use /thread export <role> for persisted session output."
@@ -562,6 +562,12 @@ mod tests {
         );
         assert!(tiffany_orchestrator_unsupported_command_message("raw").is_none());
         assert!(tiffany_orchestrator_unsupported_command_message("diff").is_none());
+        assert!(tiffany_orchestrator_unsupported_command_message("history").is_none());
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("sessions")
+                .expect("legacy sessions command should be explained")
+                .contains("/history")
+        );
         assert!(
             tiffany_orchestrator_unsupported_command_message("o")
                 .expect("legacy folding command should be explained")
