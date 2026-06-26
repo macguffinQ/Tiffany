@@ -4675,11 +4675,11 @@ fn thread_list_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
         "thread",
         &format!("{active_count}/{} role(s) have worker sessions", rows.len()),
     )];
-    for row in rows.iter().take(10) {
-        lines.push(thread_summary_line(row));
+    for row in rows.iter().take(8) {
+        lines.extend(thread_summary_card_lines(row));
     }
-    if rows.len() > 10 {
-        lines.push(body_line(&format!("… {} more", rows.len() - 10), true));
+    if rows.len() > 8 {
+        lines.push(body_line(&format!("… {} more", rows.len() - 8), true));
     }
     lines.push(next_line(
         "/thread <role>",
@@ -4719,28 +4719,70 @@ fn thread_detail_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
         .get("native session")
         .cloned()
         .unwrap_or_else(|| "none".to_string());
-    let symbol = if native == "none" { "⚠" } else { "✓" };
-    let color = if native == "none" {
-        Color::Yellow
-    } else {
+    let has_native = native != "none";
+    let symbol = if has_native { "✓" } else { "⚠" };
+    let color = if has_native {
         TIFFANY_BLUE
+    } else {
+        Color::Yellow
     };
-    let mut lines = vec![status_line(
-        symbol,
-        color,
-        "thread",
-        &format!("{role} · {status}"),
-    )];
-
-    push_thread_meta(&mut lines, "runtime", fields.get("runtime"));
-    push_thread_meta(&mut lines, "agent", fields.get("agent"));
-    push_thread_meta(&mut lines, "model", fields.get("model"));
-    push_thread_meta(&mut lines, "native", Some(&native));
-    push_thread_meta(&mut lines, "resume", fields.get("native resume"));
-    push_thread_meta(&mut lines, "handoff", fields.get("native handoff"));
-    push_thread_meta(&mut lines, "thread", fields.get("tiffany thread"));
-    push_thread_meta(&mut lines, "last", fields.get("last tiffany session"));
-    push_thread_meta(&mut lines, "work", fields.get("worktree"));
+    let runtime = fields
+        .get("runtime")
+        .map(String::as_str)
+        .and_then(nonempty_trimmed)
+        .unwrap_or("runtime");
+    let model = fields
+        .get("model")
+        .map(String::as_str)
+        .and_then(nonempty_trimmed)
+        .unwrap_or("model");
+    let mut lines = vec![
+        status_line(symbol, color, "thread", &format!("{role} session card")),
+        session_card_header_line(symbol, color, &role, runtime, model, &status),
+    ];
+    if let Some(agent) = fields
+        .get("agent")
+        .and_then(|value| nonempty_trimmed(value))
+    {
+        lines.push(session_card_detail_line("agent", agent));
+    }
+    if let Some(provider) = fields
+        .get("provider")
+        .and_then(|value| nonempty_trimmed(value))
+    {
+        lines.push(session_card_detail_line("provider", provider));
+    }
+    lines.push(session_card_detail_line("native", &native));
+    if let Some(thread) = fields
+        .get("tiffany thread")
+        .and_then(|value| nonempty_trimmed(value))
+    {
+        lines.push(session_card_detail_line("tiffany", thread));
+    }
+    if let Some(last) = fields
+        .get("last tiffany session")
+        .and_then(|value| nonempty_trimmed(value))
+    {
+        lines.push(session_card_detail_line("last", last));
+    }
+    if let Some(worktree) = fields
+        .get("worktree")
+        .and_then(|value| nonempty_trimmed(value))
+    {
+        lines.push(session_card_detail_line("work", worktree));
+    }
+    if let Some(resume) = fields
+        .get("native resume")
+        .and_then(|value| nonempty_trimmed(value))
+    {
+        lines.push(session_card_command_line("resume", resume));
+    }
+    if let Some(handoff) = fields
+        .get("native handoff")
+        .and_then(|value| nonempty_trimmed(value))
+    {
+        lines.push(session_card_command_line("handoff", handoff));
+    }
 
     next_line_into(
         &mut lines,
@@ -4766,7 +4808,7 @@ fn thread_detail_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
         );
     }
 
-    if native == "none" {
+    if !has_native {
         next_line_into(
             &mut lines,
             "/thread clear <role>",
@@ -4963,57 +5005,131 @@ fn role_summary_line(role: &RoleSummary) -> Line<'static> {
     ])
 }
 
-fn thread_summary_line(thread: &ThreadSummary) -> Line<'static> {
+fn thread_summary_card_lines(thread: &ThreadSummary) -> Vec<Line<'static>> {
     let (symbol, color) = if thread.active {
         ("✓", TIFFANY_BLUE)
     } else {
         ("○", Color::DarkGray)
     };
-    let native = thread.native.as_deref().unwrap_or("none");
-    let session = if thread.active {
-        format!(
-            "thread {}  native {}  last {}",
-            thread.thread.as_deref().unwrap_or("none"),
-            native,
-            thread.last.as_deref().unwrap_or("none")
-        )
+    let mut lines = vec![session_card_header_line(
+        symbol,
+        color,
+        &thread.role,
+        &thread.runtime,
+        if thread.model.is_empty() {
+            "unbound"
+        } else {
+            &thread.model
+        },
+        if thread.active {
+            "native session ready"
+        } else {
+            "no worker thread yet"
+        },
+    )];
+    if thread.active {
+        if let Some(thread_id) = thread.thread.as_deref().and_then(nonempty_trimmed) {
+            lines.push(session_card_detail_line("tiffany", thread_id));
+        }
+        lines.push(session_card_detail_line(
+            "native",
+            thread.native.as_deref().unwrap_or("none"),
+        ));
+        if let Some(last) = thread.last.as_deref().and_then(nonempty_trimmed) {
+            lines.push(session_card_detail_line("last", last));
+        }
+        lines.push(session_card_actions_line(&[
+            format!("/thread {}", thread.role),
+            format!("/continue open {}", thread.role),
+            format!("/history role {}", thread.role),
+            format!("/thread export {}", thread.role),
+        ]));
     } else {
-        "no worker thread yet".to_string()
-    };
-    let actions = if thread.active {
-        format!(
-            "inspect /thread {}  history /history role {}  export /thread export {}",
-            thread.role, thread.role, thread.role
-        )
-    } else {
-        format!(
-            "run task to create session  inspect /thread {}",
-            thread.role
-        )
-    };
+        lines.push(session_card_detail_line(
+            "state",
+            "run a task to create a resumable native session",
+        ));
+        lines.push(session_card_actions_line(&[
+            format!("/thread {}", thread.role),
+            format!("/role {}", thread.role),
+        ]));
+    }
+    lines
+}
+
+fn session_card_header_line(
+    symbol: &'static str,
+    color: Color,
+    role: &str,
+    runtime: &str,
+    model: &str,
+    status: &str,
+) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("  {symbol} "),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("{:<18}", thread.role),
-            Style::default().fg(TIFFANY_SOFT),
+            truncate_text(role, 24),
+            Style::default()
+                .fg(TIFFANY_SOFT)
+                .add_modifier(Modifier::BOLD),
         ),
+        Span::styled("  ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(truncate_text(runtime, 18), Style::default().fg(Color::Gray)),
+        Span::styled("  ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(truncate_text(model, 34), Style::default()),
+        Span::styled("  ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(truncate_text(status, 72), Style::default().fg(color)),
+    ])
+}
+
+fn session_card_detail_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("    ", Style::default().fg(TIFFANY_DARK)),
         Span::styled(
-            format!("{:<13}", truncate_text(&thread.runtime, 13)),
-            Style::default().fg(Color::Gray),
+            label.to_string(),
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
         ),
+        Span::raw("  "),
         Span::styled(
-            format!("{:<28}", truncate_text(&thread.model, 28)),
-            Style::default(),
-        ),
-        Span::styled(
-            format!("{:<72}", truncate_text(&session, 72)),
+            truncate_text(value, 180),
             Style::default().fg(Color::DarkGray),
         ),
+    ])
+}
+
+fn session_card_command_line(label: &str, command: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("    ", Style::default().fg(TIFFANY_DARK)),
         Span::styled(
-            truncate_text(&actions, 128),
+            label.to_string(),
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            truncate_text(command, 220),
+            Style::default().fg(TIFFANY_SOFT),
+        ),
+    ])
+}
+
+fn session_card_actions_line(actions: &[String]) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("    ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(
+            "actions ",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            truncate_text(&actions.join("  ·  "), 220),
             Style::default().fg(TIFFANY_SOFT),
         ),
     ])
@@ -9113,11 +9229,12 @@ mod tests {
         assert!(text.contains("no worker thread yet"));
         assert!(text.contains("worker-codex"));
         assert!(text.contains("codex-native-session"));
-        assert!(text.contains("last 11111111"));
-        assert!(text.contains("inspect /thread worker-codex"));
-        assert!(text.contains("history /history role worker-codex"));
-        assert!(text.contains("export /thread export worker-codex"));
-        assert!(text.contains("run task to create session"));
+        assert!(text.contains("last  11111111"));
+        assert!(text.contains("actions /thread worker-codex"));
+        assert!(text.contains("/continue open worker-codex"));
+        assert!(text.contains("/history role worker-codex"));
+        assert!(text.contains("/thread export worker-codex"));
+        assert!(text.contains("run a task to create a resumable native session"));
         assert!(text.contains("next  /thread <role>"));
         assert!(text.contains("next  /history role <role>"));
         assert!(text.contains("next  /history kind answer|tool_result|diff|approval"));
@@ -9148,11 +9265,11 @@ mod tests {
         .expect("thread detail summary lines");
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-        assert!(text.contains(
-            "✓ thread  worker-codex · ready for native resume; Tiffany will reuse this session for the same role"
-        ));
-        assert!(text.contains("runtime  codex"));
-        assert!(text.contains("model  openai/gpt-4o"));
+        assert!(text.contains("✓ thread  worker-codex session card"));
+        assert!(text.contains("worker-codex  codex  openai/gpt-4o"));
+        assert!(text.contains("ready for native resume; Tiffany will reuse this session"));
+        assert!(text.contains("agent  codex"));
+        assert!(text.contains("provider  openai"));
         assert!(text.contains("native  codex-native-session"));
         assert!(text.contains("resume  codex exec resume codex-native-session"));
         assert!(

@@ -451,7 +451,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `/provider`：打开 provider 设置；支持 `list`、`edit <provider>`、`delete <provider>`、`env <provider> <ENV>`、`key <provider> <value>`、`endpoint <provider> <url>`。
 - `/role`：打开角色注册表单，或用 `register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 直接注册一个角色。
 - `/roles`：查看角色接线、选择当前 worker 路由，或保存 role/provider/model/runtime 绑定。
-- `/thread`：查看 worker/native CLI 会话复用状态；`/thread clear <role>` 可清掉卡住的 native session id。
+- `/thread`：用角色会话卡片查看 runtime/model/native session、continue/history/export 入口和复用状态；`/thread clear <role>` 可清掉卡住的 native session id。
 - `/continue <role|claude|codex|gemini>`：查看某个角色的原生 CLI handoff 命令。
 - `/continue open <role|claude|codex|gemini>`：暂停 Tiffany，打开原始 Claude/Codex/Gemini 会话继续工作；退出原生 CLI 后，Tiffany 会把 Claude/Codex/Gemini transcript 事件、git status、diff stat 和完整 patch 保存到对话历史，可用 `/history kind diff` 复盘。
 - `/history`：查看、搜索、导出保存的原生事件流；支持 `/history role <role>`、`/history thread <id>`、`/history kind answer|tool_result|diff|approval`；`/history graph` 显示压缩文本流程，`/history mermaid` 渲染 Mermaid 流程图，`/history export-graph [--text|--mermaid] [--out file]` 导出流程图，`/history export kind <event-kind> --out file.md` 导出 Markdown handoff。

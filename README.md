@@ -554,7 +554,7 @@ Default native TUI slash commands:
 - `/provider` - open provider setup; supports `list`, `edit <provider>`, `delete <provider>`, `env <provider> <ENV>`, `key <provider> <value>`, and `endpoint <provider> <url>`
 - `/role` - open the role-registration form or register one role with `register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`
 - `/roles` - inspect role wiring, select the active worker route, or save role/provider/model/runtime bindings
-- `/thread` - inspect worker/native CLI session reuse; `/thread clear <role>` resets a stuck native session id
+- `/thread` - show role session cards with runtime/model/native session, continue/history/export actions, and reuse state; `/thread clear <role>` resets a stuck native session id
 - `/continue <role|claude|codex|gemini>` - show the native CLI handoff command for a worker role
 - `/continue open <role|claude|codex|gemini>` - pause Tiffany, open the original native Claude/Codex/Gemini session, then return with Claude/Codex/Gemini transcript events plus git status/stat/patch captured into the conversation and `/history kind diff`
 - `/history` - inspect/search saved Tiffany native conversation turns and typed worker events such as answer, tool calls/results, diff, patch, file updates, approval, stderr, and final output; use `/history role <role>`, `/history thread <id>`, or `/history kind <event-kind>` to focus the stream; `/history graph` shows a compact text flow, `/history mermaid` renders a Mermaid flowchart, `/history export-graph [--text|--mermaid] [--out file]` writes a graph file, and `/history export [role <role>|thread <id>|kind <event-kind>] [--out file.md]` writes a Markdown handoff
