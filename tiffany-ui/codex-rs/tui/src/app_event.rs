@@ -260,6 +260,11 @@ pub(crate) enum AppEvent {
         args: String,
     },
 
+    /// Show the native CLI command for continuing a stable worker session.
+    TiffanyOrchestratorContinueCommand {
+        args: String,
+    },
+
     /// Inspect saved Tiffany native conversation history for the current workspace.
     TiffanyOrchestratorHistoryCommand {
         args: String,

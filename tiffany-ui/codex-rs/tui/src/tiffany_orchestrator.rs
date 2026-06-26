@@ -483,6 +483,43 @@ pub(crate) fn spawn_thread_command(
     });
 }
 
+pub(crate) fn spawn_continue_command(
+    app_event_tx: AppEventSender,
+    config: TiffanyOrchestratorConfig,
+    args: String,
+) {
+    tokio::spawn(async move {
+        let role = match continue_target_role(&args) {
+            Ok(role) => role,
+            Err(err) => {
+                emit_lines(
+                    &app_event_tx,
+                    vec![
+                        status_line("✗", Color::Red, "continue", &err),
+                        body_line("Usage: /continue <role|claude|codex|gemini>", true),
+                    ],
+                );
+                return;
+            }
+        };
+        let command_args = vec!["thread".to_string(), "show".to_string(), role.clone()];
+
+        match run_orchestrator_command(&config, &command_args).await {
+            Ok(output) => emit_command_output(&app_event_tx, "continue", &command_args, output),
+            Err(err) => emit_lines(
+                &app_event_tx,
+                spawn_error_lines(
+                    "continue",
+                    "✗",
+                    Color::Red,
+                    &format!("failed to inspect worker handoff - {err}"),
+                    &err.to_string(),
+                ),
+            ),
+        }
+    });
+}
+
 pub(crate) fn spawn_history_command(
     app_event_tx: AppEventSender,
     config: TiffanyOrchestratorConfig,
@@ -526,6 +563,7 @@ pub(crate) fn idle_intro_lines_with_readiness(
                 "/role",
                 "/roles",
                 "/thread",
+                "/continue",
                 "/history",
                 "/doctor",
             ],
@@ -2283,6 +2321,24 @@ fn thread_command_args(args: &str) -> Result<Vec<String>, String> {
     }
 }
 
+fn continue_target_role(args: &str) -> Result<String, String> {
+    let parts = args.split_whitespace().collect::<Vec<_>>();
+    let target = parts.first().copied().unwrap_or("worker-cc");
+    if parts.len() > 1 {
+        return Err("continue accepts one target".to_string());
+    }
+    let role = match target {
+        "claude" | "claude-code" | "cc" => "worker-cc",
+        "codex" => "worker-codex",
+        "gemini" | "gemini-cli" => "worker-gemini",
+        role => role,
+    };
+    if role.trim().is_empty() {
+        return Err("continue needs <role|claude|codex|gemini>".to_string());
+    }
+    Ok(role.to_string())
+}
+
 fn thread_export_command_args(role: &str, rest: &[String]) -> Result<Vec<String>, String> {
     let mut command_args = vec!["thread".to_string(), "export".to_string(), role.to_string()];
     let mut i = 0;
@@ -2692,6 +2748,7 @@ fn concise_success_lines(
     match label {
         "roles" => concise_roles_success(command_args, output),
         "provider" => concise_provider_success(command_args, output),
+        "continue" => concise_continue_success(command_args, output),
         "thread" => concise_thread_success(command_args, output),
         _ => None,
     }
@@ -2982,6 +3039,75 @@ fn concise_thread_success(
         Some("export") => thread_export_summary_lines(&stdout),
         _ => None,
     }
+}
+
+fn concise_continue_success(
+    command_args: &[String],
+    output: &std::process::Output,
+) -> Option<Vec<Line<'static>>> {
+    if command_args.first().map(String::as_str) != Some("thread")
+        || command_args.get(1).map(String::as_str) != Some("show")
+    {
+        return None;
+    }
+    continue_summary_lines(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn continue_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
+    if !text.contains("Worker thread") {
+        return None;
+    }
+    let fields = parse_thread_fields(text);
+    let role = fields
+        .get("role")
+        .cloned()
+        .or_else(|| parse_worker_thread_title(text))
+        .unwrap_or_else(|| "worker".to_string());
+    let native = fields
+        .get("native session")
+        .and_then(|value| nonempty_trimmed(value))
+        .unwrap_or("none");
+    let handoff = fields
+        .get("native handoff")
+        .and_then(|value| nonempty_trimmed(value));
+    let resume = fields
+        .get("native resume")
+        .and_then(|value| nonempty_trimmed(value));
+
+    let Some(command) = handoff.or(resume).filter(|command| *command != "none") else {
+        return Some(vec![
+            status_line(
+                "⚠",
+                Color::Yellow,
+                "continue",
+                &format!("{role} has no native session yet"),
+            ),
+            thread_meta_line("native", native),
+            next_line(
+                &format!("/agent {role}"),
+                "run a task first to create a resumable worker thread",
+            ),
+            next_line(&format!("/thread {role}"), "inspect thread state"),
+        ]);
+    };
+
+    let mut lines = vec![status_line(
+        "✓",
+        TIFFANY_BLUE,
+        "continue",
+        &format!("{role} native handoff ready"),
+    )];
+    lines.push(thread_meta_line("native", native));
+    lines.push(thread_meta_line("command", command));
+    if let Some(worktree) = fields.get("worktree").and_then(|value| nonempty_trimmed(value)) {
+        lines.push(thread_meta_line("work", worktree));
+    }
+    lines.push(next_line("copy command", "paste it in a shell to continue in the native CLI"));
+    lines.push(next_line(
+        &format!("/thread export {role}"),
+        "write full selectable handoff history",
+    ));
+    Some(lines)
 }
 
 fn thread_list_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
@@ -5748,7 +5874,9 @@ mod tests {
         assert!(text.contains("status ready  mode native  memory on  context 2 turn(s)"));
         assert!(text.contains("flow  direct / single / full  →  selected per prompt"));
         assert!(!text.contains("status ready\nflow  planner → critic"));
-        assert!(text.contains("setup  /provider  /role  /roles  /thread  /history  /doctor"));
+        assert!(
+            text.contains("setup  /provider  /role  /roles  /thread  /continue  /history  /doctor")
+        );
         assert!(text.contains("tools  /status  /copy  /raw  /diff  /clear  /exit"));
         assert_eq!(lines[0].spans[0].style.fg, Some(TIFFANY_BLUE));
         assert_eq!(lines[0].spans[2].style.fg, Some(TIFFANY_BLUE));
@@ -6618,6 +6746,22 @@ mod tests {
     }
 
     #[test]
+    fn continue_target_role_maps_runtime_aliases() {
+        assert_eq!(continue_target_role("").unwrap(), "worker-cc");
+        assert_eq!(continue_target_role("claude").unwrap(), "worker-cc");
+        assert_eq!(continue_target_role("claude-code").unwrap(), "worker-cc");
+        assert_eq!(continue_target_role("cc").unwrap(), "worker-cc");
+        assert_eq!(continue_target_role("codex").unwrap(), "worker-codex");
+        assert_eq!(continue_target_role("gemini").unwrap(), "worker-gemini");
+        assert_eq!(continue_target_role("gemini-cli").unwrap(), "worker-gemini");
+        assert_eq!(
+            continue_target_role("worker-reviewer").unwrap(),
+            "worker-reviewer"
+        );
+        assert!(continue_target_role("worker-cc extra").is_err());
+    }
+
+    #[test]
     fn run_intro_uses_direct_flow_for_chat_requests() {
         let launch = TiffanyOrchestratorLaunch {
             bin: "orchestrator".into(),
@@ -7045,6 +7189,56 @@ mod tests {
         assert!(text.contains("next  /thread clear worker-codex"));
         assert!(!text.contains("Worker thread 00000000"));
         assert!(!text.contains("Action: orchestrator"));
+    }
+
+    #[test]
+    fn continue_summary_lines_render_native_handoff_command() {
+        let lines = continue_summary_lines(
+            "Worker thread 00000000\n\
+               role: worker-gemini\n\
+               runtime: gemini\n\
+               agent: gemini\n\
+               model: google/gemini-2.5-pro\n\
+               provider: google\n\
+               Tiffany thread: 00000000-0000-0000-0000-000000000123\n\
+               native session: latest\n\
+               native resume: gemini --resume latest\n\
+               native handoff: cd /tmp/tiffany-worker && gemini --resume latest\n\
+               last Tiffany session: 00000000-0000-0000-0000-000000000456\n\
+               worktree: /tmp/tiffany-worker\n\
+             \n\
+             Status: ready for Gemini native resume; Tiffany will reuse latest/index for the same role\n",
+        )
+        .expect("continue summary lines");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("✓ continue  worker-gemini native handoff ready"));
+        assert!(text.contains("native  latest"));
+        assert!(text.contains("command  cd /tmp/tiffany-worker && gemini --resume latest"));
+        assert!(text.contains("work  /tmp/tiffany-worker"));
+        assert!(text.contains("next  copy command"));
+        assert!(text.contains("next  /thread export worker-gemini"));
+        assert!(!text.contains("Worker thread 00000000"));
+        assert!(!text.contains("Status: ready for Gemini"));
+    }
+
+    #[test]
+    fn continue_summary_lines_warn_when_native_session_missing() {
+        let lines = continue_summary_lines(
+            "Worker thread 00000000\n\
+               role: worker-cc\n\
+               runtime: claude-code\n\
+               native session: none\n\
+             \n\
+             Status: no native session yet\n",
+        )
+        .expect("continue summary lines");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("⚠ continue  worker-cc has no native session yet"));
+        assert!(text.contains("native  none"));
+        assert!(text.contains("next  /agent worker-cc"));
+        assert!(text.contains("next  /thread worker-cc"));
     }
 
     #[test]

@@ -367,6 +367,9 @@ impl App {
             AppEvent::TiffanyOrchestratorThreadCommand { args } => {
                 self.handle_tiffany_orchestrator_thread_command(tui, args);
             }
+            AppEvent::TiffanyOrchestratorContinueCommand { args } => {
+                self.handle_tiffany_orchestrator_continue_command(tui, args);
+            }
             AppEvent::TiffanyOrchestratorHistoryCommand { args } => {
                 self.handle_tiffany_orchestrator_history_command(tui, args);
             }
@@ -2430,6 +2433,26 @@ impl App {
             return;
         };
         crate::tiffany_orchestrator::spawn_thread_command(self.app_event_tx.clone(), config, args);
+        tui.frame_requester().schedule_frame();
+    }
+
+    fn handle_tiffany_orchestrator_continue_command(&mut self, tui: &mut tui::Tui, args: String) {
+        let Some(config) = self.tiffany_orchestrator.clone() else {
+            self.insert_history_cell(
+                tui,
+                Box::new(history_cell::PlainHistoryCell::new(vec![
+                    "✗ tiffany-loop orchestrator mode is not active"
+                        .red()
+                        .into(),
+                ])),
+            );
+            return;
+        };
+        crate::tiffany_orchestrator::spawn_continue_command(
+            self.app_event_tx.clone(),
+            config,
+            args,
+        );
         tui.frame_requester().schedule_frame();
     }
 

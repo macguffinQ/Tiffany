@@ -72,6 +72,7 @@ pub(crate) const TIFFANY_ORCHESTRATOR_COMMANDS: &[SlashCommand] = &[
     SlashCommand::Role,
     SlashCommand::Roles,
     SlashCommand::Thread,
+    SlashCommand::Continue,
     SlashCommand::History,
     SlashCommand::Doctor,
     SlashCommand::Status,
@@ -140,7 +141,7 @@ pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Op
                 "Ask for review in the chat, or register a reviewer role with /role and /roles."
             }
             SlashCommand::Resume => {
-                "Tiffany resumes worker sessions through stable roles; use /roles or /doctor to inspect them."
+                "Tiffany resumes worker sessions through stable roles; use /continue <role|runtime> to get a native handoff command."
             }
             SlashCommand::Logout => {
                 "Tiffany uses provider settings instead of account login; configure providers with /provider."
@@ -212,6 +213,7 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
         SlashCommand::Roles => "inspect registered roles",
         SlashCommand::Thread => "inspect, clear, or export stable worker sessions",
         SlashCommand::History => "inspect, search, or export saved native conversation history",
+        SlashCommand::Continue => "show native CLI handoff command for a worker",
         SlashCommand::Doctor => "diagnose setup",
         SlashCommand::Status => "show Tiffany orchestration status",
         SlashCommand::Help => "show this command list",
@@ -238,8 +240,8 @@ fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> 
         "o" => {
             "Detail folding is handled by the native run view; /o exists only in the legacy terminal chat fallback."
         }
-        "context" | "ctx" | "continue" => {
-            "Continue by typing the next prompt directly. Stable worker sessions can be inspected with /thread."
+        "context" | "ctx" => {
+            "Continue by typing the next prompt directly. Stable worker sessions can be inspected with /thread or handed off with /continue."
         }
         "sessions" => {
             "Use /history for saved native conversation history, /thread for active worker sessions, or run orchestrator sessions list/show from the shell."
@@ -491,6 +493,7 @@ mod tests {
                 SlashCommand::Role,
                 SlashCommand::Roles,
                 SlashCommand::Thread,
+                SlashCommand::Continue,
                 SlashCommand::History,
                 SlashCommand::Doctor,
                 SlashCommand::Status,

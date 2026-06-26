@@ -658,8 +658,8 @@ mod tests {
         assert_eq!(
             cmds.iter().map(String::as_str).collect::<Vec<_>>(),
             vec![
-                "provider", "role", "roles", "thread", "history", "doctor", "status", "help",
-                "copy", "raw", "diff", "clear", "exit",
+                "provider", "role", "roles", "thread", "continue", "history", "doctor",
+                "status", "help", "copy", "raw", "diff", "clear", "exit",
             ]
         );
         for hidden in ["model", "permissions", "init", "compact", "apps", "fast"] {

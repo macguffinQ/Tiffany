@@ -52,6 +52,7 @@ const PROVIDER_USAGE: &str = "Usage: /provider [setup|list|delete <provider>|key
 const ROLE_USAGE: &str = "Usage: /role [<role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]";
 const ROLES_USAGE: &str = "Usage: /roles [list|show <role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]";
 const THREAD_USAGE: &str = "Usage: /thread [list|show <role>|clear <role>|export <role> [--format markdown|html|--out <path>|--clipboard]]";
+const CONTINUE_USAGE: &str = "Usage: /continue [<role>|claude|codex|gemini]";
 const DOCTOR_USAGE: &str = "Usage: /doctor [run]";
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -227,6 +228,19 @@ impl ChatWidget {
         }
         self.app_event_tx
             .send(AppEvent::TiffanyOrchestratorThreadCommand { args: args.into() });
+    }
+
+    fn dispatch_tiffany_continue_command(&mut self, args: impl Into<String>) {
+        if !self.tiffany_orchestrator_shell {
+            self.add_error_message(format!(
+                "'/continue' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{CONTINUE_USAGE}"
+            ));
+            return;
+        }
+        self.app_event_tx
+            .send(AppEvent::TiffanyOrchestratorContinueCommand {
+                args: args.into(),
+            });
     }
 
     fn dispatch_tiffany_history_command(&mut self, args: impl Into<String>) {
@@ -485,6 +499,9 @@ impl ChatWidget {
             }
             SlashCommand::History => {
                 self.dispatch_tiffany_history_command("");
+            }
+            SlashCommand::Continue => {
+                self.dispatch_tiffany_continue_command("");
             }
             SlashCommand::Role => {
                 self.open_tiffany_role_setup_prompt(None);
@@ -1152,6 +1169,9 @@ impl ChatWidget {
             SlashCommand::History if !trimmed.is_empty() => {
                 self.dispatch_tiffany_history_command(args);
             }
+            SlashCommand::Continue if !trimmed.is_empty() => {
+                self.dispatch_tiffany_continue_command(args);
+            }
             SlashCommand::Side | SlashCommand::Btw if !trimmed.is_empty() => {
                 let Some(parent_thread_id) = self.thread_id else {
                     let command = cmd.command();
@@ -1373,6 +1393,7 @@ impl ChatWidget {
             | SlashCommand::Roles
             | SlashCommand::Thread
             | SlashCommand::History
+            | SlashCommand::Continue
             | SlashCommand::Doctor
             | SlashCommand::Help
             | SlashCommand::TestApproval => QueueDrain::Continue,

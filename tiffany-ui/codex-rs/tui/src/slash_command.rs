@@ -46,6 +46,7 @@ pub enum SlashCommand {
     Roles,
     Thread,
     History,
+    Continue,
     Doctor,
     #[strum(to_string = "help", serialize = "commands", serialize = "h")]
     Help,
@@ -138,6 +139,7 @@ impl SlashCommand {
             SlashCommand::History => {
                 "inspect, search, or export native Tiffany conversation history"
             }
+            SlashCommand::Continue => "show native CLI resume command for a worker",
             SlashCommand::Doctor => "diagnose tiffany-loop orchestrator setup",
             SlashCommand::Help => "show Tiffany orchestrator commands",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
@@ -182,6 +184,7 @@ impl SlashCommand {
                 | SlashCommand::Roles
                 | SlashCommand::Thread
                 | SlashCommand::History
+                | SlashCommand::Continue
                 | SlashCommand::Doctor
                 | SlashCommand::Help
                 | SlashCommand::Ide
@@ -256,6 +259,7 @@ impl SlashCommand {
             | SlashCommand::Roles
             | SlashCommand::Thread
             | SlashCommand::History
+            | SlashCommand::Continue
             | SlashCommand::Doctor
             | SlashCommand::Help
             | SlashCommand::Mcp
@@ -328,6 +332,12 @@ mod tests {
         assert_eq!(SlashCommand::from_str("history"), Ok(SlashCommand::History));
         assert_eq!(SlashCommand::History.command(), "history");
         assert!(SlashCommand::History.supports_inline_args());
+        assert_eq!(
+            SlashCommand::from_str("continue"),
+            Ok(SlashCommand::Continue)
+        );
+        assert_eq!(SlashCommand::Continue.command(), "continue");
+        assert!(SlashCommand::Continue.supports_inline_args());
     }
 
     #[test]
@@ -370,6 +380,8 @@ mod tests {
         assert!(SlashCommand::Thread.supports_inline_args());
         assert!(SlashCommand::History.available_during_task());
         assert!(SlashCommand::History.supports_inline_args());
+        assert!(SlashCommand::Continue.available_during_task());
+        assert!(SlashCommand::Continue.supports_inline_args());
         assert!(SlashCommand::Doctor.available_during_task());
         assert!(SlashCommand::Doctor.supports_inline_args());
     }

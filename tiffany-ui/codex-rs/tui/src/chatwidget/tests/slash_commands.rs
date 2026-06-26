@@ -281,6 +281,46 @@ async fn slash_history_dispatches_to_tiffany_orchestrator() {
 }
 
 #[tokio::test]
+async fn slash_continue_dispatches_to_tiffany_orchestrator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.handle_slash_command_dispatch(SlashCommand::Continue);
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorContinueCommand { args }) => {
+            assert_eq!(args, "");
+        }
+        other => panic!("expected TiffanyOrchestratorContinueCommand, got {other:?}"),
+    }
+
+    chat.dispatch_command_with_args(SlashCommand::Continue, "gemini".to_string(), Vec::new());
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorContinueCommand { args }) => {
+            assert_eq!(args, "gemini");
+        }
+        other => panic!("expected TiffanyOrchestratorContinueCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_continue_guides_when_not_in_orchestrator_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_slash_command_dispatch(SlashCommand::Continue);
+
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+            assert!(rendered.contains("tiffany-loop orchestrator mode"));
+            assert!(rendered.contains("Usage: /continue [<role>|claude|codex|gemini]"));
+        }
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_thread_guides_when_not_in_orchestrator_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -542,6 +582,7 @@ async fn tiffany_orchestrator_help_lists_supported_commands() {
         "/role",
         "/roles",
         "/thread",
+        "/continue",
         "/history",
         "/doctor",
         "/status",
@@ -584,7 +625,7 @@ async fn tiffany_orchestrator_status_uses_native_orchestration_summary() {
     assert!(rendered.contains("runtime"));
     assert!(rendered.contains("orchestrator"));
     assert!(rendered.contains(
-        "/provider  /role  /roles  /thread  /history  /doctor  /status  /help  /copy  /raw  /diff  /clear  /exit"
+        "/provider  /role  /roles  /thread  /continue  /history  /doctor  /status  /help  /copy  /raw  /diff  /clear  /exit"
     ));
     assert!(!rendered.contains("ChatGPT"));
     assert!(!rendered.contains("Reasoning"));
