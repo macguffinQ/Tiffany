@@ -62,7 +62,7 @@ impl VisibleAgentOutputKind {
 pub fn visible_agent_output_kind_for_event_kind(
     event_kind: &str,
 ) -> Option<VisibleAgentOutputKind> {
-    match event_kind.trim().to_ascii_lowercase().as_str() {
+    match normalize_event_kind(event_kind)?.as_str() {
         "stderr" => Some(VisibleAgentOutputKind::Stderr),
         "approval" | "permission_request" | "command_approval" | "patch_approval" => {
             Some(VisibleAgentOutputKind::Approval)
@@ -91,6 +91,74 @@ pub fn visible_agent_output_kind_for_event_kind(
         "status" | "process_exit" => Some(VisibleAgentOutputKind::Actionable),
         _ => None,
     }
+}
+
+pub fn normalize_event_kind(event_kind: &str) -> Option<String> {
+    let raw = event_kind.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let normalized = raw
+        .trim_start_matches("codex.")
+        .trim_start_matches("claude.")
+        .trim_start_matches("claude_code.")
+        .replace(['-', '.'], "_")
+        .to_ascii_lowercase();
+    let kind = match normalized.as_str() {
+        "assistant_message"
+        | "assistant_delta"
+        | "message"
+        | "text"
+        | "response_output_text"
+        | "response_output_text_delta"
+        | "content_block_delta" => "assistant",
+        "tool"
+        | "tool_use"
+        | "tool_call"
+        | "tool_invocation"
+        | "exec"
+        | "exec_command"
+        | "command"
+        | "shell"
+        | "bash"
+        | "local_shell_call"
+        | "function_call"
+        | "custom_tool_call"
+        | "tool_search_call"
+        | "web_search_call"
+        | "image_generation_call"
+        | "mcp_tool_call" => "tool_use",
+        "tool_result"
+        | "tool_output"
+        | "tool_response"
+        | "exec_output"
+        | "exec_result"
+        | "command_output"
+        | "command_result"
+        | "function_call_output"
+        | "custom_tool_call_output"
+        | "tool_search_output" => "tool_result",
+        "patch_apply" | "apply_patch" | "patch_set" => "patch",
+        "file"
+        | "file_write"
+        | "file_edit"
+        | "file_create"
+        | "file_delete"
+        | "file_changed"
+        | "file_change"
+        | "file_update" => "file_update",
+        "permission"
+        | "permission_request"
+        | "approval_request"
+        | "command_approval"
+        | "patch_approval" => "approval",
+        "error" | "stderr" => "stderr",
+        "response_completed" | "turn_complete" | "task_complete" | "final_answer" => {
+            "turn_complete"
+        }
+        _ => normalized.as_str(),
+    };
+    Some(kind.to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -670,7 +738,7 @@ pub fn humanize_user_visible_text(content: &str, max: usize) -> String {
 pub fn classify_json_line(line: &str) -> String {
     serde_json::from_str::<Value>(line)
         .ok()
-        .and_then(|value| event_kind_from_value(&value).map(str::to_string))
+        .and_then(|value| event_kind_from_value(&value))
         .unwrap_or_else(|| "raw".to_string())
 }
 
@@ -691,8 +759,11 @@ pub fn summarize_cli_stream_line(line: &str, max: usize) -> Option<AgentEventSum
 }
 
 pub fn summarize_event_value(value: &Value, max: usize) -> Option<AgentEventSummary> {
-    let kind = event_kind_from_value(value).unwrap_or("event").to_string();
-    let text = extract_text_from_value(value)
+    let kind = event_kind_from_value(value).unwrap_or_else(|| "event".to_string());
+    let text = value
+        .as_object()
+        .and_then(|object| summarize_inline_tool_object_with_kind(object, &kind))
+        .or_else(|| extract_text_from_value(value))
         .or_else(|| {
             value
                 .get("result")
@@ -1640,8 +1711,37 @@ pub fn sanitize_text(s: &str, max: usize) -> String {
     out
 }
 
-fn event_kind_from_value(value: &Value) -> Option<&str> {
-    value.get("type").and_then(Value::as_str)
+fn event_kind_from_value(value: &Value) -> Option<String> {
+    let raw = value
+        .get("type")
+        .or_else(|| value.get("kind"))
+        .or_else(|| value.get("event"))
+        .or_else(|| value.get("event_type"))
+        .or_else(|| value.get("name"))
+        .and_then(Value::as_str)?;
+    normalize_event_kind(raw)
+}
+
+fn tool_summary_kind_from_raw(raw_kind: &str) -> Option<String> {
+    let normalized = raw_kind
+        .trim()
+        .trim_start_matches("codex.")
+        .trim_start_matches("claude.")
+        .trim_start_matches("claude_code.")
+        .replace(['-', '.'], "_")
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "local_shell_call" => Some("local_shell_call".to_string()),
+        "function_call" => Some("function_call".to_string()),
+        "function_call_output" => Some("function_call_output".to_string()),
+        "custom_tool_call" => Some("custom_tool_call".to_string()),
+        "custom_tool_call_output" => Some("custom_tool_call_output".to_string()),
+        "tool_search_call" => Some("tool_search_call".to_string()),
+        "tool_search_output" => Some("tool_search_output".to_string()),
+        "web_search_call" => Some("web_search_call".to_string()),
+        "image_generation_call" => Some("image_generation_call".to_string()),
+        _ => normalize_event_kind(raw_kind),
+    }
 }
 
 fn summarize_json_value(value: &Value) -> String {
@@ -1806,18 +1906,42 @@ fn summarize_tool_object(object: &Map<String, Value>) -> Option<String> {
 }
 
 fn summarize_inline_tool_object(object: &Map<String, Value>) -> Option<String> {
-    match object.get("type").and_then(Value::as_str) {
-        Some("tool_use") => summarize_tool_object(object),
-        Some("tool_result") => summarize_tool_result_object(object),
-        Some("local_shell_call") => summarize_local_shell_call_object(object),
-        Some("function_call") => summarize_function_call_object(object),
-        Some("function_call_output") => summarize_function_call_output_object(object),
-        Some("custom_tool_call") => summarize_custom_tool_call_object(object),
-        Some("custom_tool_call_output") => summarize_custom_tool_call_output_object(object),
-        Some("tool_search_call") => summarize_tool_search_call_object(object),
-        Some("tool_search_output") => summarize_tool_search_output_object(object),
-        Some("web_search_call") => summarize_web_search_call_object(object),
-        Some("image_generation_call") => summarize_image_generation_call_object(object),
+    let raw_kind = object
+        .get("type")
+        .or_else(|| object.get("kind"))
+        .or_else(|| object.get("event"))
+        .or_else(|| object.get("event_type"))
+        .and_then(Value::as_str)?;
+    let kind = tool_summary_kind_from_raw(raw_kind)?;
+    summarize_inline_tool_object_with_kind(object, &kind)
+}
+
+fn summarize_inline_tool_object_with_kind(
+    object: &Map<String, Value>,
+    kind: &str,
+) -> Option<String> {
+    match kind {
+        "tool_use" => summarize_tool_object(object).or_else(|| {
+            if object
+                .get("command")
+                .or_else(|| object.get("cmd"))
+                .is_some()
+            {
+                summarize_local_shell_call_object(object)
+            } else {
+                summarize_function_call_object(object)
+            }
+        }),
+        "tool_result" => summarize_tool_result_object(object),
+        "local_shell_call" => summarize_local_shell_call_object(object),
+        "function_call" => summarize_function_call_object(object),
+        "function_call_output" => summarize_function_call_output_object(object),
+        "custom_tool_call" => summarize_custom_tool_call_object(object),
+        "custom_tool_call_output" => summarize_custom_tool_call_output_object(object),
+        "tool_search_call" => summarize_tool_search_call_object(object),
+        "tool_search_output" => summarize_tool_search_output_object(object),
+        "web_search_call" => summarize_web_search_call_object(object),
+        "image_generation_call" => summarize_image_generation_call_object(object),
         _ => None,
     }
 }
@@ -2658,7 +2782,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(shell.kind, "local_shell_call");
+        assert_eq!(shell.kind, "tool_use");
         assert_eq!(shell.text, "tool shell: cargo test --all");
         assert!(!shell.text.contains('{'));
 
@@ -2674,7 +2798,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(call.kind, "function_call");
+        assert_eq!(call.kind, "tool_use");
         assert_eq!(call.text, "tool exec_command: ls -la");
         assert!(!call.text.contains('{'));
 
@@ -2689,7 +2813,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(output.kind, "function_call_output");
+        assert_eq!(output.kind, "tool_result");
         assert_eq!(output.text, "tool result: tests passed");
         assert!(!output.text.contains('{'));
     }
@@ -2784,6 +2908,23 @@ mod tests {
 
     #[test]
     fn classifies_visible_agent_output_for_ui_surfaces() {
+        assert_eq!(
+            visible_agent_output_kind_for_event_kind("assistant_message"),
+            Some(VisibleAgentOutputKind::Answer)
+        );
+        assert_eq!(
+            visible_agent_output_kind_for_event_kind("exec_command"),
+            Some(VisibleAgentOutputKind::ToolCall)
+        );
+        assert_eq!(
+            visible_agent_output_kind_for_event_kind("patch_apply"),
+            Some(VisibleAgentOutputKind::Patch)
+        );
+        assert_eq!(
+            visible_agent_output_kind_for_event_kind("file_write"),
+            Some(VisibleAgentOutputKind::FileUpdate)
+        );
+
         let final_output =
             visible_agent_output("codex turn_complete: {\"result\":\"完成并验证。\"}", 500)
                 .expect("final output");
@@ -2923,6 +3064,36 @@ mod tests {
         assert_eq!(assistant_alert.kind.label(), "alert");
 
         assert!(visible_agent_output("claude-code assistant: thinking", 500).is_none());
+    }
+
+    #[test]
+    fn normalizes_native_cli_event_kind_aliases() {
+        let assistant = summarize_cli_stream_line(
+            &serde_json::json!({
+                "event": "assistant-message",
+                "message": { "content": [{ "type": "text", "text": "native answer" }] }
+            })
+            .to_string(),
+            500,
+        )
+        .unwrap();
+
+        assert_eq!(assistant.kind, "assistant");
+        assert_eq!(assistant.text, "native answer");
+
+        let shell = summarize_cli_stream_line(
+            &serde_json::json!({
+                "kind": "exec_command",
+                "command": "cargo test"
+            })
+            .to_string(),
+            500,
+        )
+        .unwrap();
+
+        assert_eq!(shell.kind, "tool_use");
+        assert_eq!(shell.text, "tool shell: cargo test");
+        assert_eq!(classify_json_line(r#"{"event_type":"patch-apply"}"#), "patch");
     }
 
     #[test]
