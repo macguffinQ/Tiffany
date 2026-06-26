@@ -50,13 +50,24 @@ impl VisibleAgentOutputKind {
     }
 }
 
-pub fn visible_agent_output_kind_for_event_kind(event_kind: &str) -> Option<VisibleAgentOutputKind> {
+pub fn visible_agent_output_kind_for_event_kind(
+    event_kind: &str,
+) -> Option<VisibleAgentOutputKind> {
     match event_kind.trim().to_ascii_lowercase().as_str() {
         "stderr" => Some(VisibleAgentOutputKind::Stderr),
-        "tool" | "tool_use" | "exec" | "local_shell_call" | "function_call"
-        | "custom_tool_call" | "tool_search_call" | "web_search_call"
-        | "image_generation_call" | "mcp_tool_call" => Some(VisibleAgentOutputKind::ToolCall),
-        "tool_result" | "function_call_output" | "custom_tool_call_output"
+        "tool"
+        | "tool_use"
+        | "exec"
+        | "local_shell_call"
+        | "function_call"
+        | "custom_tool_call"
+        | "tool_search_call"
+        | "web_search_call"
+        | "image_generation_call"
+        | "mcp_tool_call" => Some(VisibleAgentOutputKind::ToolCall),
+        "tool_result"
+        | "function_call_output"
+        | "custom_tool_call_output"
         | "tool_search_output" => Some(VisibleAgentOutputKind::ToolResult),
         "diff" => Some(VisibleAgentOutputKind::Diff),
         "patch" => Some(VisibleAgentOutputKind::Patch),
@@ -628,6 +639,9 @@ pub fn agent_failure_hint(content: &str, max: usize) -> Option<AgentFailureHint>
     }
 
     let lower = format!("{content}\n{evidence}").to_ascii_lowercase();
+    if user_action_request_display(content, &evidence, max).is_some() {
+        return None;
+    }
     let category = classify_failure_category(&lower)?;
     Some(AgentFailureHint { category, evidence })
 }
@@ -997,7 +1011,141 @@ fn question_output_display(content: &str, display: &str, max: usize) -> Option<S
         return Some(sanitize_text(normalized, max));
     }
 
+    if let Some(waiting) = user_action_request_display(content, normalized, max) {
+        return Some(waiting);
+    }
+
     None
+}
+
+fn user_action_request_display(content: &str, display: &str, max: usize) -> Option<String> {
+    let lower = format!("{content}\n{display}").to_ascii_lowercase();
+    if !looks_like_user_action_request(&lower) {
+        return None;
+    }
+
+    let label = if contains_any(
+        &lower,
+        &[
+            "request_permissions",
+            "request permissions",
+            "permission request",
+            "permissions request",
+            "grant permission",
+            "grant permissions",
+            "additional permissions",
+            "sandbox",
+        ],
+    ) {
+        "waiting for permission approval"
+    } else if contains_any(&lower, &["patch", "file change", "apply_patch"]) {
+        "waiting for patch approval"
+    } else if contains_any(&lower, &["command", "shell", "exec"]) {
+        "waiting for command approval"
+    } else {
+        "waiting for user approval"
+    };
+
+    let detail = user_action_request_detail(display);
+    match detail {
+        Some(detail) => Some(format!(
+            "{label}: {}",
+            sanitize_text(detail.trim(), max.min(220))
+        )),
+        None => Some(label.to_string()),
+    }
+}
+
+fn looks_like_user_action_request(lower: &str) -> bool {
+    if contains_any(
+        lower,
+        &[
+            "permission denied",
+            "operation not permitted",
+            "rejected",
+            "denied",
+            "failed",
+            "failure",
+            "not confirmed",
+            "forbidden",
+            "unauthorized",
+            "error:",
+        ],
+    ) {
+        return false;
+    }
+
+    contains_any(
+        lower,
+        &[
+            "request_permissions",
+            "request permissions",
+            "permission request",
+            "permissions request",
+            "request approval",
+            "approval request",
+            "requires approval",
+            "approval required",
+            "needs approval",
+            "waiting for approval",
+            "approve this command",
+            "approve command",
+            "allow this command",
+            "allow command",
+            "grant permissions",
+            "grant permission",
+            "requires additional permissions",
+            "additional permissions",
+        ],
+    )
+}
+
+fn user_action_request_detail(display: &str) -> Option<String> {
+    let normalized = normalize_output_summary(display);
+    let mut detail = normalized.trim();
+    for prefix in [
+        "tool request_permissions:",
+        "tool request permissions:",
+        "request_permissions:",
+        "request permissions:",
+        "permission request:",
+        "permissions request:",
+        "approval request:",
+        "request approval:",
+        "command requires approval:",
+        "command approval required:",
+        "command needs approval:",
+        "approve command:",
+        "approve this command:",
+        "allow command:",
+        "allow this command:",
+        "patch requires approval:",
+        "patch approval required:",
+        "patch needs approval:",
+        "requires approval:",
+        "approval required:",
+        "needs approval:",
+        "waiting for approval:",
+    ] {
+        if detail.to_ascii_lowercase().starts_with(prefix) {
+            detail = detail[prefix.len()..].trim();
+            break;
+        }
+    }
+    if detail.is_empty()
+        || matches!(
+            detail.to_ascii_lowercase().as_str(),
+            "tool request_permissions"
+                | "tool request permissions"
+                | "request_permissions"
+                | "request permissions"
+                | "approval request"
+                | "request approval"
+        )
+    {
+        return None;
+    }
+    Some(detail.to_string())
 }
 
 fn prefix_is_stderr(prefix: &str) -> bool {
@@ -2687,6 +2835,28 @@ mod tests {
             "waiting for user input: Answer questions?"
         );
 
+        let permissions = visible_agent_output(
+            "codex tool_use: tool request_permissions: network access and write access",
+            500,
+        )
+        .expect("permissions wait");
+        assert_eq!(permissions.kind, VisibleAgentOutputKind::Question);
+        assert_eq!(
+            permissions.display,
+            "waiting for permission approval: network access and write access"
+        );
+
+        let command_approval = visible_agent_output(
+            "claude-code status: command requires approval: rm -rf target",
+            500,
+        )
+        .expect("command approval wait");
+        assert_eq!(command_approval.kind, VisibleAgentOutputKind::Question);
+        assert_eq!(
+            command_approval.display,
+            "waiting for command approval: rm -rf target"
+        );
+
         let diff = visible_agent_output(
             "claude-code diff: files changed:\n  - src/lib.rs\n\ndiff --git a/src/lib.rs b/src/lib.rs",
             500,
@@ -2697,15 +2867,16 @@ mod tests {
         assert!(diff.display.contains("files changed:"));
         assert!(diff.display.contains("diff --git"));
 
-        let patch =
-            visible_agent_output("codex patch: *** Begin Patch\n*** Update File: README.md", 500)
-                .expect("worker patch");
+        let patch = visible_agent_output(
+            "codex patch: *** Begin Patch\n*** Update File: README.md",
+            500,
+        )
+        .expect("worker patch");
         assert_eq!(patch.kind, VisibleAgentOutputKind::Patch);
         assert_eq!(patch.kind.label(), "patch");
 
-        let file_update =
-            visible_agent_output("gemini file_update: file updated: src/lib.rs", 500)
-                .expect("file update");
+        let file_update = visible_agent_output("gemini file_update: file updated: src/lib.rs", 500)
+            .expect("file update");
         assert_eq!(file_update.kind, VisibleAgentOutputKind::FileUpdate);
         assert_eq!(file_update.kind.label(), "file update");
 
@@ -2730,6 +2901,19 @@ mod tests {
         assert_eq!(output.kind, VisibleAgentOutputKind::ToolResult);
         assert!(output.display.ends_with("END"));
         assert!(!output.display.contains('…'));
+    }
+
+    #[test]
+    fn approval_requests_do_not_emit_failure_hints() {
+        assert!(agent_failure_hint(
+            "codex tool_use: tool request_permissions: network access",
+            500
+        )
+        .is_none());
+
+        let denied = agent_failure_hint("claude-code stderr: permission denied", 500)
+            .expect("permission failure");
+        assert_eq!(denied.category, AgentFailureCategory::Permission);
     }
 
     #[test]
