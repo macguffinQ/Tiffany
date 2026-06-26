@@ -19,10 +19,9 @@ const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
 const CYAN: &str = TIFFANY;
 const PROGRESS_OUTPUT_WIDTH: usize = 104;
-const PROGRESS_OUTPUT_LINE_LIMIT: usize = 36;
 const PROGRESS_OUTPUT_FOLDED_LIMIT: usize = 220;
-const PROGRESS_OUTPUT_EXPANDED_LIMIT: usize = 4_000;
 const FINAL_OUTPUT_MAX_CHARS: usize = 240_000;
+const PROGRESS_OUTPUT_EXPANDED_LIMIT: usize = FINAL_OUTPUT_MAX_CHARS;
 
 pub(super) fn progress_history_lines(event: &RunProgress, input: &mut InputState) -> Vec<String> {
     let Some((icon, color, line)) = progress_line(event, input.run_review_issue_count, input)
@@ -46,9 +45,10 @@ pub(super) fn progress_line(
             task_id,
             agent,
             role,
+            event_kind,
             content,
             ..
-        } => visible_worker_output_line(task_id, role, agent, content, input),
+        } => visible_worker_output_line(task_id, role, agent, event_kind, content, input),
         RunProgress::RoleOutput { role, content } => visible_role_output_line(role, content, input),
         RunProgress::Done { task_count } => {
             let _ = task_count;
@@ -153,10 +153,17 @@ fn visible_progress_key_for_event(event: &RunProgress, line: &str) -> String {
             task_id,
             agent,
             role,
+            event_kind,
             content,
             ..
         } => visible_output_key(
-            &format!("worker:{}:{}:{}", short_task_id(task_id), role, agent),
+            &format!(
+                "worker:{}:{}:{}:{}",
+                short_task_id(task_id),
+                role,
+                agent,
+                event_kind
+            ),
             &visible_worker_output_dedupe_display(content)
                 .unwrap_or_else(|| truncate_chars(line.trim(), 240)),
         ),
@@ -173,6 +180,7 @@ fn visible_worker_output_line(
     task_id: &uuid::Uuid,
     role: &str,
     agent: &str,
+    event_kind: &str,
     content: &str,
     input: &InputState,
 ) -> Option<(&'static str, &'static str, String)> {
@@ -182,7 +190,13 @@ fn visible_worker_output_line(
         PROGRESS_OUTPUT_EXPANDED_LIMIT
     };
     let output = visible_worker_output_display(content, max)?;
-    let scope = format!("worker:{}:{}:{}", short_task_id(task_id), role, agent);
+    let scope = format!(
+        "worker:{}:{}:{}:{}",
+        short_task_id(task_id),
+        role,
+        agent,
+        event_kind
+    );
     let dedupe_display =
         visible_worker_output_dedupe_display(content).unwrap_or_else(|| output.display.clone());
     if output_was_already_visible(input, &scope, &dedupe_display) {
@@ -290,11 +304,6 @@ fn format_agent_output_block(
             out.push('\n');
             out.push_str(&line);
             pushed += 1;
-            if pushed >= PROGRESS_OUTPUT_LINE_LIMIT {
-                out.push('\n');
-                out.push_str("… /process 200");
-                return out;
-            }
         }
     }
     if pushed == 0 {
@@ -319,7 +328,9 @@ fn visible_worker_output_display(content: &str, max: usize) -> Option<VisibleWor
     }
 
     let output = agent_events::visible_agent_output(content, max)?;
-    if worker_output_is_final_like_display(&output.display) {
+    if output.kind == agent_events::VisibleAgentOutputKind::Normal
+        && worker_output_is_final_like_display(&output.display)
+    {
         return Some(VisibleWorkerOutputDisplay {
             kind: agent_events::VisibleAgentOutputKind::Final,
             display: format_captured_final_result(&output.display),
@@ -474,7 +485,10 @@ mod tests {
             event_kind: "result".into(),
             content: "claude result: useful summary".into(),
         };
-        assert!(progress_line(&duplicate, 0, &input).is_none());
+        assert!(
+            progress_line(&duplicate, 0, &input).is_some(),
+            "different native event kinds should not hide each other"
+        );
 
         assert!(progress_line(
             &RunProgress::RoleOutput {
@@ -642,6 +656,33 @@ mod tests {
         assert_eq!(alert.1, YELLOW);
         assert!(alert.2.contains("alert"));
         assert!(alert.2.contains("permission denied"));
+    }
+
+    #[test]
+    fn expanded_history_preserves_long_worker_tool_results() {
+        let task_id = uuid::Uuid::nil();
+        let long = format!("{}END", "x".repeat(4_500));
+        let input = InputState {
+            history_folded: false,
+            ..InputState::default()
+        };
+
+        let result = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "tool_result".into(),
+                content: format!("claude-code tool_result: tool result: {long}"),
+            },
+            0,
+            &input,
+        )
+        .expect("long tool result should be visible");
+
+        assert_eq!(result.0, "✓");
+        assert!(result.2.contains("END"));
+        assert!(!result.2.contains("…"));
     }
 
     #[test]
