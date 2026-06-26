@@ -151,7 +151,7 @@ tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.
 - **worker 输出更可读**：worker 流式输出会标记为 `final`、`tool call`、`tool result`、`stderr` 或 `alert`，常见模型、权限、认证、runtime 错误会直接显示一行修复提示。
 - **队列与多轮**：运行中继续输入会进入 tiffany-loop 底部 pending queue，普通消息在当前轮结束后合并为下一批一起执行。
 - **上下文记忆**：支持紧凑/完整/关闭/清空上下文。
-- **交接能力**：可生成 Claude/Codex/Gemini CLI handoff 包；也可用 `/continue open <role|claude|codex|gemini>` 暂停 Tiffany，打开原始 CLI 会话继续工作，返回后把 Claude transcript 事件和 git status/stat/patch 作为 typed history 保存。
+- **交接能力**：可生成 Claude/Codex/Gemini CLI handoff 包；也可用 `/continue open <role|claude|codex|gemini>` 暂停 Tiffany，打开原始 CLI 会话继续工作，返回后把 Claude/Codex transcript 事件和 git status/stat/patch 作为 typed history 保存。
 - **ACP**：提供 Agent Client Protocol stdio server，可被支持 ACP 的客户端调用。
 - **会话日志**：JSONL + SQLite 索引，便于复盘、搜索、注入上下文。
 
@@ -453,7 +453,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `/roles`：查看角色接线、选择当前 worker 路由，或保存 role/provider/model/runtime 绑定。
 - `/thread`：查看 worker/native CLI 会话复用状态；`/thread clear <role>` 可清掉卡住的 native session id。
 - `/continue <role|claude|codex|gemini>`：查看某个角色的原生 CLI handoff 命令。
-- `/continue open <role|claude|codex|gemini>`：暂停 Tiffany，打开原始 Claude/Codex/Gemini 会话继续工作；退出原生 CLI 后，Tiffany 会把 Claude transcript 事件、git status、diff stat 和完整 patch 保存到对话历史，可用 `/history kind diff` 复盘。
+- `/continue open <role|claude|codex|gemini>`：暂停 Tiffany，打开原始 Claude/Codex/Gemini 会话继续工作；退出原生 CLI 后，Tiffany 会把 Claude/Codex transcript 事件、git status、diff stat 和完整 patch 保存到对话历史，可用 `/history kind diff` 复盘。
 - `/history`：查看、搜索、导出保存的原生事件流；支持 `/history role <role>`、`/history thread <id>`、`/history kind answer|tool_result|diff|approval`，以及 `/history export kind <event-kind> --out file.md`。
 - `/doctor`：诊断配置、runtime、API key、角色绑定、本地工具和安装状态。
 - `/status`：显示当前会话和配置状态。

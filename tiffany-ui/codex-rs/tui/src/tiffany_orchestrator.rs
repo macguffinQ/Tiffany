@@ -132,6 +132,13 @@ pub(crate) struct TiffanyNativeCliReturn {
 pub(crate) struct TiffanyNativeCliTranscriptCursor {
     path: PathBuf,
     byte_len: u64,
+    runtime: TiffanyNativeTranscriptRuntime,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TiffanyNativeTranscriptRuntime {
+    Claude,
+    Codex,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1228,21 +1235,31 @@ pub(crate) fn native_cli_transcript_preview(
 pub(crate) fn native_cli_transcript_cursor(
     command: &TiffanyNativeCliCommand,
 ) -> Option<TiffanyNativeCliTranscriptCursor> {
-    if !native_cli_command_is_claude(command) {
+    let (runtime, path) = if native_cli_command_is_claude(command) {
+        (
+            TiffanyNativeTranscriptRuntime::Claude,
+            claude_session_jsonl_path(command)?,
+        )
+    } else if native_cli_command_is_codex(command) {
+        (
+            TiffanyNativeTranscriptRuntime::Codex,
+            codex_session_jsonl_path(command)?,
+        )
+    } else {
         return None;
-    }
-    let path = claude_session_jsonl_path(command)?;
+    };
     let byte_len = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-    Some(TiffanyNativeCliTranscriptCursor { path, byte_len })
+    Some(TiffanyNativeCliTranscriptCursor {
+        path,
+        byte_len,
+        runtime,
+    })
 }
 
 pub(crate) fn native_cli_transcript_events_since(
     command: &TiffanyNativeCliCommand,
     cursor: Option<&TiffanyNativeCliTranscriptCursor>,
 ) -> Vec<TiffanyNativeChatEvent> {
-    if !native_cli_command_is_claude(command) {
-        return Vec::new();
-    }
     let Some(cursor) = cursor else {
         return Vec::new();
     };
@@ -1264,11 +1281,22 @@ pub(crate) fn native_cli_transcript_events_since(
     if file.read_to_string(&mut body).is_err() {
         return Vec::new();
     }
-    native_cli_transcript_events_from_jsonl(command, &body)
+    match cursor.runtime {
+        TiffanyNativeTranscriptRuntime::Claude => {
+            native_cli_transcript_events_from_claude_jsonl(command, &body)
+        }
+        TiffanyNativeTranscriptRuntime::Codex => {
+            native_cli_transcript_events_from_codex_jsonl(command, &body)
+        }
+    }
 }
 
 fn native_cli_command_is_claude(command: &TiffanyNativeCliCommand) -> bool {
     command.command.contains("claude --resume") || command.command.contains("claude resume")
+}
+
+fn native_cli_command_is_codex(command: &TiffanyNativeCliCommand) -> bool {
+    command.command.contains("codex resume") || command.command.contains("codex exec resume")
 }
 
 fn claude_session_jsonl_path(command: &TiffanyNativeCliCommand) -> Option<PathBuf> {
@@ -1290,17 +1318,51 @@ fn claude_session_jsonl_path(command: &TiffanyNativeCliCommand) -> Option<PathBu
     Some(path)
 }
 
-fn native_cli_transcript_events_from_jsonl(
+fn codex_session_jsonl_path(command: &TiffanyNativeCliCommand) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    find_codex_rollout_path_by_id(&home.join(".codex").join("sessions"), &command.native_session)
+}
+
+fn find_codex_rollout_path_by_id(root: &Path, id: &str) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if file_name.contains(id) && file_name.ends_with(".jsonl") {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn native_cli_transcript_events_from_claude_jsonl(
     command: &TiffanyNativeCliCommand,
     body: &str,
 ) -> Vec<TiffanyNativeChatEvent> {
     body.lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .flat_map(|value| native_cli_transcript_events_from_value(command, &value))
+        .flat_map(|value| native_cli_transcript_events_from_claude_value(command, &value))
         .collect()
 }
 
-fn native_cli_transcript_events_from_value(
+fn native_cli_transcript_events_from_claude_value(
     command: &TiffanyNativeCliCommand,
     value: &serde_json::Value,
 ) -> Vec<TiffanyNativeChatEvent> {
@@ -1393,13 +1455,18 @@ fn native_cli_transcript_event(
     title: &str,
     content: String,
 ) -> TiffanyNativeChatEvent {
+    let agent = if native_cli_command_is_codex(command) {
+        "codex"
+    } else {
+        "claude-code"
+    };
     normalize_native_event(TiffanyNativeChatEvent {
         role: "worker".to_string(),
         status: "output".to_string(),
         title: format!("worker {title} · {}", command.role),
         kind: Some(kind.to_string()),
         content: Some(content),
-        agent: Some("claude-code".to_string()),
+        agent: Some(agent.to_string()),
         worker_role: Some(command.role.clone()),
         model: None,
         provider: None,
@@ -1408,6 +1475,93 @@ fn native_cli_transcript_event(
         native_session_id: Some(command.native_session.clone()),
     })
     .expect("native CLI transcript event should be valid")
+}
+
+fn native_cli_transcript_events_from_codex_jsonl(
+    command: &TiffanyNativeCliCommand,
+    body: &str,
+) -> Vec<TiffanyNativeChatEvent> {
+    body.lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .flat_map(|value| native_cli_transcript_events_from_codex_value(command, &value))
+        .collect()
+}
+
+fn native_cli_transcript_events_from_codex_value(
+    command: &TiffanyNativeCliCommand,
+    value: &serde_json::Value,
+) -> Vec<TiffanyNativeChatEvent> {
+    let mut events = Vec::new();
+    let item = value.get("item").unwrap_or(value);
+    let item = item.get("event_msg").unwrap_or(item);
+    if let Some(message) = item.get("agent_message").and_then(json_string_value) {
+        events.push(native_cli_transcript_event(
+            command,
+            "answer",
+            "native answer",
+            message,
+        ));
+    }
+    if let Some(message) = item.get("user_message").and_then(json_string_value) {
+        events.push(native_cli_transcript_event(
+            command,
+            "question",
+            "native user",
+            message,
+        ));
+    }
+    if let Some(message) = item.get("agent_reasoning").and_then(json_string_value) {
+        events.push(native_cli_transcript_event(
+            command,
+            "output",
+            "native reasoning",
+            message,
+        ));
+    }
+    if let Some(command_line) = item
+        .get("exec_command_begin")
+        .and_then(codex_exec_command_text)
+    {
+        events.push(native_cli_transcript_event(
+            command,
+            "tool_call",
+            "native tool call",
+            command_line,
+        ));
+    }
+    if let Some(result) = item.get("exec_command_end").and_then(codex_exec_end_text) {
+        events.push(native_cli_transcript_event(
+            command,
+            "tool_result",
+            "native tool result",
+            result,
+        ));
+    }
+    if let Some(patch) = item.get("patch_apply_begin").and_then(codex_patch_text) {
+        events.push(native_cli_transcript_event(
+            command,
+            "patch",
+            "native patch",
+            patch,
+        ));
+    }
+    if let Some(patch) = item.get("patch_apply_end").and_then(codex_patch_text) {
+        events.push(native_cli_transcript_event(
+            command,
+            "patch",
+            "native patch",
+            patch,
+        ));
+    }
+    if let Some(diff) = item.get("turn_diff").and_then(codex_turn_diff_text) {
+        events.push(native_cli_transcript_event(
+            command,
+            "diff",
+            "native diff",
+            diff,
+        ));
+    }
+    events
 }
 
 fn native_cli_result_content(value: &serde_json::Value) -> Option<String> {
@@ -1479,6 +1633,76 @@ fn native_cli_tool_result_text(item: &serde_json::Value) -> Option<String> {
         value => value.to_string(),
     };
     trimmed_string(content)
+}
+
+fn json_string_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => trimmed_string(value.clone()),
+        serde_json::Value::Object(_) => [
+            "message", "text", "content", "output", "summary", "result", "diff", "patch",
+        ]
+        .into_iter()
+        .find_map(|key| value.get(key).and_then(json_string_value)),
+        serde_json::Value::Array(items) => {
+            let content = items
+                .iter()
+                .filter_map(json_string_value)
+                .collect::<Vec<_>>()
+                .join("\n");
+            trimmed_string(content)
+        }
+        _ => None,
+    }
+}
+
+fn codex_exec_command_text(value: &serde_json::Value) -> Option<String> {
+    let command = value
+        .get("command")
+        .and_then(json_string_value)
+        .or_else(|| value.get("cmd").and_then(json_string_value))
+        .or_else(|| value.get("argv").and_then(json_string_value))
+        .or_else(|| value.get("args").and_then(json_string_value))?;
+    Some(format!("shell: {}", one_line(&command)))
+}
+
+fn codex_exec_end_text(value: &serde_json::Value) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(exit_code) = value
+        .get("exit_code")
+        .or_else(|| value.get("exitCode"))
+        .and_then(|value| value.as_i64())
+    {
+        parts.push(format!("exit {exit_code}"));
+    }
+    if let Some(stdout) = value.get("stdout").and_then(json_string_value) {
+        parts.push(stdout);
+    }
+    if let Some(stderr) = value.get("stderr").and_then(json_string_value) {
+        parts.push(stderr);
+    }
+    if parts.is_empty() {
+        json_string_value(value)
+    } else {
+        trimmed_string(parts.join("\n"))
+    }
+}
+
+fn codex_patch_text(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("patch")
+        .and_then(json_string_value)
+        .or_else(|| value.get("changes").and_then(json_string_value))
+        .or_else(|| value.get("summary").and_then(json_string_value))
+        .or_else(|| json_string_value(value))
+}
+
+fn codex_turn_diff_text(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("diff")
+        .and_then(json_string_value)
+        .or_else(|| value.get("unified_diff").and_then(json_string_value))
+        .or_else(|| value.get("changes").and_then(json_string_value))
+        .or_else(|| json_string_value(value))
 }
 
 fn native_cli_return_has_changes(outcome: &TiffanyNativeCliReturn) -> bool {
@@ -8194,7 +8418,7 @@ mod tests {
 {"type":"result","result":"完成。"}
 "#;
 
-        let events = native_cli_transcript_events_from_jsonl(&command, jsonl);
+        let events = native_cli_transcript_events_from_claude_jsonl(&command, jsonl);
 
         assert_eq!(events.len(), 4);
         assert_eq!(events[0].kind.as_deref(), Some("answer"));
@@ -8211,6 +8435,36 @@ mod tests {
             native_cli_transcript_preview(&events).as_deref(),
             Some("完成。")
         );
+    }
+
+    #[test]
+    fn native_cli_transcript_events_parse_codex_rollout_without_raw_json() {
+        let command = TiffanyNativeCliCommand {
+            role: "worker-codex".into(),
+            native_session: "123e4567-e89b-12d3-a456-426614174000".into(),
+            command: "codex resume 123e4567-e89b-12d3-a456-426614174000".into(),
+            worktree: Some("/tmp/repo".into()),
+        };
+        let jsonl = r#"{"timestamp":"2026-06-26T00:00:00Z","item":{"event_msg":{"agent_message":{"message":"我会检查代码。"}}}}
+{"timestamp":"2026-06-26T00:00:01Z","item":{"event_msg":{"exec_command_begin":{"command":"cargo test"}}}}
+{"timestamp":"2026-06-26T00:00:02Z","item":{"event_msg":{"exec_command_end":{"exit_code":0,"stdout":"ok"}}}}
+{"timestamp":"2026-06-26T00:00:03Z","item":{"event_msg":{"turn_diff":{"diff":"diff --git a/lib.rs b/lib.rs\n+done"}}}}
+"#;
+
+        let events = native_cli_transcript_events_from_codex_jsonl(&command, jsonl);
+
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].kind.as_deref(), Some("answer"));
+        assert_eq!(events[0].agent.as_deref(), Some("codex"));
+        assert_eq!(events[0].content.as_deref(), Some("我会检查代码。"));
+        assert_eq!(events[1].kind.as_deref(), Some("tool_call"));
+        assert_eq!(events[1].content.as_deref(), Some("shell: cargo test"));
+        assert_eq!(events[2].kind.as_deref(), Some("tool_result"));
+        assert!(events[2].content.as_deref().unwrap().contains("exit 0"));
+        assert!(events[2].content.as_deref().unwrap().contains("ok"));
+        assert_eq!(events[3].kind.as_deref(), Some("diff"));
+        assert!(events[3].content.as_deref().unwrap().contains("diff --git"));
+        assert!(!events[3].content.as_deref().unwrap().contains("\"turn_diff\""));
     }
 
     #[test]
