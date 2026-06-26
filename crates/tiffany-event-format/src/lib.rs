@@ -2,6 +2,9 @@
 
 use serde_json::{Map, Value};
 
+const TOOL_DETAIL_MAX_CHARS: usize = 220;
+const TOOL_RESULT_MAX_CHARS: usize = 240_000;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentEventSummary {
     pub kind: String,
@@ -1781,7 +1784,10 @@ fn summarize_tool_result_object(object: &Map<String, Value>) -> Option<String> {
     if content.trim().is_empty() {
         Some(prefix.to_string())
     } else {
-        Some(format!("{prefix}: {}", sanitize_text(content.trim(), 220)))
+        Some(format!(
+            "{prefix}: {}",
+            sanitize_text(content.trim(), TOOL_RESULT_MAX_CHARS)
+        ))
     }
 }
 
@@ -1797,7 +1803,10 @@ fn summarize_output_body(
 fn format_tool_summary(name: &str, detail: Option<String>) -> String {
     match detail {
         Some(detail) if !detail.trim().is_empty() => {
-            format!("tool {name}: {}", sanitize_text(detail.trim(), 220))
+            format!(
+                "tool {name}: {}",
+                sanitize_text(detail.trim(), TOOL_DETAIL_MAX_CHARS)
+            )
         }
         _ => format!("tool {name}"),
     }
@@ -1819,7 +1828,10 @@ fn format_tool_result_summary(
     };
     match detail {
         Some(detail) if !detail.trim().is_empty() => {
-            format!("{prefix}: {}", sanitize_text(detail.trim(), 220))
+            format!(
+                "{prefix}: {}",
+                sanitize_text(detail.trim(), TOOL_RESULT_MAX_CHARS)
+            )
         }
         _ => prefix,
     }
@@ -2704,6 +2716,20 @@ mod tests {
         assert_eq!(normal.dedupe_key, "useful summary");
 
         assert!(visible_agent_output("claude-code assistant: thinking", 500).is_none());
+    }
+
+    #[test]
+    fn preserves_long_tool_result_bodies_for_native_streams() {
+        let long = format!("{}END", "x".repeat(512));
+        let output = visible_agent_output(
+            &format!("claude-code tool_result: tool result: {long}"),
+            10_000,
+        )
+        .expect("tool result");
+
+        assert_eq!(output.kind, VisibleAgentOutputKind::ToolResult);
+        assert!(output.display.ends_with("END"));
+        assert!(!output.display.contains('…'));
     }
 
     #[test]

@@ -5212,6 +5212,15 @@ fn output_scope(event: &TiffanyProgressEvent) -> String {
         scope.push(':');
         scope.push_str(task_id);
     }
+    if let Some(kind) = event
+        .event_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+    {
+        scope.push(':');
+        scope.push_str(kind);
+    }
     scope
 }
 
@@ -8237,13 +8246,17 @@ mod tests {
     }
 
     #[test]
-    fn output_dedupe_key_ignores_runtime_event_kind_after_visible_cleanup() {
-        let assistant = worker_output_event(
-            "claude output",
-            "claude-code",
-            "claude-code assistant: useful summary",
-        );
+    fn output_dedupe_scope_keeps_runtime_event_kind_after_visible_cleanup() {
+        let assistant = TiffanyProgressEvent {
+            event_kind: Some("assistant".to_string()),
+            ..worker_output_event(
+                "claude output",
+                "claude-code",
+                "claude-code assistant: useful summary",
+            )
+        };
         let result = TiffanyProgressEvent {
+            event_kind: Some("result".to_string()),
             content: Some("claude-code result: useful summary".to_string()),
             ..assistant.clone()
         };
@@ -8253,7 +8266,7 @@ mod tests {
 
         assert_eq!(assistant_visible, "useful summary");
         assert_eq!(assistant_visible, result_visible);
-        assert_eq!(output_scope(&assistant), output_scope(&result));
+        assert_ne!(output_scope(&assistant), output_scope(&result));
         assert_eq!(
             normalized_output_key(&assistant_visible),
             normalized_output_key(&result_visible)
