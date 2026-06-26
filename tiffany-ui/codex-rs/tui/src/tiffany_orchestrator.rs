@@ -1185,9 +1185,35 @@ impl NativeHistoryFilter {
                 .as_deref()
                 .is_some_and(|id| id == thread || id.starts_with(thread)),
             Self::Kind(kind) => event.kind.as_deref().is_some_and(|event_kind| {
-                event_kind.eq_ignore_ascii_case(kind) || event_kind.starts_with(kind)
+                native_history_kind_matches(event_kind, kind)
             }),
         }
+    }
+}
+
+fn native_history_kind_matches(event_kind: &str, filter: &str) -> bool {
+    event_kind.eq_ignore_ascii_case(filter) || event_kind.starts_with(filter) || {
+        let event_kind = event_format::normalize_event_kind(event_kind);
+        let filter = event_format::normalize_event_kind(filter);
+        let event_visible = event_kind
+            .as_deref()
+            .and_then(event_format::visible_agent_output_kind_for_event_kind);
+        let filter_visible = filter
+            .as_deref()
+            .and_then(event_format::visible_agent_output_kind_for_event_kind);
+        matches!(
+            (
+                event_kind.as_deref(),
+                filter.as_deref(),
+                event_visible,
+                filter_visible
+            ),
+            (Some(event_kind), Some(filter), _, _)
+                if event_kind.eq_ignore_ascii_case(filter) || event_kind.starts_with(filter)
+        ) || matches!(
+            (event_visible, filter_visible),
+            (Some(event_visible), Some(filter_visible)) if event_visible == filter_visible
+        )
     }
 }
 
@@ -6759,6 +6785,17 @@ mod tests {
         assert!(kind_text.contains("kind: diff"));
         assert!(kind_text.contains("codex role output"));
         assert!(!kind_text.contains("claude role output"));
+
+        let by_kind_alias = native_history_lines(home.path(), cwd.path(), "kind assistant-message");
+        let alias_text = by_kind_alias
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(alias_text.contains("filter  kind assistant-message"));
+        assert!(alias_text.contains("kind: answer"));
+        assert!(alias_text.contains("claude role output"));
+        assert!(!alias_text.contains("codex role output"));
     }
 
     #[test]
