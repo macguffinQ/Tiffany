@@ -3084,8 +3084,8 @@ fn continue_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
             ),
             thread_meta_line("native", native),
             next_line(
-                &format!("/agent {role}"),
-                "run a task first to create a resumable worker thread",
+                "run a task",
+                "first successful worker run creates a resumable native session",
             ),
             next_line(&format!("/thread {role}"), "inspect thread state"),
         ]);
@@ -7256,7 +7256,7 @@ mod tests {
 
         assert!(text.contains("⚠ continue  worker-cc has no native session yet"));
         assert!(text.contains("native  none"));
-        assert!(text.contains("next  /agent worker-cc"));
+        assert!(text.contains("next  run a task"));
         assert!(text.contains("next  /thread worker-cc"));
     }
 
