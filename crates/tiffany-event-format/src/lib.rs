@@ -107,6 +107,7 @@ pub fn normalize_event_kind(event_kind: &str) -> Option<String> {
     let kind = match normalized.as_str() {
         "assistant_message"
         | "assistant_delta"
+        | "agent_message"
         | "message"
         | "text"
         | "response_output_text"
@@ -156,6 +157,7 @@ pub fn normalize_event_kind(event_kind: &str) -> Option<String> {
         "response_completed" | "turn_complete" | "task_complete" | "final_answer" => {
             "turn_complete"
         }
+        "user_message" => "user",
         _ => normalized.as_str(),
     };
     Some(kind.to_string())
@@ -759,10 +761,14 @@ pub fn summarize_cli_stream_line(line: &str, max: usize) -> Option<AgentEventSum
 }
 
 pub fn summarize_event_value(value: &Value, max: usize) -> Option<AgentEventSummary> {
-    let kind = event_kind_from_value(value).unwrap_or_else(|| "event".to_string());
+    if let Some(payload) = event_wrapper_payload(value) {
+        return summarize_event_value(payload, max);
+    }
+    let kind = event_kind_from_value(value)
+        .unwrap_or_else(|| "event".to_string());
     let text = value
         .as_object()
-        .and_then(|object| summarize_inline_tool_object_with_kind(object, &kind))
+        .and_then(summarize_inline_tool_object)
         .or_else(|| extract_text_from_value(value))
         .or_else(|| {
             value
@@ -1699,6 +1705,14 @@ pub fn sanitize_text(s: &str, max: usize) -> String {
 }
 
 fn event_kind_from_value(value: &Value) -> Option<String> {
+    if let Some(payload) = event_wrapper_payload(value) {
+        if let Some(kind) = event_kind_from_value(payload) {
+            return Some(kind);
+        }
+    }
+    if let Some(kind) = semantic_event_kind_from_value(value) {
+        return Some(kind);
+    }
     let raw = value
         .get("type")
         .or_else(|| value.get("kind"))
@@ -1707,6 +1721,97 @@ fn event_kind_from_value(value: &Value) -> Option<String> {
         .or_else(|| value.get("name"))
         .and_then(Value::as_str)?;
     normalize_event_kind(raw)
+}
+
+fn semantic_event_kind_from_value(value: &Value) -> Option<String> {
+    if let Some(payload) = event_wrapper_payload(value) {
+        if let Some(kind) = semantic_event_kind_from_value(payload) {
+            return Some(kind);
+        }
+    }
+
+    let object = value.as_object()?;
+    if let Some(kind) = semantic_event_kind_from_object(object) {
+        return Some(kind);
+    }
+    if let Some(kind) = semantic_message_event_kind(object) {
+        return Some(kind);
+    }
+
+    for key in ["message", "item", "event", "msg", "data"] {
+        if let Some(kind) = object.get(key).and_then(semantic_event_kind_from_value) {
+            return Some(kind);
+        }
+    }
+
+    None
+}
+
+fn event_wrapper_payload(value: &Value) -> Option<&Value> {
+    let object = value.as_object()?;
+    let wrapper_type = object
+        .get("type")
+        .or_else(|| object.get("kind"))
+        .or_else(|| object.get("event"))
+        .or_else(|| object.get("event_type"))
+        .and_then(Value::as_str)
+        .map(|value| value.trim().replace(['-', '.'], "_").to_ascii_lowercase())?;
+    if matches!(wrapper_type.as_str(), "event_msg" | "response_item") {
+        object.get("payload").filter(|payload| payload.is_object())
+    } else {
+        None
+    }
+}
+
+fn semantic_event_kind_from_object(object: &Map<String, Value>) -> Option<String> {
+    let content = object.get("content").and_then(Value::as_array)?;
+    let mut saw_tool_result = false;
+    let mut saw_tool_use = false;
+    let mut saw_text = false;
+
+    for item in content {
+        let Some(kind) = item
+            .get("type")
+            .or_else(|| item.get("kind"))
+            .or_else(|| item.get("event"))
+            .and_then(Value::as_str)
+            .and_then(normalize_event_kind)
+        else {
+            continue;
+        };
+
+        match kind.as_str() {
+            "tool_result" => saw_tool_result = true,
+            "tool_use" => saw_tool_use = true,
+            "assistant" => saw_text = true,
+            _ => {}
+        }
+    }
+
+    if saw_tool_result {
+        Some("tool_result".to_string())
+    } else if saw_tool_use {
+        Some("tool_use".to_string())
+    } else if saw_text {
+        Some("assistant".to_string())
+    } else {
+        None
+    }
+}
+
+fn semantic_message_event_kind(object: &Map<String, Value>) -> Option<String> {
+    let raw_type = object
+        .get("type")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().replace(['-', '.'], "_").to_ascii_lowercase())?;
+    if raw_type != "message" {
+        return None;
+    }
+    match object.get("role").and_then(Value::as_str) {
+        Some("assistant") => Some("assistant".to_string()),
+        Some("user") => Some("user".to_string()),
+        _ => None,
+    }
 }
 
 fn tool_summary_kind_from_raw(raw_kind: &str) -> Option<String> {
@@ -2732,10 +2837,107 @@ mod tests {
 
         let summary = summarize_cli_stream_line(&line, 500).unwrap();
 
-        assert_eq!(summary.kind, "assistant");
+        assert_eq!(summary.kind, "tool_result");
         assert!(summary.text.contains("tool Bash: cargo test"));
         assert!(summary.text.contains("tool result: tests passed"));
         assert!(!summary.text.contains('{'));
+    }
+
+    #[test]
+    fn classifies_claude_nested_tool_events_as_worker_process_events() {
+        let tool_call = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": "Bash",
+                        "input": {
+                            "command": "cargo test",
+                            "description": "Run tests"
+                        }
+                    }
+                ]
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&tool_call), "tool_use");
+        let summary = summarize_cli_stream_line(&tool_call, 500).unwrap();
+        assert_eq!(summary.kind, "tool_use");
+        assert_eq!(summary.text, "tool Bash: cargo test");
+
+        let tool_result = serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "content": "tests passed",
+                        "is_error": false
+                    }
+                ]
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&tool_result), "tool_result");
+        let summary = summarize_cli_stream_line(&tool_result, 500).unwrap();
+        assert_eq!(summary.kind, "tool_result");
+        assert_eq!(summary.text, "tool result: tests passed");
+    }
+
+    #[test]
+    fn unwraps_codex_event_wrappers_without_raw_json() {
+        let agent_message = serde_json::json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "agent_message",
+                "message": "Working on the fix",
+                "phase": "commentary"
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&agent_message), "assistant");
+        let summary = summarize_cli_stream_line(&agent_message, 500).unwrap();
+        assert_eq!(summary.kind, "assistant");
+        assert_eq!(summary.text, "Working on the fix");
+        assert!(!summary.text.contains('{'));
+
+        let call = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "arguments": "{\"cmd\":\"cargo test -q\"}",
+                "call_id": "call_1"
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&call), "tool_use");
+        let summary = summarize_cli_stream_line(&call, 500).unwrap();
+        assert_eq!(summary.kind, "tool_use");
+        assert_eq!(summary.text, "tool exec_command: cargo test -q");
+
+        let output = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "tests passed"
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&output), "tool_result");
+        let summary = summarize_cli_stream_line(&output, 500).unwrap();
+        assert_eq!(summary.kind, "tool_result");
+        assert_eq!(summary.text, "tool result: tests passed");
     }
 
     #[test]
