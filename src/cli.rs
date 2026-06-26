@@ -393,7 +393,10 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                         Some(cwd) => cwd,
                         None => {
                             let cwd = std::env::current_dir()?;
-                            cwd.canonicalize().unwrap_or(cwd).to_string_lossy().to_string()
+                            cwd.canonicalize()
+                                .unwrap_or(cwd)
+                                .to_string_lossy()
+                                .to_string()
                         }
                     };
                     let conversation = store.native_conversation_by_cwd(&cwd)?;

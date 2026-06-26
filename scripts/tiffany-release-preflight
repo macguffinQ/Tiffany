@@ -59,6 +59,20 @@ done
 
 cargo_bin="$(tiffany_resolve_cargo)"
 
+tiffany_fork_cargo_bin="${TIFFANY_FORK_CARGO:-}"
+if [[ -z "$tiffany_fork_cargo_bin" ]]; then
+  if "$cargo_bin" +1.95.0 --version >/dev/null 2>&1; then
+    tiffany_fork_cargo_bin="$cargo_bin +1.95.0"
+  else
+    tiffany_fork_cargo_bin="$cargo_bin"
+  fi
+fi
+
+tiffany_fork_cargo() {
+  # shellcheck disable=SC2086
+  $tiffany_fork_cargo_bin "$@"
+}
+
 target_dir="${TIFFANY_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_dir/target}}"
 case "$target_dir" in
   /*) ;;
@@ -221,19 +235,19 @@ step "script helpers"
 "$repo_dir/scripts/tiffany-check-script-helpers"
 
 step "tiffany fork targeted format"
-(cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" fmt -p codex-tui -p tiffany-cli -- --check)
+(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo fmt -p codex-tui -p tiffany-cli -- --check)
 
 step "tiffany-loop orchestrator targeted tests"
-(cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" test -p codex-tui tiffany_orchestrator)
+(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui tiffany_orchestrator)
 
 step "tiffany slash command targeted tests"
-(cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" test -p codex-tui slash_commands)
+(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui slash_commands)
 
 step "tiffany update action targeted tests"
-(cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" test -p codex-tui update_action)
+(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui update_action)
 
 step "tiffany runtime update guard targeted tests"
-(cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" test -p codex-tui tiffany_runtime_marker_disables_upstream_update_checks)
+(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui tiffany_runtime_marker_disables_upstream_update_checks)
 
 if [[ "$mode" == "full" ]]; then
   step "tiffany dist preflight"

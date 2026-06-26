@@ -157,13 +157,7 @@ fn visible_progress_key_for_event(event: &RunProgress, line: &str) -> String {
             content,
             ..
         } => visible_output_key(
-            &format!(
-                "worker:{}:{}:{}:{}",
-                short_task_id(task_id),
-                role,
-                agent,
-                event_kind
-            ),
+            &format!("worker:{}:{}:{}", short_task_id(task_id), role, agent),
             &visible_worker_output_dedupe_display(event_kind, content)
                 .unwrap_or_else(|| truncate_chars(line.trim(), 240)),
         ),
@@ -190,13 +184,7 @@ fn visible_worker_output_line(
         PROGRESS_OUTPUT_EXPANDED_LIMIT
     };
     let output = visible_worker_output_display(event_kind, content, max)?;
-    let scope = format!(
-        "worker:{}:{}:{}:{}",
-        short_task_id(task_id),
-        role,
-        agent,
-        event_kind
-    );
+    let scope = format!("worker:{}:{}:{}", short_task_id(task_id), role, agent);
     let dedupe_display = visible_worker_output_dedupe_display(event_kind, content)
         .unwrap_or_else(|| output.display.clone());
     if output_was_already_visible(input, &scope, &dedupe_display) {
@@ -337,7 +325,13 @@ fn visible_worker_output_display(
 
     let mut output = agent_events::visible_agent_output(content, max)?;
     if let Some(kind) = event_kind_output_kind {
-        output.kind = kind;
+        if !matches!(
+            output.kind,
+            agent_events::VisibleAgentOutputKind::Question
+                | agent_events::VisibleAgentOutputKind::Actionable
+        ) {
+            output.kind = kind;
+        }
     }
     if output.kind == agent_events::VisibleAgentOutputKind::Normal
         && worker_output_is_final_like_display(&output.display)
@@ -353,14 +347,9 @@ fn visible_worker_output_display(
     })
 }
 
-fn visible_worker_output_dedupe_display(event_kind: &str, content: &str) -> Option<String> {
-    agent_events::visible_agent_output(content, PROGRESS_OUTPUT_EXPANDED_LIMIT).map(|output| {
-        format!(
-            "{}:{}",
-            event_kind.trim(),
-            truncate_chars(&output.dedupe_key, PROGRESS_OUTPUT_EXPANDED_LIMIT)
-        )
-    })
+fn visible_worker_output_dedupe_display(_event_kind: &str, content: &str) -> Option<String> {
+    agent_events::visible_agent_output(content, PROGRESS_OUTPUT_EXPANDED_LIMIT)
+        .map(|output| truncate_chars(&output.dedupe_key, PROGRESS_OUTPUT_EXPANDED_LIMIT))
 }
 
 fn visible_role_output_display(role: &str, content: &str, max: usize) -> Option<String> {
@@ -502,8 +491,20 @@ mod tests {
             content: "claude result: useful summary".into(),
         };
         assert!(
-            progress_line(&duplicate, 0, &input).is_some(),
-            "different native event kinds should not hide each other"
+            progress_line(&duplicate, 0, &input).is_none(),
+            "same worker summary should be hidden even when native event kinds differ"
+        );
+
+        let distinct = RunProgress::WorkerOutput {
+            task_id,
+            agent: "claude-code".into(),
+            role: "worker-cc".into(),
+            event_kind: "result".into(),
+            content: "claude result: different useful summary".into(),
+        };
+        assert!(
+            progress_line(&distinct, 0, &input).is_some(),
+            "different worker summaries should still be visible"
         );
 
         assert!(progress_line(

@@ -919,7 +919,10 @@ mod tests {
         .expect("serialize worker output");
 
         assert_eq!(json["event_kind"], "tool_use");
-        assert_eq!(json["content"], r#"claude-code event: {"type":"tool_use","name":"Bash"}"#);
+        assert_eq!(
+            json["content"],
+            r#"claude-code event: {"type":"tool_use","name":"Bash"}"#
+        );
     }
 
     #[test]

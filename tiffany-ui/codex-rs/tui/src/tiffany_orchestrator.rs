@@ -985,11 +985,7 @@ pub(crate) fn load_native_memory_turns(
 }
 
 #[cfg(test)]
-fn native_history_lines(
-    codex_home: &Path,
-    cwd: &Path,
-    args: &str,
-) -> Vec<Line<'static>> {
+fn native_history_lines(codex_home: &Path, cwd: &Path, args: &str) -> Vec<Line<'static>> {
     native_history_lines_from_conversation(
         load_native_chat_conversation(codex_home, cwd),
         codex_home,
@@ -4886,7 +4882,9 @@ fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
     }
 }
 
-fn worker_visible_output_kind(event: &TiffanyProgressEvent) -> Option<event_format::VisibleAgentOutputKind> {
+fn worker_visible_output_kind(
+    event: &TiffanyProgressEvent,
+) -> Option<event_format::VisibleAgentOutputKind> {
     let raw = event.content.as_deref()?;
     worker_visible_output_kind_for_event(event, raw)
 }
@@ -5555,13 +5553,9 @@ fn output_body_line_for_kind(
             Style::default().fg(TIFFANY_BLUE),
             first_line,
         ),
-        Some(event_format::VisibleAgentOutputKind::ToolCall) => process_body_line(
-            line,
-            "↳",
-            TIFFANY_BLUE,
-            Style::default(),
-            first_line,
-        ),
+        Some(event_format::VisibleAgentOutputKind::ToolCall) => {
+            process_body_line(line, "↳", TIFFANY_BLUE, Style::default(), first_line)
+        }
         Some(event_format::VisibleAgentOutputKind::ToolResult) => process_body_line(
             line,
             "✓",
@@ -5595,13 +5589,9 @@ fn output_body_line_for_kind(
             Style::default().fg(Color::Yellow),
             first_line,
         ),
-        Some(event_format::VisibleAgentOutputKind::Final) => process_body_line(
-            line,
-            "✓",
-            TIFFANY_BLUE,
-            Style::default(),
-            first_line,
-        ),
+        Some(event_format::VisibleAgentOutputKind::Final) => {
+            process_body_line(line, "✓", TIFFANY_BLUE, Style::default(), first_line)
+        }
         _ => output_body_line(line),
     }
 }
@@ -5627,7 +5617,12 @@ fn process_body_line(
     let marker = if first_line { first_marker } else { "│" };
     Line::from(vec![
         Span::styled("  ", Style::default().fg(TIFFANY_DARK)),
-        Span::styled(marker, Style::default().fg(marker_color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            marker,
+            Style::default()
+                .fg(marker_color)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" "),
         Span::styled(line.to_string(), text_style),
     ])
@@ -6543,9 +6538,7 @@ mod tests {
                     status: "output".into(),
                     title: "worker diff · worker-cc · claude-code".into(),
                     kind: Some("diff".into()),
-                    content: Some(
-                        "diff --git a/src/login.rs b/src/login.rs\n+native sync".into(),
-                    ),
+                    content: Some("diff --git a/src/login.rs b/src/login.rs\n+native sync".into()),
                     agent: Some("claude-code".into()),
                     worker_role: Some("worker-cc".into()),
                     model: Some("claude-sonnet-4-6".into()),
@@ -7111,8 +7104,18 @@ mod tests {
         );
         assert_eq!(line_text(&lines[1]), "  │ done");
         assert_eq!(lines[0].spans[0].style.fg, Some(TIFFANY_DARK));
-        assert_eq!(lines[0].spans[2].style.fg, Some(TIFFANY_BLUE));
+        assert_eq!(lines[0].spans[2].style.fg, Some(TIFFANY_DARK));
         assert_eq!(lines[1].spans[0].style.fg, Some(TIFFANY_DARK));
+        let tool = TiffanyProgressEvent {
+            event_kind: Some("tool_use".to_string()),
+            content: Some("claude-code tool_use: tool Bash: cargo test".to_string()),
+            ..event
+        };
+        let tool_lines = output_event_lines(&tool, "tool Bash: cargo test");
+        assert_eq!(tool_lines[0].spans[0].style.fg, Some(TIFFANY_BLUE));
+        assert_eq!(tool_lines[0].spans[2].style.fg, Some(TIFFANY_BLUE));
+        assert_eq!(tool_lines[1].spans[0].style.fg, Some(TIFFANY_DARK));
+        assert_eq!(tool_lines[1].spans[1].style.fg, Some(TIFFANY_BLUE));
     }
 
     #[test]
@@ -7613,10 +7616,12 @@ mod tests {
         let stderr_visible = visible_content(&stderr).expect("stderr visible");
         let stderr_lines = output_event_lines(&stderr, &stderr_visible);
         assert_eq!(line_text(&stderr_lines[1]), "  ✗ permission denied");
-        assert!(stderr_lines
-            .iter()
-            .map(line_text)
-            .any(|line| line.contains("fix permission blocked execution")));
+        assert!(
+            stderr_lines
+                .iter()
+                .map(line_text)
+                .any(|line| line.contains("fix permission blocked execution"))
+        );
     }
 
     #[test]
