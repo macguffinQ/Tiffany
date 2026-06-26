@@ -195,6 +195,12 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             classify_task_route(&Task::new("生成一个 Python 脚手架")),
             TaskRoute::SingleWorker
         );
+        assert_eq!(
+            classify_task_route(&Task::new(
+                "在当前目录创建文件 tiffany_smoke.txt，内容写入 hello tiffany，然后运行 ls -la tiffany_smoke.txt 并告诉我结果。"
+            )),
+            TaskRoute::SingleWorker
+        );
     }
 
     #[test]

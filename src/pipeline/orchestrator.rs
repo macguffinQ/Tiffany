@@ -872,9 +872,10 @@ impl Orchestrator {
                     let mut res = adapter.start(&locked_task, Some(event_tx.clone())).await;
                     if let Err(err) = &res {
                         let raw_error = format!("{err:#}");
-                        if is_native_session_occupied(&raw_error)
+                        if is_recoverable_native_session_error(&raw_error)
                             && locked_task.native_session_id.is_some()
                         {
+                            let recovery_kind = native_session_recovery_kind(&raw_error);
                             let previous_native = locked_task.native_session_id.take();
                             match session_store.clear_worker_thread_native_session(thread.id) {
                                 Ok(()) => {
@@ -884,7 +885,7 @@ impl Orchestrator {
                                         &agent,
                                         &worker_role,
                                         &format!(
-                                            "native session busy · cleared saved session {} and retrying once with a fresh native session",
+                                            "{recovery_kind} · cleared saved session {} and retrying once with a fresh native session",
                                             previous_native.as_deref().unwrap_or("unknown")
                                         ),
                                     );
@@ -1206,6 +1207,32 @@ fn is_native_session_occupied(message: &str) -> bool {
         || lower.contains("locked by another")
         || lower.contains("another process");
     mentions_session && occupied
+}
+
+fn is_native_session_missing(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    let mentions_session =
+        lower.contains("session id") || lower.contains("session_id") || lower.contains("session");
+    let missing = lower.contains("no conversation found")
+        || lower.contains("conversation not found")
+        || lower.contains("session not found")
+        || lower.contains("no session found")
+        || lower.contains("not found")
+        || lower.contains("unknown session")
+        || lower.contains("invalid session");
+    mentions_session && missing
+}
+
+fn is_recoverable_native_session_error(message: &str) -> bool {
+    is_native_session_occupied(message) || is_native_session_missing(message)
+}
+
+fn native_session_recovery_kind(message: &str) -> &'static str {
+    if is_native_session_missing(message) {
+        "native session missing"
+    } else {
+        "native session busy"
+    }
 }
 
 fn emit_worker_recovery_event(
@@ -1817,6 +1844,37 @@ mod tests {
     }
 
     #[test]
+    fn native_session_missing_detection_accepts_runtime_wording_variants() {
+        for message in [
+            "No conversation found with session ID: native-123",
+            "conversation not found for session native-123",
+            "session_id native-123 not found",
+            "unknown session native-123",
+            "invalid session native-123",
+        ] {
+            assert!(
+                is_native_session_missing(message),
+                "expected missing session detection for: {message}"
+            );
+            assert!(
+                is_recoverable_native_session_error(message),
+                "expected recoverable session detection for: {message}"
+            );
+        }
+
+        for message in [
+            "model not found",
+            "permission denied while reading file",
+            "session expired; please login again",
+        ] {
+            assert!(
+                !is_native_session_missing(message),
+                "did not expect missing session detection for: {message}"
+            );
+        }
+    }
+
+    #[test]
     fn worker_error_extracts_occupied_native_session_from_runtime_variant() {
         let tmp = tempfile::tempdir().unwrap();
         let store =
@@ -2188,6 +2246,7 @@ mod tests {
         seen: Arc<std::sync::Mutex<Vec<Option<String>>>>,
         next_native: Option<String>,
         fail_once_on_native: Option<String>,
+        missing_once_on_native: Option<String>,
     }
 
     #[async_trait::async_trait]
@@ -2216,6 +2275,15 @@ mod tests {
             {
                 let native = task.native_session_id.as_deref().unwrap_or("unknown");
                 anyhow::bail!("Error: Session ID {native} is already in use.");
+            }
+            if matching_native_seen == 1
+                && self
+                    .missing_once_on_native
+                    .as_ref()
+                    .is_some_and(|native| task.native_session_id.as_deref() == Some(native))
+            {
+                let native = task.native_session_id.as_deref().unwrap_or("unknown");
+                anyhow::bail!("No conversation found with session ID: {native}");
             }
             let mut session = Session::new(task.id, self.name(), Role::Worker);
             session.model = task.model_hint.clone().unwrap_or_default();
@@ -3540,6 +3608,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                     seen: seen.clone(),
                     next_native: Some("native-from-first-run".into()),
                     fail_once_on_native: None,
+                    missing_once_on_native: None,
                 }),
             );
 
@@ -3619,6 +3688,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                     seen: seen.clone(),
                     next_native: Some("native-fresh".into()),
                     fail_once_on_native: Some("native-busy".into()),
+                    missing_once_on_native: None,
                 }),
             );
 
@@ -3697,6 +3767,101 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             }
         }
         assert!(saw_retry_notice, "expected native session retry progress");
+        assert!(saw_success, "expected worker to succeed after retry");
+    }
+
+    #[tokio::test]
+    async fn execute_dag_clears_missing_native_session_and_retries_once() {
+        let (_tmp, mut orch) =
+            test_orchestrator_with_runtime(Arc::new(ApprovingCritic), "test-runtime");
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert(
+                "test-runtime".to_string(),
+                Arc::new(NativeSessionAdapter {
+                    seen: seen.clone(),
+                    next_native: Some("native-fresh".into()),
+                    fail_once_on_native: None,
+                    missing_once_on_native: Some("native-missing".into()),
+                }),
+            );
+
+        let first_task = Task::new("first turn");
+        let first_task_id = first_task.id;
+        let (first_tx, _first_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch.execute_dag(vec![first_task], first_tx).await.unwrap();
+        let first_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == first_task_id)
+            .expect("first worker session");
+        let thread_id = first_session
+            .worker_thread_id
+            .expect("first session should record worker thread");
+        orch.session_store
+            .update_worker_thread_after_session(
+                thread_id,
+                Some("native-missing"),
+                first_session.id,
+                first_session.worktree_path.as_deref(),
+            )
+            .unwrap();
+
+        let second_task = Task::new("second turn");
+        let second_task_id = second_task.id;
+        let (second_tx, mut second_rx) = tokio::sync::mpsc::unbounded_channel();
+        let completed = orch
+            .execute_dag(vec![second_task], second_tx)
+            .await
+            .expect("missing native session should be retried once");
+        assert_eq!(completed.len(), 1);
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.first().cloned().flatten(), None);
+        assert_eq!(
+            seen.get(1).cloned().flatten().as_deref(),
+            Some("native-missing")
+        );
+        assert_eq!(seen.get(2).cloned().flatten(), None);
+
+        let second_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == second_task_id)
+            .expect("second worker session");
+        assert_eq!(second_session.worker_thread_id, Some(thread_id));
+        assert_eq!(
+            second_session.native_session_id.as_deref(),
+            Some("native-fresh")
+        );
+        let thread = orch
+            .session_store
+            .worker_thread_by_role("worker-cc")
+            .unwrap()
+            .expect("worker thread");
+        assert_eq!(thread.native_session_id.as_deref(), Some("native-fresh"));
+
+        let mut saw_retry_notice = false;
+        let mut saw_success = false;
+        while let Ok(event) = second_rx.try_recv() {
+            match event {
+                RunProgress::WorkerOutput { content, .. } => {
+                    saw_retry_notice |= content.contains("native session missing")
+                        && content.contains("retrying once")
+                        && content.contains("native-missing");
+                }
+                RunProgress::WorkerDone { ok, .. } => {
+                    saw_success |= ok;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_retry_notice, "expected missing session retry progress");
         assert!(saw_success, "expected worker to succeed after retry");
     }
 

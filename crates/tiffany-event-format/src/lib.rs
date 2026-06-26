@@ -456,7 +456,6 @@ const FULL_PIPELINE_CONTEXT_MARKERS: &[&str] = &[
     "仓库",
     "代码",
     "代码库",
-    "tiffany",
     "tiffany-loop",
     "orchestrator",
     "编排",
@@ -547,7 +546,7 @@ fn looks_like_direct_answer_request(text: &str) -> bool {
         .iter()
         .any(|needle| lower.contains(needle))
     {
-        return true;
+        return !has_marker(&lower, IMPERATIVE_ACTION_MARKERS);
     }
     if request.ends_with('?') || request.ends_with('？') {
         return !starts_with_imperative_action(&lower);
@@ -3276,6 +3275,9 @@ mod tests {
         assert!(!request_looks_direct_answer("按照这个计划来做"));
         assert!(!request_looks_direct_answer("写参赛 agent"));
         assert!(!request_looks_direct_answer("创建一个 worker"));
+        assert!(!request_looks_direct_answer(
+            "在当前目录创建文件 tiffany_smoke.txt，内容写入 hello tiffany，然后运行 ls -la tiffany_smoke.txt 并告诉我结果。"
+        ));
         assert!(contains_engineering_action("写参赛 agent"));
         assert_eq!(
             classify_orchestration_route("写参赛 agent"),
@@ -3283,6 +3285,12 @@ mod tests {
         );
         assert_eq!(
             classify_orchestration_route("生成一个 Python 脚手架"),
+            OrchestrationRoute::SingleWorker
+        );
+        assert_eq!(
+            classify_orchestration_route(
+                "在当前目录创建文件 tiffany_smoke.txt，内容写入 hello tiffany，然后运行 ls -la tiffany_smoke.txt 并告诉我结果。"
+            ),
             OrchestrationRoute::SingleWorker
         );
         assert_eq!(
