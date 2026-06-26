@@ -1048,7 +1048,7 @@ fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
         return Some(VisibleAgentOutputKind::Stderr);
     }
     let kind = runtime_output_kind_from_prefix(prefix)?;
-    match kind {
+    match kind.as_str() {
         "tool"
         | "tool_use"
         | "exec"
@@ -1265,7 +1265,7 @@ pub fn strip_runtime_output_prefix(line: &str) -> String {
     line.to_string()
 }
 
-pub fn runtime_output_kind(content: &str) -> Option<&'static str> {
+pub fn runtime_output_kind(content: &str) -> Option<String> {
     let prefix = content.trim_start().split_once(": ")?.0;
     runtime_output_kind_from_prefix(prefix)
 }
@@ -1323,7 +1323,7 @@ pub fn normalize_output_summary(display: &str) -> String {
     }
 }
 
-fn runtime_output_kind_from_prefix(prefix: &str) -> Option<&'static str> {
+fn runtime_output_kind_from_prefix(prefix: &str) -> Option<String> {
     let prefix = prefix.to_ascii_lowercase();
     let mut parts = prefix.split_whitespace();
     let runtime = parts.next()?;
@@ -1349,39 +1349,26 @@ fn is_known_runtime_prefix(runtime: &str) -> bool {
     )
 }
 
-fn known_runtime_output_kind(kind: &str) -> Option<&'static str> {
-    match kind {
-        "assistant" => Some("assistant"),
-        "event" => Some("event"),
-        "user" => Some("user"),
-        "status" => Some("status"),
-        "process_exit" => Some("process_exit"),
-        "diff" => Some("diff"),
-        "patch" => Some("patch"),
-        "file_change" => Some("file_change"),
-        "file_update" => Some("file_update"),
-        "stderr" => Some("stderr"),
-        "result" => Some("result"),
-        "final" => Some("final"),
-        "final_answer" => Some("final_answer"),
-        "task_complete" => Some("task_complete"),
-        "turn_complete" => Some("turn_complete"),
-        "tool" => Some("tool"),
-        "tool_use" => Some("tool_use"),
-        "tool_result" => Some("tool_result"),
-        "exec" => Some("exec"),
-        "local_shell_call" => Some("local_shell_call"),
-        "function_call" => Some("function_call"),
-        "function_call_output" => Some("function_call_output"),
-        "custom_tool_call" => Some("custom_tool_call"),
-        "custom_tool_call_output" => Some("custom_tool_call_output"),
-        "tool_search_call" => Some("tool_search_call"),
-        "tool_search_output" => Some("tool_search_output"),
-        "web_search_call" => Some("web_search_call"),
-        "image_generation_call" => Some("image_generation_call"),
-        "mcp_tool_call" => Some("mcp_tool_call"),
-        _ => None,
-    }
+fn known_runtime_output_kind(kind: &str) -> Option<String> {
+    normalize_event_kind(kind).filter(|kind| {
+        matches!(
+            kind.as_str(),
+            "assistant"
+                | "event"
+                | "user"
+                | "status"
+                | "process_exit"
+                | "diff"
+                | "patch"
+                | "file_update"
+                | "stderr"
+                | "result"
+                | "final"
+                | "turn_complete"
+                | "tool_use"
+                | "tool_result"
+        )
+    })
 }
 
 pub fn humanize_jsonish(content: &str, max: usize) -> String {
@@ -2898,11 +2885,20 @@ mod tests {
         );
         assert_eq!(
             runtime_output_kind("codex turn_complete: done"),
-            Some("turn_complete")
+            Some("turn_complete".to_string())
         );
         assert_eq!(
             runtime_output_kind("worker-codex stderr: [1211] 模型不存在"),
-            Some("stderr")
+            Some("stderr".to_string())
+        );
+        assert_eq!(
+            runtime_output_kind("claude assistant-message: done"),
+            Some("assistant".to_string())
+        );
+        assert_eq!(
+            clean_visible_agent_output("codex patch-apply: *** Begin Patch\n*** Update File: README.md", 500)
+                .as_deref(),
+            Some("*** Begin Patch\n*** Update File: README.md")
         );
     }
 
