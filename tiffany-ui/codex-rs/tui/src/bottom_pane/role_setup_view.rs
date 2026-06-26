@@ -719,6 +719,7 @@ impl RoleSetupFieldKind {
             RoleSetupFieldKind::Role => vec![
                 choice("worker-codex", "worker-codex", "Codex worker"),
                 choice("worker-cc", "worker-cc", "Claude worker"),
+                choice("worker-gemini", "worker-gemini", "Gemini worker"),
                 choice("planner", "planner", "plans tasks"),
                 choice("critic", "critic", "checks plans"),
                 choice("reviewer", "reviewer", "reviews outputs"),
@@ -740,6 +741,7 @@ impl RoleSetupFieldKind {
             RoleSetupFieldKind::Runtime => vec![
                 choice("codex", "codex", "Codex CLI"),
                 choice("claude-code", "claude-code", "Claude Code CLI"),
+                choice("gemini", "gemini", "Gemini CLI"),
                 choice("direct", "direct", "direct SDK when supported"),
             ],
             RoleSetupFieldKind::Teams => vec![
@@ -886,6 +888,12 @@ fn default_role_setup(role: &str) -> Option<RoleDefaults> {
             model_name: "claude-sonnet-4-6",
             runtime: "claude-code",
             teams: "yes",
+        }),
+        "worker-gemini" => Some(RoleDefaults {
+            provider: "google",
+            model_name: "gemini-1.5-pro",
+            runtime: "gemini",
+            teams: "no",
         }),
         "planner" => Some(RoleDefaults {
             provider: "minimax",

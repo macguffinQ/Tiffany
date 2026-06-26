@@ -1751,6 +1751,7 @@ fn role_profile_setup_initial_draft() -> RoleProfileSetupDraft {
         reviewer: "minimax/MiniMax-M3@codex".to_string(),
         worker_cc: "anthropic/claude-sonnet-4-6@claude-code".to_string(),
         worker_codex: "minimax/MiniMax-M3@codex".to_string(),
+        worker_gemini: "google/gemini-1.5-pro@gemini".to_string(),
     }
 }
 
@@ -1824,6 +1825,13 @@ fn role_default_setup(role: &str) -> Option<RoleSetupDefaults> {
             model_name: "claude-sonnet-4-6",
             runtime: "claude-code",
             teams: "yes",
+        }),
+        "worker-gemini" => Some(RoleSetupDefaults {
+            provider: "google",
+            model_id: "gemini-pro",
+            model_name: "gemini-1.5-pro",
+            runtime: "gemini",
+            teams: "no",
         }),
         "planner" => Some(RoleSetupDefaults {
             provider: "minimax",

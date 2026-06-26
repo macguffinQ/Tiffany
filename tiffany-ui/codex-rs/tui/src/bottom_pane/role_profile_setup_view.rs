@@ -39,6 +39,7 @@ pub(crate) struct RoleProfileSetupDraft {
     pub(crate) reviewer: String,
     pub(crate) worker_cc: String,
     pub(crate) worker_codex: String,
+    pub(crate) worker_gemini: String,
 }
 
 pub(crate) type RoleProfileSetupSubmitted =
@@ -73,6 +74,7 @@ enum RoleProfileFieldKind {
     Reviewer,
     WorkerCc,
     WorkerCodex,
+    WorkerGemini,
 }
 
 impl RoleProfileSetupView {
@@ -109,6 +111,12 @@ impl RoleProfileSetupView {
                     "Worker Codex",
                     "minimax/MiniMax-M3@codex",
                     draft.worker_codex,
+                ),
+                RoleProfileField::new(
+                    RoleProfileFieldKind::WorkerGemini,
+                    "Worker Gemini",
+                    "google/gemini-1.5-pro@gemini",
+                    draft.worker_gemini,
                 ),
             ],
             active: 0,
@@ -208,6 +216,7 @@ impl RoleProfileSetupView {
                 RoleProfileFieldKind::Reviewer => draft.reviewer = value,
                 RoleProfileFieldKind::WorkerCc => draft.worker_cc = value,
                 RoleProfileFieldKind::WorkerCodex => draft.worker_codex = value,
+                RoleProfileFieldKind::WorkerGemini => draft.worker_gemini = value,
             }
         }
         draft
@@ -639,6 +648,15 @@ impl RoleProfileFieldKind {
                 choice("OpenAI Codex", "openai/gpt-4o@codex", "OpenAI-compatible"),
                 choice("Ollama", "ollama/llama3@codex", "local"),
             ],
+            RoleProfileFieldKind::WorkerGemini => vec![
+                choice("Skip", "skip", "leave unchanged"),
+                choice(
+                    "Google Gemini",
+                    "google/gemini-1.5-pro@gemini",
+                    "default Gemini worker",
+                ),
+                choice("Gemini Pro", "gemini/gemini-1.5-pro@gemini", "Gemini CLI"),
+            ],
         }
     }
 }
@@ -668,6 +686,8 @@ fn profile_workers_line(draft: &RoleProfileSetupDraft) -> Line<'static> {
         summarize_binding(&draft.worker_cc).cyan(),
         "  ".dim(),
         summarize_binding(&draft.worker_codex).fg(Color::Gray),
+        "  ".dim(),
+        summarize_binding(&draft.worker_gemini).fg(Color::Gray),
     ])
 }
 
@@ -707,6 +727,7 @@ pub(crate) fn role_profile_setup_draft_args(
     push_binding_arg(&mut args, "--reviewer", &draft.reviewer)?;
     push_binding_arg(&mut args, "--worker-cc", &draft.worker_cc)?;
     push_binding_arg(&mut args, "--worker-codex", &draft.worker_codex)?;
+    push_binding_arg(&mut args, "--worker-gemini", &draft.worker_gemini)?;
     if args.len() == 2 {
         return Err("set at least one role binding".to_string());
     }
@@ -764,6 +785,7 @@ fn profile_binding_count(draft: &RoleProfileSetupDraft) -> usize {
         draft.reviewer.as_str(),
         draft.worker_cc.as_str(),
         draft.worker_codex.as_str(),
+        draft.worker_gemini.as_str(),
     ]
     .into_iter()
     .filter(|value| {
@@ -783,13 +805,14 @@ mod tests {
             name: "dev profile".to_string(),
             planner: "minimax/MiniMax-M3@codex".to_string(),
             worker_cc: "anthropic/claude-sonnet-4-6@claude-code".to_string(),
+            worker_gemini: "google/gemini-1.5-pro@gemini".to_string(),
             ..RoleProfileSetupDraft::default()
         })
         .unwrap();
 
         assert_eq!(
             args,
-            "profile dev-profile --planner minimax/MiniMax-M3@codex --worker-cc anthropic/claude-sonnet-4-6@claude-code"
+            "profile dev-profile --planner minimax/MiniMax-M3@codex --worker-cc anthropic/claude-sonnet-4-6@claude-code --worker-gemini google/gemini-1.5-pro@gemini"
         );
     }
 

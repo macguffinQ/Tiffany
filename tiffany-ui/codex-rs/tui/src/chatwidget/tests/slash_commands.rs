@@ -772,6 +772,31 @@ async fn slash_role_single_arg_prefills_registration_prompt() {
 }
 
 #[tokio::test]
+async fn slash_role_worker_gemini_prefills_registration_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command_with_args(SlashCommand::Role, "worker-gemini".to_string(), Vec::new());
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(popup.contains("worker-gemini"));
+    assert!(popup.contains("API Model"));
+    assert!(popup.contains("gemini"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
+            assert_eq!(
+                args,
+                "register worker-gemini --model gemini-pro --runtime gemini --provider google --model-name gemini-1.5-pro --no-agent-teams"
+            );
+        }
+        other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_role_control_roles_default_to_neutral_codex_worker() {
     for role in ["planner", "critic", "reviewer"] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -1118,6 +1143,7 @@ fn role_profile_setup_draft_saves_profile() {
             name: "dev profile".to_string(),
             planner: "minimax/MiniMax-M3@codex".to_string(),
             worker_cc: "anthropic/claude-sonnet-4-6@claude-code".to_string(),
+            worker_gemini: "google/gemini-1.5-pro@gemini".to_string(),
             ..crate::bottom_pane::RoleProfileSetupDraft::default()
         },
     )
@@ -1125,7 +1151,7 @@ fn role_profile_setup_draft_saves_profile() {
 
     assert_eq!(
         args,
-        "profile dev-profile --planner minimax/MiniMax-M3@codex --worker-cc anthropic/claude-sonnet-4-6@claude-code"
+        "profile dev-profile --planner minimax/MiniMax-M3@codex --worker-cc anthropic/claude-sonnet-4-6@claude-code --worker-gemini google/gemini-1.5-pro@gemini"
     );
 }
 
@@ -1148,7 +1174,7 @@ async fn slash_roles_profile_opens_profile_prompt() {
         Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
             assert_eq!(
                 args,
-                "profile default --planner minimax/MiniMax-M3@codex --critic minimax/MiniMax-M3@codex --reviewer minimax/MiniMax-M3@codex --worker-cc anthropic/claude-sonnet-4-6@claude-code --worker-codex minimax/MiniMax-M3@codex"
+                "profile default --planner minimax/MiniMax-M3@codex --critic minimax/MiniMax-M3@codex --reviewer minimax/MiniMax-M3@codex --worker-cc anthropic/claude-sonnet-4-6@claude-code --worker-codex minimax/MiniMax-M3@codex --worker-gemini google/gemini-1.5-pro@gemini"
             );
         }
         other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
