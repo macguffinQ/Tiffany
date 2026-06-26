@@ -687,7 +687,7 @@ mod tests {
             },
             Vec::new(),
         );
-        popup.on_composer_text_change("/status".to_string());
+        popup.on_composer_text_change("/history".to_string());
 
         let width = 84;
         let area = Rect::new(0, 0, width, popup.calculate_required_height(width));
@@ -695,8 +695,8 @@ mod tests {
         popup.render_ref(area, &mut buf);
         let rendered = format!("{buf:?}");
 
-        assert!(rendered.contains("show Tiffany orchestration status"));
-        assert!(!rendered.contains("token usage"));
+        assert!(rendered.contains("inspect/export native history by role, thread, or event kind"));
+        assert!(!rendered.contains("saved chat"));
     }
 
     #[test]

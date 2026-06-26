@@ -212,7 +212,7 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
         SlashCommand::Role => "register one role with provider, model, and runtime",
         SlashCommand::Roles => "inspect registered roles",
         SlashCommand::Thread => "inspect, clear, or export stable worker sessions",
-        SlashCommand::History => "inspect, search, or export saved native conversation history",
+        SlashCommand::History => "inspect/export native history by role, thread, or event kind",
         SlashCommand::Continue => "show native CLI handoff command for a worker",
         SlashCommand::Doctor => "diagnose setup",
         SlashCommand::Status => "show Tiffany orchestration status",
