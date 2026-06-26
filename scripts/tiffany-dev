@@ -125,19 +125,53 @@ binary_version() {
   awk '{print $2}' <<<"$output"
 }
 
+source_stamp() {
+  local head dirty
+  head="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || true)"
+  if [[ -z "$head" ]]; then
+    head="no-git"
+  fi
+  if ! git -C "$repo_dir" diff --quiet --ignore-submodules -- 2>/dev/null ||
+     ! git -C "$repo_dir" diff --cached --quiet --ignore-submodules -- 2>/dev/null; then
+    dirty="dirty"
+  else
+    dirty="clean"
+  fi
+  printf '%s %s %s %s\n' "$expected_version" "$dev_profile" "$head" "$dirty"
+}
+
+stamp_path_for() {
+  local binary="$1"
+  printf '%s.tiffany-dev-stamp' "$binary"
+}
+
+write_build_stamp() {
+  local binary="$1"
+  source_stamp >"$(stamp_path_for "$binary")"
+}
+
 needs_rebuild() {
   local binary="$1"
-  local actual
+  local actual stamp_path expected_stamp actual_stamp
   actual="$(binary_version "$binary" || true)"
-  [[ "$actual" != "$expected_version" ]]
+  if [[ "$actual" != "$expected_version" ]]; then
+    return 0
+  fi
+  stamp_path="$(stamp_path_for "$binary")"
+  expected_stamp="$(source_stamp)"
+  actual_stamp="$(cat "$stamp_path" 2>/dev/null || true)"
+  [[ "$actual_stamp" != "$expected_stamp" ]]
 }
 
 build_orchestrator_bin() {
   (cd "$repo_dir" && "$cargo_bin" build "${cargo_profile_args[@]}" --bin orchestrator)
+  write_build_stamp "$(profile_dir)/orchestrator"
 }
 
 build_tiffany_bin() {
   (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" build "${cargo_profile_args[@]}" -p tiffany-cli --bin tiffany-loop --bin tiffany)
+  write_build_stamp "$(profile_dir)/tiffany-loop"
+  write_build_stamp "$(profile_dir)/tiffany"
 }
 
 ensure_orchestrator_bin() {

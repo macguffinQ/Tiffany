@@ -106,6 +106,113 @@ done
 
 echo "tiffany-dev help checks passed"
 
+tiffany_dev_target="$tmp_root/tiffany-dev-target"
+tiffany_dev_home="$tmp_root/tiffany-home"
+tiffany_dev_cargo_log="$tmp_root/tiffany-dev-cargo.log"
+expected_tiffany_version="$(
+  awk '
+    /^\[package\]/ { in_package = 1; next }
+    /^\[/ && in_package { exit }
+    in_package && $1 == "version" {
+      gsub(/"/, "", $3)
+      print $3
+      exit
+    }
+  ' "$repo_dir/Cargo.toml"
+)"
+fake_tiffany_cargo="$tmp_root/cargo-home/bin/tiffany-dev-cargo"
+cat >"$fake_tiffany_cargo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >>"$FAKE_TIFFANY_CARGO_LOG"
+
+profile="debug"
+prev=""
+for arg in "$@"; do
+  if [[ "$prev" == "--profile" ]]; then
+    profile="$arg"
+    break
+  fi
+  prev="$arg"
+done
+if [[ "$profile" == "dev" ]]; then
+  profile="debug"
+fi
+
+bin_dir="${CARGO_TARGET_DIR:?}/$profile"
+mkdir -p "$bin_dir"
+
+make_fake_bin() {
+  local name="$1"
+  local path="$bin_dir/$name"
+  cat >"$path" <<EOS
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "--version" ]]; then
+  echo "$name ${FAKE_TIFFANY_VERSION:?}"
+  exit 0
+fi
+echo "$name fake \$*"
+EOS
+  chmod +x "$path"
+}
+
+prev=""
+for arg in "$@"; do
+  if [[ "$prev" == "--bin" ]]; then
+    make_fake_bin "$arg"
+  fi
+  prev="$arg"
+done
+EOF
+chmod +x "$fake_tiffany_cargo"
+
+run_fake_tiffany_dev_status() {
+  env \
+    CARGO="$fake_tiffany_cargo" \
+    CARGO_TARGET_DIR="$tiffany_dev_target" \
+    TIFFANY_CARGO_TARGET_DIR="$tiffany_dev_target" \
+    TIFFANY_HOME="$tiffany_dev_home" \
+    TIFFANY_SQLITE_HOME="$tiffany_dev_home" \
+    FAKE_TIFFANY_CARGO_LOG="$tiffany_dev_cargo_log" \
+    FAKE_TIFFANY_VERSION="$expected_tiffany_version" \
+    "$repo_dir/scripts/tiffany-dev" status >/dev/null
+}
+
+: >"$tiffany_dev_cargo_log"
+run_fake_tiffany_dev_status
+first_builds="$(wc -l <"$tiffany_dev_cargo_log" | tr -d ' ')"
+if [[ "$first_builds" != "2" ]]; then
+  echo "expected tiffany-dev to build missing orchestrator and UI binaries" >&2
+  echo "actual fake cargo invocations: $first_builds" >&2
+  cat "$tiffany_dev_cargo_log" >&2
+  exit 1
+fi
+
+: >"$tiffany_dev_cargo_log"
+run_fake_tiffany_dev_status
+second_builds="$(wc -l <"$tiffany_dev_cargo_log" | tr -d ' ')"
+if [[ "$second_builds" != "0" ]]; then
+  echo "expected tiffany-dev to reuse binaries when source stamp matches" >&2
+  echo "actual fake cargo invocations: $second_builds" >&2
+  cat "$tiffany_dev_cargo_log" >&2
+  exit 1
+fi
+
+printf '%s\n' "stale stamp" >"$tiffany_dev_target/dev-small/orchestrator.tiffany-dev-stamp"
+printf '%s\n' "stale stamp" >"$tiffany_dev_target/dev-small/tiffany-loop.tiffany-dev-stamp"
+: >"$tiffany_dev_cargo_log"
+run_fake_tiffany_dev_status
+stale_builds="$(wc -l <"$tiffany_dev_cargo_log" | tr -d ' ')"
+if [[ "$stale_builds" != "2" ]]; then
+  echo "expected tiffany-dev to rebuild binaries when source stamp is stale" >&2
+  echo "actual fake cargo invocations: $stale_builds" >&2
+  cat "$tiffany_dev_cargo_log" >&2
+  exit 1
+fi
+
+echo "tiffany-dev source stamp checks passed"
+
 release_workflow="$repo_dir/.github/workflows/release.yml"
 if ! grep -F -- './scripts/tiffany-post-release-check --tag ${GITHUB_REF_NAME} --tap-dir ../homebrew-tap --skip-install' "$release_workflow" >/dev/null; then
   echo "expected release workflow manual tap instructions to use --tap-dir" >&2
