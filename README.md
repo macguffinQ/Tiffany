@@ -555,6 +555,8 @@ Default native TUI slash commands:
 - `/role` - open the role-registration form or register one role with `register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`
 - `/roles` - inspect role wiring, select the active worker route, or save role/provider/model/runtime bindings
 - `/thread` - inspect worker/native CLI session reuse; `/thread clear <role>` resets a stuck native session id
+- `/continue <role|claude|codex|gemini>` - show the native CLI handoff command for a worker role
+- `/continue open <role|claude|codex|gemini>` - pause Tiffany, open the original native Claude/Codex/Gemini session, then return with Claude transcript events plus git status/stat/patch captured into the conversation and `/history kind diff`
 - `/history` - inspect/search saved Tiffany native conversation turns and typed worker events such as answer, tool calls/results, diff, patch, file updates, approval, stderr, and final output; use `/history role <role>`, `/history thread <id>`, or `/history kind <event-kind>` to focus the stream; `/history export [role <role>|thread <id>|kind <event-kind>] [--out file.md]` writes a Markdown handoff
 - `/doctor` - diagnose config, runtimes, API keys, role wiring, local tools, and install surface
 - `/status` - show current session/config status
@@ -848,7 +850,8 @@ orchestrator/
 - [x] Plain selectable final answer
 - [x] Terminal `/diff` and `/tests` helpers
 - [x] Role registry view and per-session role selection
-- [x] Claude/Codex CLI handoff packages
+- [x] Claude/Codex/Gemini CLI handoff packages and `/continue open` native session handoff
+- [x] Native Claude return sync plus git status, diff stat, and full patch history
 - [x] Conversation flow graph summaries
 - [x] Patch checkpoint and rollback commands
 - [x] Optional zellij tab + --detach

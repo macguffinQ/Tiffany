@@ -36,7 +36,11 @@ async fn native_cli_return_snapshot(worktree: Option<&str>) -> crate::tiffany_or
     crate::tiffany_orchestrator::TiffanyNativeCliReturn {
         status: git_output(cwd, &["status", "--short"]).await,
         diff_stat: git_output(cwd, &["diff", "--stat"]).await,
+        diff_patch: git_output(cwd, &["diff"]).await,
         staged_diff_stat: git_output(cwd, &["diff", "--cached", "--stat"]).await,
+        staged_diff_patch: git_output(cwd, &["diff", "--cached"]).await,
+        transcript_event_count: 0,
+        transcript_preview: None,
     }
 }
 
@@ -109,6 +113,8 @@ impl App {
         command: crate::tiffany_orchestrator::TiffanyNativeCliCommand,
     ) {
         let command_text = command.command.clone();
+        let transcript_cursor =
+            crate::tiffany_orchestrator::native_cli_transcript_cursor(&command);
         let status = tui
             .with_restored(tui::RestoreMode::Full, || async move {
                 let mut shell = tokio::process::Command::new(default_shell_program());
@@ -126,6 +132,20 @@ impl App {
         match status {
             Ok(status) if status.success() => {
                 let outcome = native_cli_return_snapshot(command.worktree.as_deref()).await;
+                let transcript_events =
+                    crate::tiffany_orchestrator::native_cli_transcript_events_since(
+                        &command,
+                        transcript_cursor.as_ref(),
+                    );
+                let transcript_preview =
+                    crate::tiffany_orchestrator::native_cli_transcript_preview(
+                        &transcript_events,
+                    );
+                let outcome = crate::tiffany_orchestrator::TiffanyNativeCliReturn {
+                    transcript_event_count: transcript_events.len(),
+                    transcript_preview,
+                    ..outcome
+                };
                 self.chat_widget.add_plain_history_lines(
                     crate::tiffany_orchestrator::native_cli_return_lines(&command, &outcome),
                 );
@@ -134,6 +154,7 @@ impl App {
                     self.config.cwd.as_path(),
                     &command,
                     &outcome,
+                    transcript_events,
                 ) && let Some(config) = self.tiffany_orchestrator.clone()
                 {
                     crate::tiffany_orchestrator::spawn_native_history_import(config, path);

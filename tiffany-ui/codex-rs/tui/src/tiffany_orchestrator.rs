@@ -121,7 +121,17 @@ pub(crate) struct TiffanyNativeCliCommand {
 pub(crate) struct TiffanyNativeCliReturn {
     pub(crate) status: Option<String>,
     pub(crate) diff_stat: Option<String>,
+    pub(crate) diff_patch: Option<String>,
     pub(crate) staged_diff_stat: Option<String>,
+    pub(crate) staged_diff_patch: Option<String>,
+    pub(crate) transcript_event_count: usize,
+    pub(crate) transcript_preview: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TiffanyNativeCliTranscriptCursor {
+    path: PathBuf,
+    byte_len: u64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1157,39 +1167,360 @@ pub(crate) fn append_native_cli_return(
     cwd: &Path,
     command: &TiffanyNativeCliCommand,
     outcome: &TiffanyNativeCliReturn,
+    transcript_events: Vec<TiffanyNativeChatEvent>,
 ) -> anyhow::Result<Option<PathBuf>> {
-    if outcome.status.is_none() && outcome.diff_stat.is_none() && outcome.staged_diff_stat.is_none()
-    {
+    if !native_cli_return_has_changes(outcome) && transcript_events.is_empty() {
         return Ok(None);
     }
-    let mut events = Vec::new();
+    let mut events = transcript_events;
     if let Some(status) = outcome.status.as_deref().and_then(nonempty_trimmed) {
         events.push(native_cli_return_event(command, "file_update", "git status --short", status));
     }
-    if let Some(diff_stat) = outcome.diff_stat.as_deref().and_then(nonempty_trimmed) {
-        events.push(native_cli_return_event(command, "diff", "git diff --stat", diff_stat));
+    if let Some(content) = native_cli_diff_event_content(
+        "git diff --stat",
+        outcome.diff_stat.as_deref(),
+        "git diff",
+        outcome.diff_patch.as_deref(),
+    ) {
+        events.push(native_cli_return_event(command, "diff", "git diff", &content));
     }
-    if let Some(diff_stat) = outcome
-        .staged_diff_stat
-        .as_deref()
-        .and_then(nonempty_trimmed)
-    {
-        events.push(native_cli_return_event(
-            command,
-            "diff",
-            "git diff --cached --stat",
-            diff_stat,
-        ));
+    if let Some(content) = native_cli_diff_event_content(
+        "git diff --cached --stat",
+        outcome.staged_diff_stat.as_deref(),
+        "git diff --cached",
+        outcome.staged_diff_patch.as_deref(),
+    ) {
+        events.push(native_cli_return_event(command, "diff", "git diff --cached", &content));
     }
     append_native_chat_turn(
         codex_home,
         cwd,
         &TiffanyOrchestratorTurn {
             user_prompt: format!("/continue open {}", command.role),
-            result: "native CLI returned to Tiffany".to_string(),
+            result: outcome
+                .transcript_preview
+                .as_deref()
+                .and_then(nonempty_trimmed)
+                .map(str::to_string)
+                .unwrap_or_else(|| "native CLI returned to Tiffany".to_string()),
         },
         events,
     )
+}
+
+pub(crate) fn native_cli_transcript_preview(
+    events: &[TiffanyNativeChatEvent],
+) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .find(|event| {
+            matches!(
+                event.kind.as_deref(),
+                Some("final") | Some("answer") | Some("question")
+            )
+        })
+        .and_then(|event| event.content.as_deref())
+        .and_then(nonempty_trimmed)
+        .map(|content| truncate_text(content, 4_000))
+}
+
+pub(crate) fn native_cli_transcript_cursor(
+    command: &TiffanyNativeCliCommand,
+) -> Option<TiffanyNativeCliTranscriptCursor> {
+    if !native_cli_command_is_claude(command) {
+        return None;
+    }
+    let path = claude_session_jsonl_path(command)?;
+    let byte_len = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+    Some(TiffanyNativeCliTranscriptCursor { path, byte_len })
+}
+
+pub(crate) fn native_cli_transcript_events_since(
+    command: &TiffanyNativeCliCommand,
+    cursor: Option<&TiffanyNativeCliTranscriptCursor>,
+) -> Vec<TiffanyNativeChatEvent> {
+    if !native_cli_command_is_claude(command) {
+        return Vec::new();
+    }
+    let Some(cursor) = cursor else {
+        return Vec::new();
+    };
+    let Ok(meta) = std::fs::metadata(&cursor.path) else {
+        return Vec::new();
+    };
+    if meta.len() <= cursor.byte_len {
+        return Vec::new();
+    }
+    let Ok(mut file) = std::fs::File::open(&cursor.path) else {
+        return Vec::new();
+    };
+    use std::io::Read as _;
+    use std::io::Seek as _;
+    if file.seek(std::io::SeekFrom::Start(cursor.byte_len)).is_err() {
+        return Vec::new();
+    }
+    let mut body = String::new();
+    if file.read_to_string(&mut body).is_err() {
+        return Vec::new();
+    }
+    native_cli_transcript_events_from_jsonl(command, &body)
+}
+
+fn native_cli_command_is_claude(command: &TiffanyNativeCliCommand) -> bool {
+    command.command.contains("claude --resume") || command.command.contains("claude resume")
+}
+
+fn claude_session_jsonl_path(command: &TiffanyNativeCliCommand) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let worktree = command.worktree.as_deref().and_then(nonempty_trimmed)?;
+    let canonical = Path::new(worktree)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(worktree));
+    let project_slug = canonical
+        .to_string_lossy()
+        .replace('/', "-")
+        .trim_start_matches('-')
+        .to_string();
+    let path = home
+        .join(".claude")
+        .join("projects")
+        .join(project_slug)
+        .join(format!("{}.jsonl", command.native_session));
+    Some(path)
+}
+
+fn native_cli_transcript_events_from_jsonl(
+    command: &TiffanyNativeCliCommand,
+    body: &str,
+) -> Vec<TiffanyNativeChatEvent> {
+    body.lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .flat_map(|value| native_cli_transcript_events_from_value(command, &value))
+        .collect()
+}
+
+fn native_cli_transcript_events_from_value(
+    command: &TiffanyNativeCliCommand,
+    value: &serde_json::Value,
+) -> Vec<TiffanyNativeChatEvent> {
+    let mut events = Vec::new();
+    if value.get("type").and_then(|value| value.as_str()) == Some("result")
+        && let Some(result) = native_cli_result_content(value)
+    {
+        events.push(native_cli_transcript_event(
+            command,
+            "final",
+            "native final",
+            result,
+        ));
+    }
+
+    let Some(message) = value.get("message") else {
+        return events;
+    };
+    let role = message
+        .get("role")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    if role == "assistant"
+        && let Some(content) = native_cli_message_text(message)
+    {
+        events.push(native_cli_transcript_event(
+            command,
+            "answer",
+            "native answer",
+            content,
+        ));
+    }
+    if role == "user"
+        && let Some(content) = native_cli_message_text(message)
+        && !content.contains("tool_result")
+    {
+        events.push(native_cli_transcript_event(
+            command,
+            "question",
+            "native user",
+            content,
+        ));
+    }
+    if let Some(items) = message.get("content").and_then(|value| value.as_array()) {
+        for item in items {
+            match item.get("type").and_then(|value| value.as_str()) {
+                Some("tool_use") => {
+                    if let Some(content) = native_cli_tool_call_text(item) {
+                        events.push(native_cli_transcript_event(
+                            command,
+                            "tool_call",
+                            "native tool call",
+                            content,
+                        ));
+                    }
+                }
+                Some("tool_result") => {
+                    if let Some(content) = native_cli_tool_result_text(item) {
+                        let kind = if item
+                            .get("is_error")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false)
+                        {
+                            "stderr"
+                        } else {
+                            "tool_result"
+                        };
+                        events.push(native_cli_transcript_event(
+                            command,
+                            kind,
+                            if kind == "stderr" {
+                                "native tool error"
+                            } else {
+                                "native tool result"
+                            },
+                            content,
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    events
+}
+
+fn native_cli_transcript_event(
+    command: &TiffanyNativeCliCommand,
+    kind: &str,
+    title: &str,
+    content: String,
+) -> TiffanyNativeChatEvent {
+    normalize_native_event(TiffanyNativeChatEvent {
+        role: "worker".to_string(),
+        status: "output".to_string(),
+        title: format!("worker {title} · {}", command.role),
+        kind: Some(kind.to_string()),
+        content: Some(content),
+        agent: Some("claude-code".to_string()),
+        worker_role: Some(command.role.clone()),
+        model: None,
+        provider: None,
+        task_id: None,
+        worker_thread_id: None,
+        native_session_id: Some(command.native_session.clone()),
+    })
+    .expect("native CLI transcript event should be valid")
+}
+
+fn native_cli_result_content(value: &serde_json::Value) -> Option<String> {
+    ["result", "content", "summary", "message"]
+        .iter()
+        .find_map(|key| value.get(*key).and_then(|value| value.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn native_cli_message_text(message: &serde_json::Value) -> Option<String> {
+    match message.get("content")? {
+        serde_json::Value::String(value) => trimmed_string(value.clone()),
+        serde_json::Value::Array(items) => {
+            let text = items
+                .iter()
+                .filter_map(|item| {
+                    if item.get("type").and_then(|value| value.as_str()) == Some("text") {
+                        item.get("text")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            trimmed_string(text)
+        }
+        _ => None,
+    }
+}
+
+fn native_cli_tool_call_text(item: &serde_json::Value) -> Option<String> {
+    let name = item
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("tool");
+    let input = item
+        .get("input")
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| value.to_string())
+        })
+        .unwrap_or_default();
+    let input = truncate_text(&one_line(&input), 2_000);
+    Some(format!("tool {name}: {input}"))
+}
+
+fn native_cli_tool_result_text(item: &serde_json::Value) -> Option<String> {
+    let content = match item.get("content")? {
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                if item.get("type").and_then(|value| value.as_str()) == Some("text") {
+                    item.get("text")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                } else {
+                    item.as_str().map(str::to_string)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        value => value.to_string(),
+    };
+    trimmed_string(content)
+}
+
+fn native_cli_return_has_changes(outcome: &TiffanyNativeCliReturn) -> bool {
+    [
+        outcome.status.as_deref(),
+        outcome.diff_stat.as_deref(),
+        outcome.diff_patch.as_deref(),
+        outcome.staged_diff_stat.as_deref(),
+        outcome.staged_diff_patch.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| !value.trim().is_empty())
+}
+
+fn native_cli_diff_event_content(
+    stat_title: &str,
+    stat: Option<&str>,
+    patch_title: &str,
+    patch: Option<&str>,
+) -> Option<String> {
+    let stat = stat.and_then(nonempty_trimmed);
+    let patch = patch.and_then(nonempty_trimmed);
+    if stat.is_none() && patch.is_none() {
+        return None;
+    }
+
+    let mut out = String::new();
+    if let Some(stat) = stat {
+        out.push_str(stat_title);
+        out.push('\n');
+        out.push_str(stat);
+    }
+    if let Some(patch) = patch {
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(patch_title);
+        out.push('\n');
+        out.push_str(patch);
+    }
+    Some(out)
 }
 
 fn native_cli_return_event(
@@ -5852,18 +6183,7 @@ pub(crate) fn native_cli_return_lines(
     command: &TiffanyNativeCliCommand,
     outcome: &TiffanyNativeCliReturn,
 ) -> Vec<Line<'static>> {
-    let has_changes = outcome
-        .status
-        .as_deref()
-        .is_some_and(|status| !status.trim().is_empty())
-        || outcome
-            .diff_stat
-            .as_deref()
-            .is_some_and(|stat| !stat.trim().is_empty())
-        || outcome
-            .staged_diff_stat
-            .as_deref()
-            .is_some_and(|stat| !stat.trim().is_empty());
+    let has_changes = native_cli_return_has_changes(outcome);
     let mut lines = vec![status_line(
         "✓",
         TIFFANY_BLUE,
@@ -5877,6 +6197,32 @@ pub(crate) fn native_cli_return_lines(
     lines.push(thread_meta_line("native", &command.native_session));
     if let Some(worktree) = command.worktree.as_deref().and_then(nonempty_trimmed) {
         lines.push(thread_meta_line("work", worktree));
+    }
+    if outcome.transcript_event_count > 0 {
+        lines.push(thread_meta_line(
+            "native events",
+            &format!("{} captured from Claude transcript", outcome.transcript_event_count),
+        ));
+    }
+    if let Some(preview) = outcome
+        .transcript_preview
+        .as_deref()
+        .and_then(nonempty_trimmed)
+    {
+        lines.push(thread_meta_line("native answer", "Claude transcript"));
+        for line in preview.lines().take(12) {
+            lines.push(output_body_line_for_kind(
+                line,
+                Some(event_format::VisibleAgentOutputKind::Answer),
+                false,
+            ));
+        }
+        let hidden = preview.lines().count().saturating_sub(12);
+        if hidden > 0 {
+            lines.push(detail_continuation_line(&format!(
+                "… {hidden} more line(s); /history kind answer shows complete native answer"
+            )));
+        }
     }
     if let Some(status) = outcome.status.as_deref().and_then(nonempty_trimmed) {
         lines.push(thread_meta_line("status", "git status --short"));
@@ -5902,6 +6248,10 @@ pub(crate) fn native_cli_return_lines(
             )));
         }
     }
+    if let Some(diff_patch) = outcome.diff_patch.as_deref().and_then(nonempty_trimmed) {
+        lines.push(thread_meta_line("patch", "git diff"));
+        append_native_cli_patch_preview(&mut lines, diff_patch, "git diff");
+    }
     if let Some(diff_stat) = outcome
         .staged_diff_stat
         .as_deref()
@@ -5918,10 +6268,34 @@ pub(crate) fn native_cli_return_lines(
             )));
         }
     }
+    if let Some(diff_patch) = outcome
+        .staged_diff_patch
+        .as_deref()
+        .and_then(nonempty_trimmed)
+    {
+        lines.push(thread_meta_line("patch", "git diff --cached"));
+        append_native_cli_patch_preview(&mut lines, diff_patch, "git diff --cached");
+    }
     if has_changes {
-        lines.push(next_line("/history kind diff", "inspect saved native return snapshot"));
+        lines.push(next_line(
+            "/history kind diff",
+            "inspect full saved native patch",
+        ));
     }
     lines
+}
+
+fn append_native_cli_patch_preview(lines: &mut Vec<Line<'static>>, patch: &str, command: &str) {
+    const PATCH_PREVIEW_LINES: usize = 32;
+    for line in patch.lines().take(PATCH_PREVIEW_LINES) {
+        lines.push(diff_body_line(line));
+    }
+    let hidden = patch.lines().count().saturating_sub(PATCH_PREVIEW_LINES);
+    if hidden > 0 {
+        lines.push(detail_continuation_line(&format!(
+            "… {hidden} more patch line(s); /history kind diff shows complete {command}"
+        )));
+    }
 }
 
 fn body_line(line: &str, dim: bool) -> Line<'static> {
@@ -7724,7 +8098,16 @@ mod tests {
         let outcome = TiffanyNativeCliReturn {
             status: Some(" M src/lib.rs\n?? tests/new.rs".into()),
             diff_stat: Some(" src/lib.rs | 2 ++\n 1 file changed, 2 insertions(+)".into()),
+            diff_patch: Some(
+                "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old\n+new\n+line"
+                    .into(),
+            ),
             staged_diff_stat: Some(" README.md | 1 +".into()),
+            staged_diff_patch: Some(
+                "diff --git a/README.md b/README.md\n@@ -1 +1,2 @@\n title\n+staged".into(),
+            ),
+            transcript_event_count: 4,
+            transcript_preview: Some("原生 Claude 已完成修改。\n请看 diff。".into()),
         };
 
         let text = native_cli_return_lines(&command, &outcome)
@@ -7736,13 +8119,21 @@ mod tests {
         assert!(text.contains("✓ worker-cc  native CLI exited with workspace changes"));
         assert!(text.contains("native  claude-native-session"));
         assert!(text.contains("work  /tmp/repo"));
+        assert!(text.contains("native events  4 captured from Claude transcript"));
+        assert!(text.contains("native answer  Claude transcript"));
+        assert!(text.contains("原生 Claude 已完成修改。"));
         assert!(text.contains("status  git status --short"));
         assert!(text.contains("M src/lib.rs"));
         assert!(text.contains("diff  git diff --stat"));
         assert!(text.contains("1 file changed"));
+        assert!(text.contains("patch  git diff"));
+        assert!(text.contains("diff --git a/src/lib.rs b/src/lib.rs"));
+        assert!(text.contains("+new"));
         assert!(text.contains("staged  git diff --cached --stat"));
         assert!(text.contains("README.md"));
-        assert!(text.contains("next  /history kind diff"));
+        assert!(text.contains("patch  git diff --cached"));
+        assert!(text.contains("+staged"));
+        assert!(text.contains("next  /history kind diff  inspect full saved native patch"));
     }
 
     #[test]
@@ -7758,10 +8149,14 @@ mod tests {
         let outcome = TiffanyNativeCliReturn {
             status: Some(" M README.md".into()),
             diff_stat: Some(" README.md | 1 +".into()),
+            diff_patch: Some("diff --git a/README.md b/README.md\n+unstaged".into()),
             staged_diff_stat: Some(" src/lib.rs | 1 +".into()),
+            staged_diff_patch: Some("diff --git a/src/lib.rs b/src/lib.rs\n+staged".into()),
+            transcript_event_count: 0,
+            transcript_preview: Some("native final answer".into()),
         };
 
-        append_native_cli_return(home.path(), cwd.path(), &command, &outcome)
+        append_native_cli_return(home.path(), cwd.path(), &command, &outcome, Vec::new())
             .expect("append return")
             .expect("sessions path");
         let loaded = load_native_chat_conversation(home.path(), cwd.path())
@@ -7771,15 +8166,50 @@ mod tests {
         assert_eq!(loaded.turns.len(), 1);
         let turn = &loaded.turns[0];
         assert_eq!(turn.user_prompt, "/continue open worker-cc");
+        assert_eq!(turn.result, "native final answer");
         assert_eq!(turn.events.len(), 3);
         assert_eq!(turn.events[0].kind.as_deref(), Some("file_update"));
         assert_eq!(turn.events[1].kind.as_deref(), Some("diff"));
         assert_eq!(turn.events[2].kind.as_deref(), Some("diff"));
         assert!(turn.events[1].content.as_deref().unwrap().contains("README.md"));
+        assert!(turn.events[1].content.as_deref().unwrap().contains("+unstaged"));
         assert!(turn.events[2].content.as_deref().unwrap().contains("src/lib.rs"));
+        assert!(turn.events[2].content.as_deref().unwrap().contains("+staged"));
         assert_eq!(
             turn.events[1].native_session_id.as_deref(),
             Some("claude-native-session")
+        );
+    }
+
+    #[test]
+    fn native_cli_transcript_events_parse_claude_jsonl_without_raw_json() {
+        let command = TiffanyNativeCliCommand {
+            role: "worker-cc".into(),
+            native_session: "claude-native-session".into(),
+            command: "claude --resume claude-native-session".into(),
+            worktree: Some("/tmp/repo".into()),
+        };
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"我会先检查文件。"},{"type":"tool_use","name":"Read","input":{"file_path":"README.md"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"README body"}]}}
+{"type":"result","result":"完成。"}
+"#;
+
+        let events = native_cli_transcript_events_from_jsonl(&command, jsonl);
+
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].kind.as_deref(), Some("answer"));
+        assert_eq!(events[0].content.as_deref(), Some("我会先检查文件。"));
+        assert_eq!(events[1].kind.as_deref(), Some("tool_call"));
+        assert!(events[1].content.as_deref().unwrap().contains("tool Read"));
+        assert!(!events[1].content.as_deref().unwrap().contains("\"type\""));
+        assert_eq!(events[2].kind.as_deref(), Some("tool_result"));
+        assert_eq!(events[2].content.as_deref(), Some("README body"));
+        assert_eq!(events[3].kind.as_deref(), Some("final"));
+        assert_eq!(events[3].native_session_id.as_deref(), Some("claude-native-session"));
+
+        assert_eq!(
+            native_cli_transcript_preview(&events).as_deref(),
+            Some("完成。")
         );
     }
 
