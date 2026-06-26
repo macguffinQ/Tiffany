@@ -528,10 +528,7 @@ pub(crate) fn spawn_continue_command(
                     &app_event_tx,
                     vec![
                         status_line("✗", Color::Red, "continue", &err),
-                        body_line(
-                            "Usage: /continue [open] <role|claude|codex|gemini>",
-                            true,
-                        ),
+                        body_line("Usage: /continue [open] <role|claude|codex|gemini>", true),
                     ],
                 );
                 return;
@@ -1089,7 +1086,7 @@ fn native_history_lines_from_conversation(
             return vec![
                 status_line("✗", Color::Red, "history", &err),
                 body_line(
-                    "Usage: /history [last|full|<count>|role <role>|thread <id>|kind <event-kind>|search <text>|export [role <role>|thread <id>|kind <event-kind>] [--out path]]",
+                    "Usage: /history [last|full|<count>|role <role>|thread <id>|kind <event-kind>|search <text>|graph|mermaid|export-graph [--out path]|export [role <role>|thread <id>|kind <event-kind>] [--out path]]",
                     true,
                 ),
             ];
@@ -1103,6 +1100,11 @@ fn native_history_lines_from_conversation(
             NativeHistoryCommand::Export { out, filter } => {
                 native_history_export_lines(codex_home, cwd, &conversation, out, filter)
             }
+            NativeHistoryCommand::Graph {
+                mermaid,
+                out,
+                export,
+            } => native_history_graph_lines(codex_home, cwd, &conversation, mermaid, out, export),
             NativeHistoryCommand::Search { pattern } => {
                 native_history_search_lines(&conversation, &pattern)
             }
@@ -1181,7 +1183,12 @@ pub(crate) fn append_native_cli_return(
     }
     let mut events = transcript_events;
     if let Some(status) = outcome.status.as_deref().and_then(nonempty_trimmed) {
-        events.push(native_cli_return_event(command, "file_update", "git status --short", status));
+        events.push(native_cli_return_event(
+            command,
+            "file_update",
+            "git status --short",
+            status,
+        ));
     }
     if let Some(content) = native_cli_diff_event_content(
         "git diff --stat",
@@ -1189,7 +1196,9 @@ pub(crate) fn append_native_cli_return(
         "git diff",
         outcome.diff_patch.as_deref(),
     ) {
-        events.push(native_cli_return_event(command, "diff", "git diff", &content));
+        events.push(native_cli_return_event(
+            command, "diff", "git diff", &content,
+        ));
     }
     if let Some(content) = native_cli_diff_event_content(
         "git diff --cached --stat",
@@ -1197,7 +1206,12 @@ pub(crate) fn append_native_cli_return(
         "git diff --cached",
         outcome.staged_diff_patch.as_deref(),
     ) {
-        events.push(native_cli_return_event(command, "diff", "git diff --cached", &content));
+        events.push(native_cli_return_event(
+            command,
+            "diff",
+            "git diff --cached",
+            &content,
+        ));
     }
     append_native_chat_turn(
         codex_home,
@@ -1215,9 +1229,7 @@ pub(crate) fn append_native_cli_return(
     )
 }
 
-pub(crate) fn native_cli_transcript_preview(
-    events: &[TiffanyNativeChatEvent],
-) -> Option<String> {
+pub(crate) fn native_cli_transcript_preview(events: &[TiffanyNativeChatEvent]) -> Option<String> {
     events
         .iter()
         .rev()
@@ -1274,7 +1286,10 @@ pub(crate) fn native_cli_transcript_events_since(
     };
     use std::io::Read as _;
     use std::io::Seek as _;
-    if file.seek(std::io::SeekFrom::Start(cursor.byte_len)).is_err() {
+    if file
+        .seek(std::io::SeekFrom::Start(cursor.byte_len))
+        .is_err()
+    {
         return Vec::new();
     }
     let mut body = String::new();
@@ -1320,7 +1335,10 @@ fn claude_session_jsonl_path(command: &TiffanyNativeCliCommand) -> Option<PathBu
 
 fn codex_session_jsonl_path(command: &TiffanyNativeCliCommand) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    find_codex_rollout_path_by_id(&home.join(".codex").join("sessions"), &command.native_session)
+    find_codex_rollout_path_by_id(
+        &home.join(".codex").join("sessions"),
+        &command.native_session,
+    )
 }
 
 fn find_codex_rollout_path_by_id(root: &Path, id: &str) -> Option<PathBuf> {
@@ -1798,6 +1816,11 @@ enum NativeHistoryCommand {
         out: Option<PathBuf>,
         filter: Option<NativeHistoryFilter>,
     },
+    Graph {
+        mermaid: bool,
+        out: Option<PathBuf>,
+        export: bool,
+    },
     Search {
         pattern: String,
     },
@@ -1830,9 +1853,10 @@ impl NativeHistoryFilter {
                 .worker_thread_id
                 .as_deref()
                 .is_some_and(|id| id == thread || id.starts_with(thread)),
-            Self::Kind(kind) => event.kind.as_deref().is_some_and(|event_kind| {
-                native_history_kind_matches(event_kind, kind)
-            }),
+            Self::Kind(kind) => event
+                .kind
+                .as_deref()
+                .is_some_and(|event_kind| native_history_kind_matches(event_kind, kind)),
         }
     }
 }
@@ -1913,6 +1937,19 @@ impl NativeHistoryCommand {
             })),
             ["kind", ..] => Err("history kind needs <event-kind>".to_string()),
             ["export", rest @ ..] => parse_native_history_export_command(rest),
+            ["graph" | "flow" | "compact"] => Ok(Self::Graph {
+                mermaid: false,
+                out: None,
+                export: false,
+            }),
+            ["mermaid" | "diagram"] => Ok(Self::Graph {
+                mermaid: true,
+                out: None,
+                export: false,
+            }),
+            ["export-graph", rest @ ..] | ["save-graph", rest @ ..] => {
+                parse_native_history_graph_command(rest)
+            }
             ["search" | "grep" | "find", pattern @ ..] => {
                 let pattern = pattern.join(" ").trim().to_string();
                 if pattern.is_empty() {
@@ -1965,6 +2002,105 @@ fn parse_native_history_export_command(parts: &[&str]) -> Result<NativeHistoryCo
         }
     }
     Ok(NativeHistoryCommand::Export { out, filter })
+}
+
+fn parse_native_history_graph_command(parts: &[&str]) -> Result<NativeHistoryCommand, String> {
+    let mut out = None;
+    let mut mermaid = true;
+    let mut i = 0;
+    while i < parts.len() {
+        match parts[i] {
+            "--out" | "-o" => {
+                let Some(path) = parts.get(i + 1) else {
+                    return Err("history export-graph --out needs a file path".to_string());
+                };
+                out = Some(PathBuf::from(path));
+                i += 2;
+            }
+            "--text" | "text" => {
+                mermaid = false;
+                i += 1;
+            }
+            "--mermaid" | "mermaid" => {
+                mermaid = true;
+                i += 1;
+            }
+            value => return Err(format!("unknown /history export-graph option '{value}'")),
+        }
+    }
+    Ok(NativeHistoryCommand::Graph {
+        mermaid,
+        out,
+        export: true,
+    })
+}
+
+fn native_history_graph_lines(
+    codex_home: &Path,
+    cwd: &Path,
+    conversation: &TiffanyNativeChatConversation,
+    mermaid: bool,
+    out: Option<PathBuf>,
+    export: bool,
+) -> Vec<Line<'static>> {
+    if conversation.turns.is_empty() {
+        return vec![
+            status_line("⚠", Color::Yellow, "history", "no turns to graph"),
+            next_line("/history full", "inspect saved native events"),
+        ];
+    }
+
+    let body = if mermaid {
+        render_native_history_mermaid(conversation, 16, export)
+    } else {
+        render_native_history_text_graph(conversation, 16)
+    };
+
+    if export {
+        let path =
+            out.unwrap_or_else(|| default_native_history_graph_path(codex_home, cwd, mermaid));
+        if let Some(parent) = path.parent()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            return vec![
+                status_line(
+                    "✗",
+                    Color::Red,
+                    "history",
+                    "could not create graph export directory",
+                ),
+                body_line(&format!("{err:#}"), true),
+            ];
+        }
+        return match std::fs::write(&path, body.as_bytes()) {
+            Ok(()) => vec![
+                status_line("✓", TIFFANY_BLUE, "history", "conversation graph exported"),
+                thread_meta_line("target", &path.display().to_string()),
+                thread_meta_line("bytes", &body.len().to_string()),
+                next_line("open graph", &path.display().to_string()),
+            ],
+            Err(err) => vec![
+                status_line("✗", Color::Red, "history", "could not write graph export"),
+                body_line(&format!("{err:#}"), true),
+            ],
+        };
+    }
+
+    let mut lines = vec![status_line(
+        "✓",
+        TIFFANY_BLUE,
+        "history",
+        if mermaid {
+            "conversation Mermaid graph"
+        } else {
+            "conversation flow graph"
+        },
+    )];
+    for line in body.lines() {
+        lines.push(body_line(line, false));
+    }
+    lines.push(next_line("/history export-graph", "save Mermaid flowchart"));
+    lines
 }
 
 fn native_history_conversation_lines(
@@ -2270,6 +2406,161 @@ fn default_native_history_export_path(codex_home: &Path, cwd: &Path) -> PathBuf 
         .join("tiffany-orchestrator")
         .join("history-exports")
         .join(format!("{}.md", native_conversation_id(&cwd_key(cwd))))
+}
+
+fn default_native_history_graph_path(codex_home: &Path, cwd: &Path, mermaid: bool) -> PathBuf {
+    codex_home
+        .join("tiffany-orchestrator")
+        .join("history-exports")
+        .join(format!(
+            "{}.{}",
+            native_conversation_id(&cwd_key(cwd)),
+            if mermaid { "mmd" } else { "txt" }
+        ))
+}
+
+fn render_native_history_text_graph(
+    conversation: &TiffanyNativeChatConversation,
+    limit: usize,
+) -> String {
+    let mut out = String::from("Conversation flow\n");
+    out.push_str(&format!("cwd: {}\n", conversation.cwd));
+    out.push_str(&format!("session: {}\n", conversation.id));
+    let turns = conversation
+        .turns
+        .iter()
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    let first_turn_number = conversation.turns.len().saturating_sub(turns.len()) + 1;
+    for (idx, turn) in turns.iter().enumerate() {
+        let turn_number = first_turn_number + idx;
+        out.push_str(&format!("\n{}. user -> answer\n", turn_number));
+        out.push_str(&format!(
+            "   user: {}\n",
+            truncate_text(&one_line(&turn.user_prompt), 120)
+        ));
+        out.push_str(&format!(
+            "   answer: {}\n",
+            truncate_text(&one_line(&turn.result), 140)
+        ));
+        let summary = native_turn_event_summary(turn);
+        if !summary.is_empty() {
+            out.push_str(&format!("   events: {}\n", summary.join(" -> ")));
+        }
+    }
+    out
+}
+
+fn render_native_history_mermaid(
+    conversation: &TiffanyNativeChatConversation,
+    limit: usize,
+    raw: bool,
+) -> String {
+    let turns = conversation
+        .turns
+        .iter()
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    let first_turn_number = conversation.turns.len().saturating_sub(turns.len()) + 1;
+    let mut out = String::new();
+    if !raw {
+        out.push_str("```mermaid\n");
+    }
+    out.push_str("flowchart TD\n");
+    out.push_str("  start([Tiffany conversation])\n");
+    let mut previous = "start".to_string();
+    for (idx, turn) in turns.iter().enumerate() {
+        let turn_number = first_turn_number + idx;
+        let user_id = format!("u{turn_number}");
+        let answer_id = format!("a{turn_number}");
+        out.push_str(&format!(
+            "  {user_id}[\"{}\"]\n",
+            escape_mermaid_label(&format!(
+                "user: {}",
+                truncate_text(&one_line(&turn.user_prompt), 72)
+            ))
+        ));
+        out.push_str(&format!(
+            "  {answer_id}[\"{}\"]\n",
+            escape_mermaid_label(&format!(
+                "answer: {}",
+                truncate_text(&one_line(&turn.result), 72)
+            ))
+        ));
+        out.push_str(&format!("  {previous} --> {user_id}\n"));
+        out.push_str(&format!("  {user_id} --> {answer_id}\n"));
+        let mut event_previous = answer_id.clone();
+        for (event_idx, label) in native_turn_event_summary(turn)
+            .into_iter()
+            .take(6)
+            .enumerate()
+        {
+            let event_id = format!("e{turn_number}_{event_idx}");
+            out.push_str(&format!(
+                "  {event_id}[\"{}\"]\n",
+                escape_mermaid_label(&label)
+            ));
+            out.push_str(&format!("  {event_previous} --> {event_id}\n"));
+            event_previous = event_id;
+        }
+        previous = event_previous;
+    }
+    if !raw {
+        out.push_str("```\n");
+    }
+    out
+}
+
+fn native_turn_event_summary(turn: &TiffanyNativeChatTurn) -> Vec<String> {
+    let mut labels = Vec::new();
+    for event in &turn.events {
+        let kind = event.kind.as_deref().unwrap_or(event.status.as_str());
+        let label = match kind {
+            "answer" | "final" | "question" => kind.to_string(),
+            "tool_call" => tool_event_label("tool", event),
+            "tool_result" => "tool result".to_string(),
+            "diff" => "diff".to_string(),
+            "patch" => "patch".to_string(),
+            "file_update" => "file update".to_string(),
+            "approval" => "approval".to_string(),
+            "stderr" => "stderr".to_string(),
+            other => other.replace('_', " "),
+        };
+        if labels.last().map(String::as_str) != Some(label.as_str()) {
+            labels.push(label);
+        }
+    }
+    labels
+}
+
+fn tool_event_label(prefix: &str, event: &TiffanyNativeChatEvent) -> String {
+    event
+        .content
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .map(one_line)
+        .map(|content| truncate_text(&content, 60))
+        .map(|content| format!("{prefix}: {content}"))
+        .unwrap_or_else(|| prefix.to_string())
+}
+
+fn escape_mermaid_label(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('[', "(")
+        .replace(']', ")")
+        .replace('{', "(")
+        .replace('}', ")")
+        .replace('\n', " ")
 }
 
 fn render_native_history_markdown(
@@ -3363,7 +3654,10 @@ fn emit_continue_open_output(app_event_tx: &AppEventSender, output: std::process
             let lines = continue_summary_lines(&stdout).unwrap_or_else(|| {
                 vec![
                     status_line("⚠", Color::Yellow, "continue", "no native handoff found"),
-                    body_line("Run a worker task first, then retry /continue open <role>.", true),
+                    body_line(
+                        "Run a worker task first, then retry /continue open <role>.",
+                        true,
+                    ),
                 ]
             });
             emit_lines(app_event_tx, lines);
@@ -3862,7 +4156,10 @@ fn continue_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
     )];
     lines.push(thread_meta_line("native", native));
     lines.push(thread_meta_line("command", command));
-    if let Some(worktree) = fields.get("worktree").and_then(|value| nonempty_trimmed(value)) {
+    if let Some(worktree) = fields
+        .get("worktree")
+        .and_then(|value| nonempty_trimmed(value))
+    {
         lines.push(thread_meta_line("work", worktree));
     }
     lines.push(next_line(
@@ -6425,7 +6722,10 @@ pub(crate) fn native_cli_return_lines(
     if outcome.transcript_event_count > 0 {
         lines.push(thread_meta_line(
             "native events",
-            &format!("{} captured from Claude transcript", outcome.transcript_event_count),
+            &format!(
+                "{} captured from Claude transcript",
+                outcome.transcript_event_count
+            ),
         ));
     }
     if let Some(preview) = outcome
@@ -7353,6 +7653,164 @@ mod tests {
     }
 
     #[test]
+    fn native_history_graph_summarizes_saved_turn_flow() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "实现登录".into(),
+                result: "登录完成".into(),
+            },
+            vec![
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker tool call · worker-cc · claude-code".into(),
+                    kind: Some("tool_call".into()),
+                    content: Some("Bash: cargo test -q".into()),
+                    agent: Some("claude-code".into()),
+                    worker_role: Some("worker-cc".into()),
+                    model: Some("claude-sonnet-4-6".into()),
+                    provider: Some("anthropic".into()),
+                    task_id: Some("abc12345".into()),
+                    worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
+                    native_session_id: Some("native-1".into()),
+                },
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker tool result · worker-cc · claude-code".into(),
+                    kind: Some("tool_result".into()),
+                    content: Some("ok".into()),
+                    agent: Some("claude-code".into()),
+                    worker_role: Some("worker-cc".into()),
+                    model: Some("claude-sonnet-4-6".into()),
+                    provider: Some("anthropic".into()),
+                    task_id: Some("abc12345".into()),
+                    worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
+                    native_session_id: Some("native-1".into()),
+                },
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker diff · worker-cc · claude-code".into(),
+                    kind: Some("diff".into()),
+                    content: Some("diff --git a/src/login.rs b/src/login.rs".into()),
+                    agent: Some("claude-code".into()),
+                    worker_role: Some("worker-cc".into()),
+                    model: Some("claude-sonnet-4-6".into()),
+                    provider: Some("anthropic".into()),
+                    task_id: Some("abc12345".into()),
+                    worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
+                    native_session_id: Some("native-1".into()),
+                },
+            ],
+        )
+        .expect("append");
+
+        let lines = native_history_lines(home.path(), cwd.path(), "graph");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("history  conversation flow graph"));
+        assert!(text.contains("Conversation flow"));
+        assert!(text.contains("1. user -> answer"));
+        assert!(text.contains("user: 实现登录"));
+        assert!(text.contains("answer: 登录完成"));
+        assert!(text.contains("events: tool: Bash: cargo test -q -> tool result -> diff"));
+        assert!(text.contains("/history export-graph"));
+    }
+
+    #[test]
+    fn native_history_mermaid_renders_escaped_flowchart() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "生成 {json}".into(),
+                result: "完成 [ok]".into(),
+            },
+            vec![TiffanyNativeChatEvent {
+                role: "worker".into(),
+                status: "output".into(),
+                title: "worker tool call · worker-codex · codex".into(),
+                kind: Some("tool_call".into()),
+                content: Some("Shell {\"cmd\":\"cargo test\"}".into()),
+                agent: Some("codex".into()),
+                worker_role: Some("worker-codex".into()),
+                model: Some("gpt-5".into()),
+                provider: Some("openai".into()),
+                task_id: Some("codex-1".into()),
+                worker_thread_id: Some("thread-codex".into()),
+                native_session_id: Some("native-codex".into()),
+            }],
+        )
+        .expect("append");
+
+        let lines = native_history_lines(home.path(), cwd.path(), "mermaid");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("history  conversation Mermaid graph"));
+        assert!(text.contains("```mermaid"));
+        assert!(text.contains("flowchart TD"));
+        assert!(text.contains("user: 生成 (json)"));
+        assert!(text.contains("answer: 完成 (ok)"));
+        assert!(text.contains("tool: Shell (\\\"cmd\\\":\\\"cargo test\\\")"));
+        assert!(!text.contains('{'));
+        assert!(!text.contains('}'));
+    }
+
+    #[test]
+    fn native_history_export_graph_writes_graph_file() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let out = home.path().join("flow.txt");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "整理历史".into(),
+                result: "已整理".into(),
+            },
+            vec![TiffanyNativeChatEvent {
+                role: "worker".into(),
+                status: "output".into(),
+                title: "worker final · worker-cc · claude-code".into(),
+                kind: Some("final".into()),
+                content: Some("已整理".into()),
+                agent: Some("claude-code".into()),
+                worker_role: Some("worker-cc".into()),
+                model: Some("claude-sonnet-4-6".into()),
+                provider: Some("anthropic".into()),
+                task_id: Some("abc12345".into()),
+                worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
+                native_session_id: Some("native-1".into()),
+            }],
+        )
+        .expect("append");
+
+        let lines = native_history_lines(
+            home.path(),
+            cwd.path(),
+            &format!("export-graph --text --out {}", out.display()),
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("history  conversation graph exported"));
+        assert!(text.contains(out.to_string_lossy().as_ref()));
+
+        let graph = std::fs::read_to_string(&out).expect("graph export");
+        assert!(graph.contains("Conversation flow"));
+        assert!(graph.contains("1. user -> answer"));
+        assert!(graph.contains("events: final"));
+    }
+
+    #[test]
     fn native_chat_events_infer_kind_for_old_saved_events() {
         let old_event = TiffanyNativeChatEvent {
             role: "worker".into(),
@@ -7686,7 +8144,7 @@ mod tests {
         let bad_text = bad.iter().map(line_text).collect::<Vec<_>>().join("\n");
         assert!(bad_text.contains("unknown /history option 'wat'"));
         assert!(bad_text.contains(
-            "Usage: /history [last|full|<count>|role <role>|thread <id>|kind <event-kind>|search <text>|export [role <role>|thread <id>|kind <event-kind>] [--out path]]"
+            "Usage: /history [last|full|<count>|role <role>|thread <id>|kind <event-kind>|search <text>|graph|mermaid|export-graph [--out path]|export [role <role>|thread <id>|kind <event-kind>] [--out path]]"
         ));
     }
 
@@ -8323,8 +8781,7 @@ mod tests {
             status: Some(" M src/lib.rs\n?? tests/new.rs".into()),
             diff_stat: Some(" src/lib.rs | 2 ++\n 1 file changed, 2 insertions(+)".into()),
             diff_patch: Some(
-                "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old\n+new\n+line"
-                    .into(),
+                "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old\n+new\n+line".into(),
             ),
             staged_diff_stat: Some(" README.md | 1 +".into()),
             staged_diff_patch: Some(
@@ -8395,10 +8852,34 @@ mod tests {
         assert_eq!(turn.events[0].kind.as_deref(), Some("file_update"));
         assert_eq!(turn.events[1].kind.as_deref(), Some("diff"));
         assert_eq!(turn.events[2].kind.as_deref(), Some("diff"));
-        assert!(turn.events[1].content.as_deref().unwrap().contains("README.md"));
-        assert!(turn.events[1].content.as_deref().unwrap().contains("+unstaged"));
-        assert!(turn.events[2].content.as_deref().unwrap().contains("src/lib.rs"));
-        assert!(turn.events[2].content.as_deref().unwrap().contains("+staged"));
+        assert!(
+            turn.events[1]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("README.md")
+        );
+        assert!(
+            turn.events[1]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("+unstaged")
+        );
+        assert!(
+            turn.events[2]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("src/lib.rs")
+        );
+        assert!(
+            turn.events[2]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("+staged")
+        );
         assert_eq!(
             turn.events[1].native_session_id.as_deref(),
             Some("claude-native-session")
@@ -8429,7 +8910,10 @@ mod tests {
         assert_eq!(events[2].kind.as_deref(), Some("tool_result"));
         assert_eq!(events[2].content.as_deref(), Some("README body"));
         assert_eq!(events[3].kind.as_deref(), Some("final"));
-        assert_eq!(events[3].native_session_id.as_deref(), Some("claude-native-session"));
+        assert_eq!(
+            events[3].native_session_id.as_deref(),
+            Some("claude-native-session")
+        );
 
         assert_eq!(
             native_cli_transcript_preview(&events).as_deref(),
@@ -8464,7 +8948,13 @@ mod tests {
         assert!(events[2].content.as_deref().unwrap().contains("ok"));
         assert_eq!(events[3].kind.as_deref(), Some("diff"));
         assert!(events[3].content.as_deref().unwrap().contains("diff --git"));
-        assert!(!events[3].content.as_deref().unwrap().contains("\"turn_diff\""));
+        assert!(
+            !events[3]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("\"turn_diff\"")
+        );
     }
 
     #[test]

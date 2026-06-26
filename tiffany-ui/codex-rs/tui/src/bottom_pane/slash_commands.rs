@@ -254,7 +254,7 @@ fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> 
             "Ask Tiffany to run the test command in chat, or run the command directly in your shell."
         }
         "graph" => {
-            "Use orchestrator sessions show <id|last> --flow from the shell for a readable orchestration waterfall."
+            "Use /history graph for a compact conversation flow, or /history mermaid for a shareable Mermaid diagram."
         }
         "acp" => "Run orchestrator acp from the shell to start the Agent Client Protocol server.",
         "checkpoint" | "rollback" => {

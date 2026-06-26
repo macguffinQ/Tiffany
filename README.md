@@ -235,7 +235,7 @@ All injected as system-prompt sections, in priority order: **AGENTS.md > CLAUDE.
 - Worker stream rows are labeled as `final`, `tool call`, `tool result`,
   `stderr`, or `alert`, and common failures include a one-line fix hint instead
   of raw adapter JSON.
-- Native slash commands cover provider setup, role registration, stable worker sessions, diagnostics, status, diff, copy/raw mode, clear, and exit. Older process/log/queue/history helper commands remain only in the legacy fallback runner.
+- Native slash commands cover provider setup, role registration, stable worker sessions, native history search/export/flow graphs, diagnostics, status, diff, copy/raw mode, clear, and exit. Older process/log/queue helper commands remain only in the legacy fallback runner.
 - In tiffany-loop orchestrator mode, `/provider` is native to the tiffany-loop TUI: `/provider` opens a setup form with separate provider/type/env/key/endpoint fields, `/provider edit openai` edits an existing provider with prefilled values, `/provider list` shows config, `/provider env openai OPENAI_API_KEY` stores an env-var reference, and `/provider endpoint openai https://api.openai.com/v1` stores the endpoint.
 - In tiffany-loop orchestrator mode, `/role` opens a dedicated role-registration form with role/provider/model/runtime/team fields; `/roles` remains the list/CLI-style command surface.
 - Typing `/` opens a command menu; `Up`/`Down` selects and `Enter` confirms.
@@ -557,7 +557,7 @@ Default native TUI slash commands:
 - `/thread` - inspect worker/native CLI session reuse; `/thread clear <role>` resets a stuck native session id
 - `/continue <role|claude|codex|gemini>` - show the native CLI handoff command for a worker role
 - `/continue open <role|claude|codex|gemini>` - pause Tiffany, open the original native Claude/Codex/Gemini session, then return with Claude/Codex transcript events plus git status/stat/patch captured into the conversation and `/history kind diff`
-- `/history` - inspect/search saved Tiffany native conversation turns and typed worker events such as answer, tool calls/results, diff, patch, file updates, approval, stderr, and final output; use `/history role <role>`, `/history thread <id>`, or `/history kind <event-kind>` to focus the stream; `/history export [role <role>|thread <id>|kind <event-kind>] [--out file.md]` writes a Markdown handoff
+- `/history` - inspect/search saved Tiffany native conversation turns and typed worker events such as answer, tool calls/results, diff, patch, file updates, approval, stderr, and final output; use `/history role <role>`, `/history thread <id>`, or `/history kind <event-kind>` to focus the stream; `/history graph` shows a compact text flow, `/history mermaid` renders a Mermaid flowchart, `/history export-graph [--text|--mermaid] [--out file]` writes a graph file, and `/history export [role <role>|thread <id>|kind <event-kind>] [--out file.md]` writes a Markdown handoff
 - `/doctor` - diagnose config, runtimes, API keys, role wiring, local tools, and install surface
 - `/status` - show current session/config status
 - `/help` - show Tiffany command help

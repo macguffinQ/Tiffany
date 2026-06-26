@@ -454,7 +454,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `/thread`：查看 worker/native CLI 会话复用状态；`/thread clear <role>` 可清掉卡住的 native session id。
 - `/continue <role|claude|codex|gemini>`：查看某个角色的原生 CLI handoff 命令。
 - `/continue open <role|claude|codex|gemini>`：暂停 Tiffany，打开原始 Claude/Codex/Gemini 会话继续工作；退出原生 CLI 后，Tiffany 会把 Claude/Codex transcript 事件、git status、diff stat 和完整 patch 保存到对话历史，可用 `/history kind diff` 复盘。
-- `/history`：查看、搜索、导出保存的原生事件流；支持 `/history role <role>`、`/history thread <id>`、`/history kind answer|tool_result|diff|approval`，以及 `/history export kind <event-kind> --out file.md`。
+- `/history`：查看、搜索、导出保存的原生事件流；支持 `/history role <role>`、`/history thread <id>`、`/history kind answer|tool_result|diff|approval`；`/history graph` 显示压缩文本流程，`/history mermaid` 渲染 Mermaid 流程图，`/history export-graph [--text|--mermaid] [--out file]` 导出流程图，`/history export kind <event-kind> --out file.md` 导出 Markdown handoff。
 - `/doctor`：诊断配置、runtime、API key、角色绑定、本地工具和安装状态。
 - `/status`：显示当前会话和配置状态。
 - `/help`：显示 Tiffany 命令帮助。
@@ -466,7 +466,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 
 原生 TUI 会主动隐藏 `/model`、`/init`、`/permissions`、`/compact`、`/review`、`/resume`、`/agent` 等上游专用命令。手动输入这些命令时，Tiffany 会显示本地解释，不会把它们当普通聊天内容发给 worker。
 
-旧 terminal chat 命令只在 `ORCHESTRATOR_LEGACY_TUI=1` 强制 fallback 或直接运行兼容 terminal chat 时可用，包括 `/workflow`、`/agent`、`/context`、`/process`、`/trace`、`/queue`、`/tests`、`/handoff`、`/continue`、`/graph`、`/acp`、`/result`、`/usage`、`/o`、`/resume last` 等。
+旧 terminal chat 命令只在 `ORCHESTRATOR_LEGACY_TUI=1` 强制 fallback 或直接运行兼容 terminal chat 时可用，包括 `/workflow`、`/agent`、`/context`、`/process`、`/trace`、`/queue`、`/tests`、`/handoff`、`/continue`、`/graph`、`/acp`、`/result`、`/usage`、`/o`、`/resume last` 等；原生 TUI 中请用 `/history graph` 查看会话流程图。
 
 默认原生 TUI 的底部状态行会常驻显示当前阶段、耗时、worker 路由、上下文模式、队列数量、折叠状态、process filter、review/worker 问题计数，尽量保持一行内可扫读。
 
