@@ -1016,9 +1016,11 @@ fn native_session_for_continue(
     config: &Config,
     input: &InputState,
 ) -> Option<String> {
-    if target != AgentContinueTarget::Claude {
-        return None;
-    }
+    let runtime = match target {
+        AgentContinueTarget::Claude => "claude-code",
+        AgentContinueTarget::Codex => "codex",
+        AgentContinueTarget::Gemini => "gemini",
+    };
     let role = input
         .agent_hint
         .as_deref()
@@ -1026,12 +1028,10 @@ fn native_session_for_continue(
             config
                 .roles
                 .get(*role)
-                .is_some_and(|cfg| crate::runtime::is_claude_runtime(&cfg.runtime))
+                .is_some_and(|cfg| cfg.runtime == runtime)
         })
         .map(str::to_string)
-        .or_else(|| {
-            crate::runtime::default_worker_role_for_runtime(&config.roles, "claude-code")
-        })?;
+        .or_else(|| crate::runtime::default_worker_role_for_runtime(&config.roles, runtime))?;
     store
         .worker_thread_by_role(&role)
         .ok()
@@ -1336,7 +1336,7 @@ fn terminal_help() -> String {
      /process [summary|full|n]     Show captured run process\n\
      /diff [summary|stat|full]     Show current git changes\n\
      /tests [suggest|quick|run|status] Show or run test helpers\n\
-     /continue claude|codex        Save handoff and open that CLI inline\n\
+     /continue claude|codex|gemini Save handoff and open that CLI inline\n\
      /graph [compact|full|mermaid|save] Compress conversation into a flow graph\n\
      /acp [status|claude|codex]    Show ACP server/client setup hints\n\
      /result [text]                Show last final result\n\
@@ -2056,6 +2056,10 @@ mod tests {
             parse_agent_continue_target(&["open", "codex"]),
             Some(AgentContinueTarget::Codex)
         );
+        assert_eq!(
+            parse_agent_continue_target(&["gemini"]),
+            Some(AgentContinueTarget::Gemini)
+        );
         assert_eq!(parse_agent_continue_target(&["status"]), None);
     }
 
@@ -2080,6 +2084,15 @@ mod tests {
                 supports_agent_teams: false,
             },
         );
+        cfg.runtimes.insert(
+            "gemini".into(),
+            crate::config::RuntimeConfig {
+                kind: "subprocess".into(),
+                binary: Some("gemini-custom".into()),
+                supports_mcp: false,
+                supports_agent_teams: false,
+            },
+        );
         let handoff = std::path::Path::new("/tmp/orchestrator-handoff.md");
 
         let claude = agent_continue_command(AgentContinueTarget::Claude, &cfg, handoff, None);
@@ -2091,6 +2104,85 @@ mod tests {
         assert_eq!(codex.program, "codex-custom");
         assert!(codex.args.contains(&"--no-alt-screen".into()));
         assert!(codex.display().contains("/tmp/orchestrator-handoff.md"));
+
+        let gemini = agent_continue_command(AgentContinueTarget::Gemini, &cfg, handoff, None);
+        assert_eq!(gemini.program, "gemini-custom");
+        assert!(gemini.args.contains(&"--prompt-interactive".into()));
+        assert!(gemini.display().contains("/tmp/orchestrator-handoff.md"));
+    }
+
+    #[test]
+    fn gemini_continue_uses_worker_thread_native_handle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let mut cfg = Config::default();
+        cfg.roles.insert(
+            "worker-gemini".into(),
+            crate::config::RoleConfig {
+                model: "gemini-pro".into(),
+                runtime: "gemini".into(),
+                agent_teams: false,
+            },
+        );
+        let thread = store
+            .get_or_create_worker_thread(
+                "worker-gemini",
+                "gemini",
+                "gemini",
+                "gemini-2.5-pro",
+                Some("google"),
+            )
+            .unwrap();
+        store
+            .update_worker_thread_after_session(
+                thread.id,
+                Some("latest"),
+                uuid::Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+        let input = InputState::default();
+
+        assert_eq!(
+            native_session_for_continue(AgentContinueTarget::Gemini, &store, &cfg, &input)
+                .as_deref(),
+            Some("latest")
+        );
+    }
+
+    #[test]
+    fn codex_continue_uses_worker_thread_native_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let mut cfg = Config::default();
+        cfg.roles.insert(
+            "worker-codex".into(),
+            crate::config::RoleConfig {
+                model: "gpt4o".into(),
+                runtime: "codex".into(),
+                agent_teams: false,
+            },
+        );
+        let thread = store
+            .get_or_create_worker_thread("worker-codex", "codex", "codex", "gpt-4o", Some("openai"))
+            .unwrap();
+        store
+            .update_worker_thread_after_session(
+                thread.id,
+                Some("codex-native"),
+                uuid::Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+        let input = InputState::default();
+
+        assert_eq!(
+            native_session_for_continue(AgentContinueTarget::Codex, &store, &cfg, &input)
+                .as_deref(),
+            Some("codex-native")
+        );
     }
 
     #[test]

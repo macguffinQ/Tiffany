@@ -1265,7 +1265,7 @@ fn native_resume_command(agent: &str, native_session_id: &str) -> String {
         return format!("codex exec resume {native_session_id}");
     }
     if agent == "gemini" {
-        return "gemini --resume latest".to_string();
+        return format!("gemini --resume {native_session_id}");
     }
     format!("{agent} resume {native_session_id}")
 }
@@ -3593,6 +3593,90 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                 .contains(&first_session.id),
             "Tiffany context should link previous worker session"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_dag_reuses_gemini_native_resume_handle() {
+        let (_tmp, mut orch) = test_orchestrator_with_runtime(Arc::new(ApprovingCritic), "gemini");
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert(
+                "gemini".to_string(),
+                Arc::new(NativeSessionAdapter {
+                    seen: seen.clone(),
+                    next_native: Some("latest".into()),
+                    fail_once_on_native: None,
+                    missing_once_on_native: None,
+                }),
+            );
+
+        let first_task = Task::new("first turn");
+        let first_task_id = first_task.id;
+        let (first_tx, _first_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch.execute_dag(vec![first_task], first_tx).await.unwrap();
+        let first_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == first_task_id)
+            .expect("first worker session");
+        let thread_id = first_session
+            .worker_thread_id
+            .expect("first session should record worker thread");
+        assert_eq!(first_session.native_session_id.as_deref(), Some("latest"));
+        assert_eq!(
+            orch.session_store
+                .worker_thread_by_role("worker-cc")
+                .unwrap()
+                .unwrap()
+                .native_session_id
+                .as_deref(),
+            Some("latest")
+        );
+
+        let second_task = Task::new("second turn");
+        let second_task_id = second_task.id;
+        let (second_tx, mut second_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch
+            .execute_dag(vec![second_task], second_tx)
+            .await
+            .unwrap();
+        let second_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == second_task_id)
+            .expect("second worker session");
+
+        assert_eq!(second_session.worker_thread_id, Some(thread_id));
+        assert_eq!(second_session.native_session_id.as_deref(), Some("latest"));
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.first().cloned().flatten(), None);
+        assert_eq!(
+            seen.get(1).cloned().flatten().as_deref(),
+            Some("latest"),
+            "same Gemini worker role should receive the saved native resume handle"
+        );
+        assert!(
+            second_session
+                .parent_session_ids
+                .contains(&first_session.id),
+            "Tiffany context should still link previous worker session"
+        );
+
+        let mut ready_native = None;
+        while let Ok(event) = second_rx.try_recv() {
+            if let RunProgress::WorkerThreadReady {
+                native_session_id, ..
+            } = event
+            {
+                ready_native = native_session_id;
+            }
+        }
+        assert_eq!(ready_native.as_deref(), Some("latest"));
     }
 
     #[tokio::test]

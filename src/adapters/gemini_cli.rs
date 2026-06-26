@@ -67,7 +67,7 @@ impl WorkerAdapter for GeminiCLIAdapter {
         session.model = model.clone();
         session.parent_session_ids = task.parent_session_ids.clone();
         session.worker_thread_id = task.worker_thread_id;
-        session.native_session_id = None;
+        session.native_session_id = task.native_session_id.clone();
 
         let repo_root = task
             .worktree
@@ -96,7 +96,13 @@ impl WorkerAdapter for GeminiCLIAdapter {
             format!("{}\n\n---\nPrior context:\n{}", task.prompt, history)
         };
 
-        let mut cmd = gemini_command(&self.binary, &model, &worktree, &full_prompt);
+        let mut cmd = gemini_command(
+            &self.binary,
+            &model,
+            &worktree,
+            session.native_session_id.as_deref(),
+            &full_prompt,
+        );
         if let Some(provider_id) = task.model_provider_hint.as_deref() {
             if let Some(provider) = self.providers.get(provider_id) {
                 apply_gemini_provider_env(&mut cmd, provider);
@@ -184,6 +190,9 @@ impl WorkerAdapter for GeminiCLIAdapter {
                 status,
                 stderr_capture.error_suffix()
             );
+        }
+        if session.native_session_id.is_none() {
+            session.native_session_id = Some("latest".to_string());
         }
 
         Ok(crate::core::worker::WorkerHandle {
@@ -273,14 +282,26 @@ impl WorkerAdapter for GeminiCLIAdapter {
     }
 }
 
-fn gemini_command(binary: &str, model: &str, worktree: &std::path::Path, prompt: &str) -> Command {
+fn gemini_command(
+    binary: &str,
+    model: &str,
+    worktree: &std::path::Path,
+    native_session_id: Option<&str>,
+    prompt: &str,
+) -> Command {
     let mut cmd = Command::new(binary);
     cmd.current_dir(worktree)
         .arg("--model")
         .arg(model)
         .arg("--output-format")
-        .arg("stream-json")
-        .arg(prompt);
+        .arg("stream-json");
+    if let Some(session_id) = native_session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        cmd.arg("--resume").arg(session_id);
+    }
+    cmd.arg(prompt);
     cmd
 }
 
@@ -308,6 +329,7 @@ mod tests {
             "gemini",
             "gemini-2.5-pro",
             std::path::Path::new("/tmp/repo"),
+            None,
             "do the work",
         );
         let args = cmd
@@ -328,5 +350,26 @@ mod tests {
             cmd.as_std().get_current_dir(),
             Some(std::path::Path::new("/tmp/repo"))
         );
+    }
+
+    #[test]
+    fn gemini_command_resumes_saved_native_session_handle() {
+        let cmd = gemini_command(
+            "gemini",
+            "gemini-2.5-pro",
+            std::path::Path::new("/tmp/repo"),
+            Some("latest"),
+            "continue the work",
+        );
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--resume" && pair[1] == "latest"));
+        assert_eq!(args.last().map(String::as_str), Some("continue the work"));
     }
 }

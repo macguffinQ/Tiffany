@@ -1411,7 +1411,7 @@ fn help_text() -> String {
      /process [summary|full|n]     Show captured run process\n\
      /diff [summary|stat|full]      Show current git changes\n\
      /tests [suggest|quick|run|status] Show or run test helpers\n\
-     /continue claude|codex         Save handoff and open that CLI inline\n\
+     /continue claude|codex|gemini  Save handoff and open that CLI inline\n\
      /graph [compact|full|mermaid|save] Compress conversation into a flow graph\n\
      /acp [status|claude|codex]     Show ACP server/client setup hints\n\
      /process filter <text>        Filter captured process events\n\
@@ -3628,9 +3628,6 @@ fn worker_thread_model_label(config: &Config, thread: &WorkerThread) -> String {
 }
 
 fn native_thread_resume_command(thread: &WorkerThread) -> String {
-    if thread.agent == "gemini" || thread.runtime == "gemini" {
-        return "gemini --resume latest".into();
-    }
     let Some(native_session_id) = thread
         .native_session_id
         .as_deref()
@@ -3644,6 +3641,9 @@ fn native_thread_resume_command(thread: &WorkerThread) -> String {
     }
     if thread.agent == "codex" || thread.runtime == "codex" {
         return format!("codex exec resume {native_session_id}");
+    }
+    if thread.agent == "gemini" || thread.runtime == "gemini" {
+        return format!("gemini --resume {native_session_id}");
     }
     "none".into()
 }
@@ -3662,7 +3662,10 @@ fn tui_continue_command(thread: &WorkerThread) -> String {
 
 fn worker_thread_status_hint(thread: &WorkerThread) -> &'static str {
     if thread.agent == "gemini" || thread.runtime == "gemini" {
-        return "Tiffany reuses this worker thread context; Gemini native CLI resume is available as latest/index in the project";
+        if thread.native_session_id.is_some() {
+            return "ready for Gemini native resume; Tiffany will reuse latest/index for the same role";
+        }
+        return "no Gemini native session captured yet; next successful worker run starts fresh";
     }
     if thread.native_session_id.is_some() {
         "ready for native resume; Tiffany will reuse this session for the same role"
@@ -3959,6 +3962,9 @@ fn native_resume_command(session: &Session) -> String {
     }
     if session.agent == "codex" {
         return format!("codex exec resume {native_session_id}");
+    }
+    if session.agent == "gemini" {
+        return format!("gemini --resume {native_session_id}");
     }
     "none".into()
 }
@@ -4601,6 +4607,52 @@ mod tests {
         assert!(detail.contains("native resume: claude --resume native-abc"));
         assert!(detail.contains("/continue claude"));
         assert!(detail.contains(&session_id.to_string()));
+    }
+
+    #[test]
+    fn thread_command_shows_gemini_native_resume_handle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let mut cfg = test_config();
+        cfg.roles.insert(
+            "worker-gemini".into(),
+            crate::config::RoleConfig {
+                model: "gemini-pro".into(),
+                runtime: "gemini".into(),
+                agent_teams: false,
+            },
+        );
+        cfg.models.push(crate::config::ModelConfig {
+            id: "gemini-pro".into(),
+            provider: "google".into(),
+            name: "gemini-2.5-pro".into(),
+        });
+        let input = InputState::default();
+        let thread = store
+            .get_or_create_worker_thread(
+                "worker-gemini",
+                "gemini",
+                "gemini",
+                "gemini-2.5-pro",
+                Some("google"),
+            )
+            .unwrap();
+        store
+            .update_worker_thread_after_session(
+                thread.id,
+                Some("latest"),
+                uuid::Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+
+        let detail = format_worker_threads(&store, &cfg, &input, Some("worker-gemini"));
+
+        assert!(detail.contains("native session: latest"));
+        assert!(detail.contains("native resume: gemini --resume latest"));
+        assert!(detail.contains("/continue gemini"));
+        assert!(detail.contains("ready for Gemini native resume"));
     }
 
     #[test]

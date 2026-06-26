@@ -2414,9 +2414,6 @@ fn worker_thread_model_label(cfg: &Config, thread: &WorkerThread) -> String {
 }
 
 fn native_thread_resume_command(thread: &WorkerThread) -> String {
-    if thread.agent == "gemini" || thread.runtime == "gemini" {
-        return "gemini --resume latest".to_string();
-    }
     let Some(native_session_id) = thread
         .native_session_id
         .as_deref()
@@ -2430,6 +2427,9 @@ fn native_thread_resume_command(thread: &WorkerThread) -> String {
     }
     if thread.agent == "codex" || thread.runtime == "codex" {
         return format!("codex exec resume {native_session_id}");
+    }
+    if thread.agent == "gemini" || thread.runtime == "gemini" {
+        return format!("gemini --resume {native_session_id}");
     }
     "none".to_string()
 }
@@ -2448,9 +2448,6 @@ fn native_thread_handoff_command(thread: &WorkerThread) -> String {
 }
 
 fn native_thread_interactive_resume_command(thread: &WorkerThread) -> String {
-    if thread.agent == "gemini" || thread.runtime == "gemini" {
-        return "gemini --resume latest".to_string();
-    }
     let Some(native_session_id) = thread
         .native_session_id
         .as_deref()
@@ -2464,6 +2461,9 @@ fn native_thread_interactive_resume_command(thread: &WorkerThread) -> String {
     }
     if thread.agent == "codex" || thread.runtime == "codex" {
         return format!("codex resume {}", shell_quote_arg(native_session_id));
+    }
+    if thread.agent == "gemini" || thread.runtime == "gemini" {
+        return format!("gemini --resume {}", shell_quote_arg(native_session_id));
     }
     "none".to_string()
 }
@@ -2483,7 +2483,10 @@ fn shell_quote_arg(value: &str) -> String {
 
 fn worker_thread_status_hint(thread: &WorkerThread) -> &'static str {
     if thread.agent == "gemini" || thread.runtime == "gemini" {
-        return "Tiffany reuses this worker thread context; Gemini native CLI resume is available as latest/index in the project";
+        if thread.native_session_id.is_some() {
+            return "ready for Gemini native resume; Tiffany will reuse latest/index for the same role";
+        }
+        return "no Gemini native session captured yet; next successful worker run starts fresh";
     }
     if thread.native_session_id.is_some() {
         "ready for native resume; Tiffany will reuse this session for the same role"

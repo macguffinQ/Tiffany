@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 pub(super) enum AgentContinueTarget {
     Claude,
     Codex,
+    Gemini,
 }
 
 impl AgentContinueTarget {
@@ -12,6 +13,7 @@ impl AgentContinueTarget {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Gemini => "gemini",
         }
     }
 
@@ -19,6 +21,7 @@ impl AgentContinueTarget {
         match self {
             Self::Claude => "claude-code",
             Self::Codex => "codex",
+            Self::Gemini => "gemini",
         }
     }
 
@@ -26,6 +29,7 @@ impl AgentContinueTarget {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Gemini => "gemini",
         }
     }
 }
@@ -54,6 +58,7 @@ pub(super) fn parse_agent_continue_target(args: &[&str]) -> Option<AgentContinue
     match raw {
         "claude" | "claude-code" | "cc" => Some(AgentContinueTarget::Claude),
         "codex" => Some(AgentContinueTarget::Codex),
+        "gemini" | "gemini-cli" => Some(AgentContinueTarget::Gemini),
         _ => None,
     }
 }
@@ -78,14 +83,29 @@ pub(super) fn agent_continue_command(
         },
         AgentContinueTarget::Codex => ExternalAgentCommand {
             program,
-            args: vec![
-                "--no-alt-screen".into(),
-                "-C".into(),
-                cwd.display().to_string(),
-                prompt,
-            ],
+            args: codex_continue_args(&cwd, native_session_id, prompt),
+        },
+        AgentContinueTarget::Gemini => ExternalAgentCommand {
+            program,
+            args: gemini_continue_args(native_session_id, prompt),
         },
     }
+}
+
+fn codex_continue_args(cwd: &Path, native_session_id: Option<&str>, prompt: String) -> Vec<String> {
+    let mut args = vec!["--no-alt-screen".into()];
+    if let Some(session_id) = native_session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        args.push("resume".into());
+        args.push(session_id.to_string());
+    } else {
+        args.push("-C".into());
+        args.push(cwd.display().to_string());
+    }
+    args.push(prompt);
+    args
 }
 
 fn claude_continue_args(
@@ -115,6 +135,20 @@ fn claude_continue_args(
     ]
 }
 
+fn gemini_continue_args(native_session_id: Option<&str>, prompt: String) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(session_id) = native_session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        args.push("--resume".into());
+        args.push(session_id.to_string());
+    }
+    args.push("--prompt-interactive".into());
+    args.push(prompt);
+    args
+}
+
 fn format_agent_continue_prompt(handoff_path: &Path) -> String {
     format!(
         "Continue from this orchestrator handoff: {}\nRead the file first, preserve the current goal, inspect referenced logs/files as needed, and avoid repeating completed work.",
@@ -135,6 +169,10 @@ mod tests {
         assert_eq!(
             parse_agent_continue_target(&["open", "codex"]),
             Some(AgentContinueTarget::Codex)
+        );
+        assert_eq!(
+            parse_agent_continue_target(&["gemini"]),
+            Some(AgentContinueTarget::Gemini)
         );
         assert_eq!(parse_agent_continue_target(&["status"]), None);
     }
@@ -160,6 +198,15 @@ mod tests {
                 supports_agent_teams: false,
             },
         );
+        cfg.runtimes.insert(
+            "gemini".into(),
+            crate::config::RuntimeConfig {
+                kind: "subprocess".into(),
+                binary: Some("gemini-custom".into()),
+                supports_mcp: false,
+                supports_agent_teams: false,
+            },
+        );
         let handoff = std::path::Path::new("/tmp/orchestrator-handoff.md");
 
         let claude = agent_continue_command(AgentContinueTarget::Claude, &cfg, handoff, None);
@@ -171,6 +218,11 @@ mod tests {
         assert_eq!(codex.program, "codex-custom");
         assert!(codex.args.contains(&"--no-alt-screen".into()));
         assert!(codex.display().contains("/tmp/orchestrator-handoff.md"));
+
+        let gemini = agent_continue_command(AgentContinueTarget::Gemini, &cfg, handoff, None);
+        assert_eq!(gemini.program, "gemini-custom");
+        assert!(gemini.args.contains(&"--prompt-interactive".into()));
+        assert!(gemini.display().contains("/tmp/orchestrator-handoff.md"));
     }
 
     #[test]
@@ -186,5 +238,34 @@ mod tests {
             .any(|pair| pair == ["--resume", "native-1"]));
         assert!(!claude.args.iter().any(|arg| arg == "--name"));
         assert!(claude.display().contains("/tmp/orchestrator-handoff.md"));
+    }
+
+    #[test]
+    fn codex_continue_command_resumes_native_session_when_available() {
+        let cfg = Config::default();
+        let handoff = std::path::Path::new("/tmp/orchestrator-handoff.md");
+        let codex =
+            agent_continue_command(AgentContinueTarget::Codex, &cfg, handoff, Some("native-1"));
+
+        assert!(codex
+            .args
+            .windows(2)
+            .any(|pair| pair == ["resume", "native-1"]));
+        assert!(!codex.args.iter().any(|arg| arg == "-C"));
+        assert!(codex.args.contains(&"--no-alt-screen".into()));
+    }
+
+    #[test]
+    fn gemini_continue_command_resumes_saved_native_handle() {
+        let cfg = Config::default();
+        let handoff = std::path::Path::new("/tmp/orchestrator-handoff.md");
+        let gemini =
+            agent_continue_command(AgentContinueTarget::Gemini, &cfg, handoff, Some("latest"));
+
+        assert!(gemini
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--resume", "latest"]));
+        assert!(gemini.args.contains(&"--prompt-interactive".into()));
     }
 }
