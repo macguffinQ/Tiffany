@@ -15,6 +15,7 @@ pub struct AgentEventSummary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisibleAgentOutputKind {
     Final,
+    Answer,
     Question,
     Approval,
     ToolCall,
@@ -31,6 +32,7 @@ impl VisibleAgentOutputKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Final => "final",
+            Self::Answer => "answer",
             Self::Question => "question",
             Self::Approval => "approval",
             Self::ToolCall => "tool call",
@@ -85,6 +87,7 @@ pub fn visible_agent_output_kind_for_event_kind(
         "result" | "final" | "final_answer" | "task_complete" | "turn_complete" => {
             Some(VisibleAgentOutputKind::Final)
         }
+        "assistant" | "answer" => Some(VisibleAgentOutputKind::Answer),
         "status" | "process_exit" => Some(VisibleAgentOutputKind::Actionable),
         _ => None,
     }
@@ -913,7 +916,12 @@ pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOut
             display: question,
         });
     }
-    let kind = hinted_kind.unwrap_or_else(|| {
+    let kind = if hinted_kind == Some(VisibleAgentOutputKind::Answer)
+        && looks_like_actionable_output(&display)
+    {
+        VisibleAgentOutputKind::Actionable
+    } else {
+        hinted_kind.unwrap_or_else(|| {
         if let Some(kind) = visible_output_kind_from_display(&display) {
             kind
         } else if looks_like_actionable_output(&display) {
@@ -921,7 +929,8 @@ pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOut
         } else {
             VisibleAgentOutputKind::Normal
         }
-    });
+        })
+    };
     let dedupe_key = sanitize_text(&normalize_output_summary(&display), max);
     Some(VisibleAgentOutput {
         kind,
@@ -987,6 +996,7 @@ fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
         "patch" => Some(VisibleAgentOutputKind::Patch),
         "file_change" | "file_update" => Some(VisibleAgentOutputKind::FileUpdate),
         "user" => visible_output_kind_from_display(body),
+        "assistant" => Some(VisibleAgentOutputKind::Answer),
         "status" | "process_exit" => visible_output_kind_from_display(body).or_else(|| {
             if user_action_request_display(content, body, TOOL_DETAIL_MAX_CHARS).is_some() {
                 Some(VisibleAgentOutputKind::Approval)
@@ -2897,11 +2907,20 @@ mod tests {
         assert_eq!(file_update.kind, VisibleAgentOutputKind::FileUpdate);
         assert_eq!(file_update.kind.label(), "file update");
 
-        let normal =
-            visible_agent_output("claude assistant: useful summary", 500).expect("normal output");
-        assert_eq!(normal.kind, VisibleAgentOutputKind::Normal);
-        assert_eq!(normal.display, "useful summary");
-        assert_eq!(normal.dedupe_key, "useful summary");
+        let answer =
+            visible_agent_output("claude assistant: useful summary", 500).expect("answer output");
+        assert_eq!(answer.kind, VisibleAgentOutputKind::Answer);
+        assert_eq!(answer.kind.label(), "answer");
+        assert_eq!(answer.display, "useful summary");
+        assert_eq!(answer.dedupe_key, "useful summary");
+
+        let assistant_alert = visible_agent_output(
+            "claude-code assistant: permission denied while writing file",
+            500,
+        )
+        .expect("assistant alert");
+        assert_eq!(assistant_alert.kind, VisibleAgentOutputKind::Actionable);
+        assert_eq!(assistant_alert.kind.label(), "alert");
 
         assert!(visible_agent_output("claude-code assistant: thinking", 500).is_none());
     }

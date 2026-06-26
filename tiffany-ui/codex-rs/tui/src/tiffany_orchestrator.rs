@@ -4198,6 +4198,7 @@ fn native_event_kind_from_progress(event: &TiffanyProgressEvent) -> Option<Strin
 fn native_event_kind_label(kind: event_format::VisibleAgentOutputKind) -> &'static str {
     match kind {
         event_format::VisibleAgentOutputKind::Final => "final",
+        event_format::VisibleAgentOutputKind::Answer => "answer",
         event_format::VisibleAgentOutputKind::Question => "question",
         event_format::VisibleAgentOutputKind::Approval => "approval",
         event_format::VisibleAgentOutputKind::ToolCall => "tool_call",
@@ -4215,6 +4216,7 @@ fn inferred_native_event_kind(title: &str, content: Option<&str>) -> Option<Stri
     let title = title.to_ascii_lowercase();
     for (needle, kind) in [
         ("worker final", "final"),
+        ("worker answer", "answer"),
         ("worker question", "question"),
         ("worker approval", "approval"),
         ("worker tool call", "tool_call"),
@@ -4729,6 +4731,7 @@ fn worker_output_kind_marker(
     kind: Option<event_format::VisibleAgentOutputKind>,
 ) -> (&'static str, Color) {
     match kind {
+        Some(event_format::VisibleAgentOutputKind::Answer) => ("◆", TIFFANY_BLUE),
         Some(event_format::VisibleAgentOutputKind::Question) => ("?", TIFFANY_BLUE),
         Some(event_format::VisibleAgentOutputKind::Approval) => ("?", TIFFANY_BLUE),
         Some(event_format::VisibleAgentOutputKind::ToolCall) => ("↳", TIFFANY_BLUE),
@@ -5003,6 +5006,7 @@ fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
     }
     match worker_visible_output_kind_for_event(event, raw) {
         Some(event_format::VisibleAgentOutputKind::Final) => "final",
+        Some(event_format::VisibleAgentOutputKind::Answer) => "answer",
         Some(event_format::VisibleAgentOutputKind::Question) => "question",
         Some(event_format::VisibleAgentOutputKind::Approval) => "approval",
         Some(event_format::VisibleAgentOutputKind::ToolCall) => "tool call",
@@ -5684,6 +5688,9 @@ fn output_body_line_for_kind(
 ) -> Line<'static> {
     match kind {
         Some(event_format::VisibleAgentOutputKind::Diff) => diff_body_line(line),
+        Some(event_format::VisibleAgentOutputKind::Answer) => {
+            process_body_line(line, "◆", TIFFANY_BLUE, Style::default(), first_line)
+        }
         Some(event_format::VisibleAgentOutputKind::Question) => process_body_line(
             line,
             "?",
@@ -6489,6 +6496,24 @@ mod tests {
         assert_eq!(native.kind.as_deref(), Some("tool_call"));
         assert!(native.title.contains("worker tool call"));
         assert!(native.content.as_deref().unwrap().contains("Bash"));
+    }
+
+    #[test]
+    fn progress_worker_answer_event_captures_native_answer_kind() {
+        let event = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            event_kind: Some("assistant".to_string()),
+            content: Some("claude-code assistant: 你好！".to_string()),
+            ..worker_output_event("worker output", "claude-code", "placeholder")
+        };
+        let visible = visible_content(&event).expect("answer visible");
+
+        let native = native_chat_event_from_progress(&event, Some(&visible)).expect("native event");
+
+        assert_eq!(visible, "你好！");
+        assert_eq!(native.kind.as_deref(), Some("answer"));
+        assert_eq!(native.content.as_deref(), Some("你好！"));
+        assert!(native.title.contains("worker answer"));
     }
 
     #[test]
@@ -7750,14 +7775,19 @@ mod tests {
     fn worker_output_title_keeps_route_and_runtime() {
         let event = TiffanyProgressEvent {
             worker_role: Some("worker-cc".to_string()),
-            ..worker_output_event("worker output", "claude-code", "running tests")
+            ..worker_output_event(
+                "worker output",
+                "claude-code",
+                "claude-code assistant: running tests",
+            )
         };
 
-        let lines = output_event_lines(&event, "running tests");
+        let visible = visible_content(&event).expect("answer visible");
+        let lines = output_event_lines(&event, &visible);
 
         assert_eq!(
             line_text(&lines[0]),
-            "│ worker output · worker-cc · claude-code · 12345678"
+            "◆ worker answer · worker-cc · claude-code · 12345678"
         );
     }
 
@@ -7927,7 +7957,7 @@ mod tests {
 
         assert_eq!(
             output_title(&base),
-            "worker output · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"
+            "worker answer · worker-cc · claude-code · minimax/MiniMax-M3 · 12345678"
         );
         assert_eq!(
             output_title(&TiffanyProgressEvent {
@@ -8436,7 +8466,7 @@ mod tests {
         assert_eq!(output_label(&event), "claude-code · 12345678");
         assert_eq!(
             output_title(&event),
-            "worker output · claude-code · 12345678"
+            "worker answer · claude-code · 12345678"
         );
     }
 

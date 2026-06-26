@@ -729,7 +729,8 @@ fn visible_non_final_agent_output_with_event_kind(
         if kind != agent_events::VisibleAgentOutputKind::Final
             && !matches!(
                 output.kind,
-                agent_events::VisibleAgentOutputKind::Question
+                agent_events::VisibleAgentOutputKind::Answer
+                    | agent_events::VisibleAgentOutputKind::Question
                     | agent_events::VisibleAgentOutputKind::Approval
                     | agent_events::VisibleAgentOutputKind::Actionable
             )

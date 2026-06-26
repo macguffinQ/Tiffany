@@ -206,6 +206,7 @@ fn visible_worker_output_line(
 
 fn worker_output_style(kind: agent_events::VisibleAgentOutputKind) -> (&'static str, &'static str) {
     match kind {
+        agent_events::VisibleAgentOutputKind::Answer => ("◆", TIFFANY),
         agent_events::VisibleAgentOutputKind::Question => ("?", TIFFANY),
         agent_events::VisibleAgentOutputKind::Approval => ("?", TIFFANY),
         agent_events::VisibleAgentOutputKind::ToolCall => ("↳", CYAN),
@@ -328,7 +329,8 @@ fn visible_worker_output_display(
     if let Some(kind) = event_kind_output_kind {
         if !matches!(
             output.kind,
-            agent_events::VisibleAgentOutputKind::Question
+            agent_events::VisibleAgentOutputKind::Answer
+                | agent_events::VisibleAgentOutputKind::Question
                 | agent_events::VisibleAgentOutputKind::Approval
                 | agent_events::VisibleAgentOutputKind::Actionable
         ) {
@@ -479,9 +481,10 @@ mod tests {
         };
 
         let line = progress_line(&first, 0, &input).expect("visible worker output");
-        assert_eq!(line.0, "↳");
+        assert_eq!(line.0, "◆");
         assert!(line.2.contains("worker-cc"));
         assert!(line.2.contains("claude-code"));
+        assert!(line.2.contains("answer"));
         assert!(line.2.contains("useful summary"));
 
         remember_visible_progress(&mut input, &first, &line.2);
