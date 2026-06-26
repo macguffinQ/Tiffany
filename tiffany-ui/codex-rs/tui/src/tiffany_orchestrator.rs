@@ -4566,11 +4566,7 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
     ])];
-    lines.extend(
-        content
-            .lines()
-            .map(|line| output_body_line_for_kind(line, kind)),
-    );
+    lines.extend(output_body_lines_for_kind(content, kind));
     if let Some(raw) = event.content.as_deref()
         && let Some(hint) = event_format::agent_failure_hint(raw, CONTROL_SUMMARY_MAX_CHARS)
     {
@@ -4877,11 +4873,15 @@ fn worker_visible_output_kind_for_event(
     event: &TiffanyProgressEvent,
     raw: &str,
 ) -> Option<event_format::VisibleAgentOutputKind> {
+    let raw_kind = worker_visible_output_kind_from_raw(raw);
+    if raw_kind == Some(event_format::VisibleAgentOutputKind::Question) {
+        return raw_kind;
+    }
     event
         .event_kind
         .as_deref()
         .and_then(event_format::visible_agent_output_kind_for_event_kind)
-        .or_else(|| worker_visible_output_kind_from_raw(raw))
+        .or(raw_kind)
 }
 
 fn worker_visible_output_kind_from_raw(raw: &str) -> Option<event_format::VisibleAgentOutputKind> {
@@ -5513,16 +5513,93 @@ fn output_body_line(line: &str) -> Line<'static> {
 fn output_body_line_for_kind(
     line: &str,
     kind: Option<event_format::VisibleAgentOutputKind>,
+    first_line: bool,
 ) -> Line<'static> {
     match kind {
         Some(event_format::VisibleAgentOutputKind::Diff) => diff_body_line(line),
+        Some(event_format::VisibleAgentOutputKind::Question) => process_body_line(
+            line,
+            "?",
+            TIFFANY_BLUE,
+            Style::default().fg(TIFFANY_BLUE),
+            first_line,
+        ),
+        Some(event_format::VisibleAgentOutputKind::ToolCall) => process_body_line(
+            line,
+            "↳",
+            TIFFANY_BLUE,
+            Style::default(),
+            first_line,
+        ),
+        Some(event_format::VisibleAgentOutputKind::ToolResult) => process_body_line(
+            line,
+            "✓",
+            Color::Gray,
+            Style::default().fg(Color::Gray),
+            first_line,
+        ),
         Some(event_format::VisibleAgentOutputKind::Patch)
-        | Some(event_format::VisibleAgentOutputKind::FileUpdate) => Line::from(vec![
-            Span::styled("  │ ", Style::default().fg(TIFFANY_DARK)),
-            Span::styled(line.to_string(), Style::default().fg(Color::Gray)),
-        ]),
+        | Some(event_format::VisibleAgentOutputKind::FileUpdate) => process_body_line(
+            line,
+            if kind == Some(event_format::VisibleAgentOutputKind::FileUpdate) {
+                "✓"
+            } else {
+                "±"
+            },
+            TIFFANY_BLUE,
+            Style::default().fg(Color::Gray),
+            first_line,
+        ),
+        Some(event_format::VisibleAgentOutputKind::Stderr) => process_body_line(
+            line,
+            "✗",
+            Color::Red,
+            Style::default().fg(Color::Red),
+            first_line,
+        ),
+        Some(event_format::VisibleAgentOutputKind::Actionable) => process_body_line(
+            line,
+            "⚠",
+            Color::Yellow,
+            Style::default().fg(Color::Yellow),
+            first_line,
+        ),
+        Some(event_format::VisibleAgentOutputKind::Final) => process_body_line(
+            line,
+            "✓",
+            TIFFANY_BLUE,
+            Style::default(),
+            first_line,
+        ),
         _ => output_body_line(line),
     }
+}
+
+fn output_body_lines_for_kind(
+    content: &str,
+    kind: Option<event_format::VisibleAgentOutputKind>,
+) -> Vec<Line<'static>> {
+    content
+        .lines()
+        .enumerate()
+        .map(|(idx, line)| output_body_line_for_kind(line, kind, idx == 0))
+        .collect()
+}
+
+fn process_body_line(
+    line: &str,
+    first_marker: &'static str,
+    marker_color: Color,
+    text_style: Style,
+    first_line: bool,
+) -> Line<'static> {
+    let marker = if first_line { first_marker } else { "│" };
+    Line::from(vec![
+        Span::styled("  ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(marker, Style::default().fg(marker_color).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+        Span::styled(line.to_string(), text_style),
+    ])
 }
 
 fn diff_body_line(line: &str) -> Line<'static> {
@@ -7369,6 +7446,54 @@ mod tests {
             line_text(&output_event_lines(&diff, "diff --git a/lib.rs b/lib.rs")[0]),
             "± worker diff · worker-cc · claude-code · 12345678"
         );
+    }
+
+    #[test]
+    fn worker_output_body_uses_native_kind_markers() {
+        let base = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            ..worker_output_event("worker output", "claude-code", "placeholder")
+        };
+        let tool = TiffanyProgressEvent {
+            event_kind: Some("tool_use".to_string()),
+            content: Some("claude-code tool_use: tool Bash: cargo test".to_string()),
+            ..base.clone()
+        };
+        let result = TiffanyProgressEvent {
+            event_kind: Some("tool_result".to_string()),
+            content: Some("claude-code tool_result: tool result: ok\nall passed".to_string()),
+            ..base.clone()
+        };
+        let question = TiffanyProgressEvent {
+            event_kind: Some("tool_result".to_string()),
+            content: Some("claude-code tool_result: tool error: Answer questions?".to_string()),
+            ..base.clone()
+        };
+        let stderr = TiffanyProgressEvent {
+            event_kind: Some("stderr".to_string()),
+            content: Some("claude-code stderr: permission denied".to_string()),
+            ..base
+        };
+
+        let tool_visible = visible_content(&tool).expect("tool visible");
+        let tool_lines = output_event_lines(&tool, &tool_visible);
+        assert_eq!(line_text(&tool_lines[1]), "  ↳ tool Bash: cargo test");
+
+        let result_visible = visible_content(&result).expect("result visible");
+        let result_lines = output_event_lines(&result, &result_visible);
+        assert_eq!(line_text(&result_lines[1]), "  ✓ tool result: ok");
+        assert_eq!(line_text(&result_lines[2]), "  │ all passed");
+
+        let question_visible = visible_content(&question).expect("question visible");
+        let question_lines = output_event_lines(&question, &question_visible);
+        assert_eq!(
+            line_text(&question_lines[1]),
+            "  ? waiting for user input: Answer questions?"
+        );
+
+        let stderr_visible = visible_content(&stderr).expect("stderr visible");
+        let stderr_lines = output_event_lines(&stderr, &stderr_visible);
+        assert_eq!(line_text(&stderr_lines[1]), "  ✗ permission denied");
     }
 
     #[test]
