@@ -4567,6 +4567,9 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
         ),
     ])];
     lines.extend(output_body_lines_for_kind(content, kind));
+    if kind == Some(event_format::VisibleAgentOutputKind::Question) {
+        lines.push(worker_question_hint_line(event));
+    }
     if let Some(raw) = event.content.as_deref()
         && let Some(hint) = event_format::agent_failure_hint(raw, CONTROL_SUMMARY_MAX_CHARS)
     {
@@ -5631,6 +5634,34 @@ fn failure_hint_line(title: &str, action: &str) -> Line<'static> {
         Span::styled(title.to_string(), Style::default().fg(Color::Yellow)),
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled(action.to_string(), Style::default().fg(Color::DarkGray)),
+    ])
+}
+
+fn worker_question_hint_line(event: &TiffanyProgressEvent) -> Line<'static> {
+    let target = event
+        .worker_role
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .or_else(|| event.agent.as_deref().and_then(nonempty_trimmed))
+        .unwrap_or("worker");
+    Line::from(vec![
+        Span::styled(
+            "  next ",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("/thread {target}"),
+            Style::default()
+                .fg(TIFFANY_SOFT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "inspect or resume the native worker prompt",
+            Style::default().fg(Color::DarkGray),
+        ),
     ])
 }
 
@@ -7490,10 +7521,18 @@ mod tests {
             line_text(&question_lines[1]),
             "  ? waiting for user input: Answer questions?"
         );
+        assert_eq!(
+            line_text(&question_lines[2]),
+            "  next /thread worker-cc · inspect or resume the native worker prompt"
+        );
 
         let stderr_visible = visible_content(&stderr).expect("stderr visible");
         let stderr_lines = output_event_lines(&stderr, &stderr_visible);
         assert_eq!(line_text(&stderr_lines[1]), "  ✗ permission denied");
+        assert!(stderr_lines
+            .iter()
+            .map(line_text)
+            .any(|line| line.contains("fix permission blocked execution")));
     }
 
     #[test]
