@@ -14,6 +14,8 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use serde::Deserialize;
 use serde::Serialize;
+use sha2::Digest;
+use sha2::Sha256;
 use tiffany_event_format as event_format;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
@@ -133,12 +135,14 @@ pub(crate) struct TiffanyNativeCliTranscriptCursor {
     path: PathBuf,
     byte_len: u64,
     runtime: TiffanyNativeTranscriptRuntime,
+    message_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TiffanyNativeTranscriptRuntime {
     Claude,
     Codex,
+    Gemini,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1257,14 +1261,25 @@ pub(crate) fn native_cli_transcript_cursor(
             TiffanyNativeTranscriptRuntime::Codex,
             codex_session_jsonl_path(command)?,
         )
+    } else if native_cli_command_is_gemini(command) {
+        (
+            TiffanyNativeTranscriptRuntime::Gemini,
+            gemini_session_json_path(command)?,
+        )
     } else {
         return None;
     };
     let byte_len = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+    let message_count = if matches!(runtime, TiffanyNativeTranscriptRuntime::Gemini) {
+        gemini_session_message_count(&path).unwrap_or(0)
+    } else {
+        0
+    };
     Some(TiffanyNativeCliTranscriptCursor {
         path,
         byte_len,
         runtime,
+        message_count,
     })
 }
 
@@ -1278,7 +1293,7 @@ pub(crate) fn native_cli_transcript_events_since(
     let Ok(meta) = std::fs::metadata(&cursor.path) else {
         return Vec::new();
     };
-    if meta.len() <= cursor.byte_len {
+    if cursor.runtime != TiffanyNativeTranscriptRuntime::Gemini && meta.len() <= cursor.byte_len {
         return Vec::new();
     }
     let Ok(mut file) = std::fs::File::open(&cursor.path) else {
@@ -1286,11 +1301,13 @@ pub(crate) fn native_cli_transcript_events_since(
     };
     use std::io::Read as _;
     use std::io::Seek as _;
-    if file
-        .seek(std::io::SeekFrom::Start(cursor.byte_len))
-        .is_err()
-    {
-        return Vec::new();
+    if cursor.runtime != TiffanyNativeTranscriptRuntime::Gemini {
+        if file
+            .seek(std::io::SeekFrom::Start(cursor.byte_len))
+            .is_err()
+        {
+            return Vec::new();
+        }
     }
     let mut body = String::new();
     if file.read_to_string(&mut body).is_err() {
@@ -1303,6 +1320,9 @@ pub(crate) fn native_cli_transcript_events_since(
         TiffanyNativeTranscriptRuntime::Codex => {
             native_cli_transcript_events_from_codex_jsonl(command, &body)
         }
+        TiffanyNativeTranscriptRuntime::Gemini => {
+            native_cli_transcript_events_from_gemini_json(command, &body, cursor.message_count)
+        }
     }
 }
 
@@ -1312,6 +1332,10 @@ fn native_cli_command_is_claude(command: &TiffanyNativeCliCommand) -> bool {
 
 fn native_cli_command_is_codex(command: &TiffanyNativeCliCommand) -> bool {
     command.command.contains("codex resume") || command.command.contains("codex exec resume")
+}
+
+fn native_cli_command_is_gemini(command: &TiffanyNativeCliCommand) -> bool {
+    command.command.contains("gemini --resume") || command.command.contains("gemini -r")
 }
 
 fn claude_session_jsonl_path(command: &TiffanyNativeCliCommand) -> Option<PathBuf> {
@@ -1368,6 +1392,140 @@ fn find_codex_rollout_path_by_id(root: &Path, id: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn gemini_session_json_path(command: &TiffanyNativeCliCommand) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    gemini_session_json_path_in_home(&home, command)
+}
+
+fn gemini_session_json_path_in_home(
+    home: &Path,
+    command: &TiffanyNativeCliCommand,
+) -> Option<PathBuf> {
+    let root = home.join(".gemini").join("tmp");
+    let id = command.native_session.trim();
+    if !id.is_empty() && id != "latest" {
+        if let Some(path) = find_gemini_chat_path_by_id(&root, id) {
+            return Some(path);
+        }
+    }
+    if let Some(project_path) = command
+        .worktree
+        .as_deref()
+        .and_then(gemini_project_hash)
+        .and_then(|hash| latest_gemini_chat_path_for_project(&root, &hash))
+    {
+        return Some(project_path);
+    }
+    if command
+        .worktree
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .is_some()
+    {
+        return None;
+    }
+    latest_gemini_chat_path(&root)
+}
+
+fn gemini_project_hash(worktree: &str) -> Option<String> {
+    let worktree = nonempty_trimmed(worktree)?;
+    let canonical = Path::new(worktree)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(worktree));
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.to_string_lossy().as_bytes());
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+fn find_gemini_chat_path_by_id(root: &Path, id: &str) -> Option<PathBuf> {
+    gemini_chat_paths(root)
+        .into_iter()
+        .find(|path| gemini_chat_path_matches_id(path, id))
+}
+
+fn gemini_chat_path_matches_id(path: &Path, id: &str) -> bool {
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    if file_name.contains(id) {
+        return true;
+    }
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+        .and_then(|value| {
+            value
+                .get("sessionId")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .is_some_and(|session_id| session_id == id || session_id.starts_with(id))
+}
+
+fn latest_gemini_chat_path_for_project(root: &Path, project_hash: &str) -> Option<PathBuf> {
+    newest_gemini_chat_path(
+        gemini_chat_paths(&root.join(project_hash).join("chats"))
+            .into_iter()
+            .collect(),
+    )
+}
+
+fn latest_gemini_chat_path(root: &Path) -> Option<PathBuf> {
+    newest_gemini_chat_path(gemini_chat_paths(root))
+}
+
+fn newest_gemini_chat_path(paths: Vec<PathBuf>) -> Option<PathBuf> {
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let modified = std::fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .unwrap_or(UNIX_EPOCH);
+            Some((modified, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+fn gemini_chat_paths(root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if file_name.starts_with("session-") && file_name.ends_with(".json") {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+fn gemini_session_message_count(path: &Path) -> Option<usize> {
+    let body = std::fs::read_to_string(path).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&body).ok()?;
+    value
+        .get("messages")
+        .and_then(|value| value.as_array())
+        .map(Vec::len)
 }
 
 fn native_cli_transcript_events_from_claude_jsonl(
@@ -1475,6 +1633,8 @@ fn native_cli_transcript_event(
 ) -> TiffanyNativeChatEvent {
     let agent = if native_cli_command_is_codex(command) {
         "codex"
+    } else if native_cli_command_is_gemini(command) {
+        "gemini"
     } else {
         "claude-code"
     };
@@ -1493,6 +1653,133 @@ fn native_cli_transcript_event(
         native_session_id: Some(command.native_session.clone()),
     })
     .expect("native CLI transcript event should be valid")
+}
+
+fn native_cli_transcript_events_from_gemini_json(
+    command: &TiffanyNativeCliCommand,
+    body: &str,
+    skip_messages: usize,
+) -> Vec<TiffanyNativeChatEvent> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    value
+        .get("messages")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .skip(skip_messages)
+        .flat_map(|message| native_cli_transcript_events_from_gemini_message(command, message))
+        .collect()
+}
+
+fn native_cli_transcript_events_from_gemini_message(
+    command: &TiffanyNativeCliCommand,
+    message: &serde_json::Value,
+) -> Vec<TiffanyNativeChatEvent> {
+    let mut events = Vec::new();
+    let message_type = message
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    match message_type {
+        "user" => {
+            if let Some(content) = message.get("content").and_then(json_string_value) {
+                events.push(native_cli_transcript_event(
+                    command,
+                    "question",
+                    "native user",
+                    content,
+                ));
+            }
+        }
+        "gemini" | "assistant" | "model" => {
+            if let Some(content) = message.get("content").and_then(json_string_value) {
+                events.push(native_cli_transcript_event(
+                    command,
+                    "answer",
+                    "native answer",
+                    content,
+                ));
+            }
+            if let Some(thoughts) = gemini_thoughts_text(message) {
+                events.push(native_cli_transcript_event(
+                    command,
+                    "output",
+                    "native reasoning",
+                    thoughts,
+                ));
+            }
+            for tool_call in message
+                .get("toolCalls")
+                .and_then(|value| value.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if let Some(content) = gemini_tool_call_text(tool_call) {
+                    events.push(native_cli_transcript_event(
+                        command,
+                        "tool_call",
+                        "native tool call",
+                        content,
+                    ));
+                }
+                if let Some(content) = gemini_tool_result_text(tool_call) {
+                    let kind = if gemini_tool_call_failed(tool_call) {
+                        "stderr"
+                    } else {
+                        "tool_result"
+                    };
+                    events.push(native_cli_transcript_event(
+                        command,
+                        kind,
+                        if kind == "stderr" {
+                            "native tool error"
+                        } else {
+                            "native tool result"
+                        },
+                        content,
+                    ));
+                }
+            }
+            for tool_result in message
+                .get("toolResults")
+                .and_then(|value| value.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if let Some(content) = gemini_tool_result_response_text(tool_result) {
+                    let kind = if gemini_tool_result_has_error(tool_result) {
+                        "stderr"
+                    } else {
+                        "tool_result"
+                    };
+                    events.push(native_cli_transcript_event(
+                        command,
+                        kind,
+                        if kind == "stderr" {
+                            "native tool error"
+                        } else {
+                            "native tool result"
+                        },
+                        content,
+                    ));
+                }
+            }
+        }
+        "error" => {
+            if let Some(content) = message.get("content").and_then(json_string_value) {
+                events.push(native_cli_transcript_event(
+                    command,
+                    "stderr",
+                    "native error",
+                    content,
+                ));
+            }
+        }
+        _ => {}
+    }
+    events
 }
 
 fn native_cli_transcript_events_from_codex_jsonl(
@@ -1721,6 +2008,159 @@ fn codex_turn_diff_text(value: &serde_json::Value) -> Option<String> {
         .or_else(|| value.get("unified_diff").and_then(json_string_value))
         .or_else(|| value.get("changes").and_then(json_string_value))
         .or_else(|| json_string_value(value))
+}
+
+fn gemini_thoughts_text(message: &serde_json::Value) -> Option<String> {
+    let thoughts = message.get("thoughts")?.as_array()?;
+    let content = thoughts
+        .iter()
+        .filter_map(|thought| {
+            let subject = thought.get("subject").and_then(json_string_value);
+            let description = thought.get("description").and_then(json_string_value);
+            match (subject, description) {
+                (Some(subject), Some(description)) => Some(format!(
+                    "{}: {}",
+                    one_line(&subject),
+                    one_line(&description)
+                )),
+                (Some(subject), None) => Some(one_line(&subject)),
+                (None, Some(description)) => Some(one_line(&description)),
+                (None, None) => None,
+            }
+        })
+        .take(4)
+        .collect::<Vec<_>>()
+        .join("\n");
+    trimmed_string(content)
+}
+
+fn gemini_tool_call_text(tool_call: &serde_json::Value) -> Option<String> {
+    let name = tool_call
+        .get("displayName")
+        .and_then(json_string_value)
+        .or_else(|| tool_call.get("name").and_then(json_string_value))
+        .unwrap_or_else(|| "tool".to_string());
+    let description = tool_call
+        .get("description")
+        .and_then(json_string_value)
+        .or_else(|| {
+            tool_call
+                .get("args")
+                .map(gemini_tool_args_summary)
+                .and_then(|value| trimmed_string(value))
+        })
+        .unwrap_or_default();
+    let description = truncate_text(&one_line(&description), 2_000);
+    if description.is_empty() {
+        Some(format!("tool {}", one_line(&name)))
+    } else {
+        Some(format!("tool {}: {}", one_line(&name), description))
+    }
+}
+
+fn gemini_tool_result_text(tool_call: &serde_json::Value) -> Option<String> {
+    if let Some(status) = tool_call.get("status").and_then(json_string_value) {
+        let status = status.to_ascii_lowercase();
+        if matches!(
+            status.as_str(),
+            "cancelled" | "canceled" | "error" | "failed"
+        ) {
+            let response = tool_call
+                .get("result")
+                .and_then(gemini_tool_result_response_text)
+                .unwrap_or_else(|| status.clone());
+            return Some(response);
+        }
+    }
+    tool_call
+        .get("result")
+        .and_then(gemini_tool_result_response_text)
+}
+
+fn gemini_tool_result_response_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Array(items) => {
+            let content = items
+                .iter()
+                .filter_map(gemini_tool_result_response_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            trimmed_string(content)
+        }
+        serde_json::Value::Object(_) => value
+            .get("functionResponse")
+            .and_then(gemini_tool_result_response_text)
+            .or_else(|| {
+                value
+                    .get("response")
+                    .and_then(gemini_tool_result_response_text)
+            })
+            .or_else(|| value.get("error").and_then(json_string_value))
+            .or_else(|| value.get("output").and_then(json_string_value))
+            .or_else(|| value.get("result").and_then(json_string_value)),
+        _ => json_string_value(value),
+    }
+}
+
+fn gemini_tool_call_failed(tool_call: &serde_json::Value) -> bool {
+    tool_call
+        .get("status")
+        .and_then(json_string_value)
+        .map(|status| {
+            matches!(
+                status.to_ascii_lowercase().as_str(),
+                "cancelled" | "canceled" | "error" | "failed"
+            )
+        })
+        .unwrap_or(false)
+        || tool_call
+            .get("result")
+            .is_some_and(gemini_tool_result_has_error)
+}
+
+fn gemini_tool_result_has_error(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(items) => items.iter().any(gemini_tool_result_has_error),
+        serde_json::Value::Object(_) => {
+            value.get("error").is_some()
+                || value
+                    .get("functionResponse")
+                    .is_some_and(gemini_tool_result_has_error)
+                || value
+                    .get("response")
+                    .is_some_and(gemini_tool_result_has_error)
+        }
+        _ => false,
+    }
+}
+
+fn gemini_tool_args_summary(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let fields = [
+                "file_path",
+                "path",
+                "command",
+                "cmd",
+                "old_string",
+                "new_string",
+                "query",
+                "pattern",
+                "instruction",
+            ];
+            fields
+                .into_iter()
+                .filter_map(|key| {
+                    map.get(key)
+                        .and_then(json_string_value)
+                        .map(|value| format!("{key}={}", one_line(&value)))
+                })
+                .take(4)
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+        _ => json_string_value(value).unwrap_or_default(),
+    }
 }
 
 fn native_cli_return_has_changes(outcome: &TiffanyNativeCliReturn) -> bool {
@@ -6700,11 +7140,22 @@ fn status_line(symbol: &'static str, color: Color, role: &str, message: &str) ->
     ])
 }
 
+fn native_cli_transcript_label(command: &TiffanyNativeCliCommand) -> &'static str {
+    if native_cli_command_is_codex(command) {
+        "Codex transcript"
+    } else if native_cli_command_is_gemini(command) {
+        "Gemini transcript"
+    } else {
+        "Claude transcript"
+    }
+}
+
 pub(crate) fn native_cli_return_lines(
     command: &TiffanyNativeCliCommand,
     outcome: &TiffanyNativeCliReturn,
 ) -> Vec<Line<'static>> {
     let has_changes = native_cli_return_has_changes(outcome);
+    let transcript_label = native_cli_transcript_label(command);
     let mut lines = vec![status_line(
         "✓",
         TIFFANY_BLUE,
@@ -6723,8 +7174,8 @@ pub(crate) fn native_cli_return_lines(
         lines.push(thread_meta_line(
             "native events",
             &format!(
-                "{} captured from Claude transcript",
-                outcome.transcript_event_count
+                "{} captured from {transcript_label}",
+                outcome.transcript_event_count,
             ),
         ));
     }
@@ -6733,7 +7184,7 @@ pub(crate) fn native_cli_return_lines(
         .as_deref()
         .and_then(nonempty_trimmed)
     {
-        lines.push(thread_meta_line("native answer", "Claude transcript"));
+        lines.push(thread_meta_line("native answer", transcript_label));
         for line in preview.lines().take(12) {
             lines.push(output_body_line_for_kind(
                 line,
@@ -8955,6 +9406,179 @@ mod tests {
                 .unwrap()
                 .contains("\"turn_diff\"")
         );
+    }
+
+    #[test]
+    fn native_cli_transcript_events_parse_gemini_chat_without_raw_json() {
+        let command = TiffanyNativeCliCommand {
+            role: "worker-gemini".into(),
+            native_session: "gemini-native-session".into(),
+            command: "gemini --resume gemini-native-session".into(),
+            worktree: Some("/tmp/repo".into()),
+        };
+        let json = r#"{
+  "sessionId": "gemini-native-session",
+  "projectHash": "hash",
+  "messages": [
+    {"type":"user","content":"你好"},
+    {"type":"gemini","content":"我会检查文件。","thoughts":[{"subject":"Plan","description":"Inspect the project first."}],"toolCalls":[{"name":"read_file","displayName":"Read","args":{"file_path":"/tmp/repo/README.md"},"result":[{"functionResponse":{"response":{"output":"README body"}}}],"status":"success"}]},
+    {"type":"error","content":"API Error: Premature close"}
+  ]
+}"#;
+
+        let events = native_cli_transcript_events_from_gemini_json(&command, json, 0);
+
+        assert_eq!(events.len(), 6);
+        assert_eq!(events[0].kind.as_deref(), Some("question"));
+        assert_eq!(events[0].agent.as_deref(), Some("gemini"));
+        assert_eq!(events[0].content.as_deref(), Some("你好"));
+        assert_eq!(events[1].kind.as_deref(), Some("answer"));
+        assert_eq!(events[1].content.as_deref(), Some("我会检查文件。"));
+        assert_eq!(events[2].kind.as_deref(), Some("output"));
+        assert!(events[2].content.as_deref().unwrap().contains("Plan"));
+        assert_eq!(events[3].kind.as_deref(), Some("tool_call"));
+        assert!(events[3].content.as_deref().unwrap().contains("tool Read"));
+        assert!(
+            events[3]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("/tmp/repo/README.md")
+        );
+        assert!(
+            !events[3]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("\"file_path\"")
+        );
+        assert_eq!(events[4].kind.as_deref(), Some("tool_result"));
+        assert_eq!(events[4].content.as_deref(), Some("README body"));
+        assert_eq!(events[5].kind.as_deref(), Some("stderr"));
+        assert_eq!(
+            events[5].content.as_deref(),
+            Some("API Error: Premature close")
+        );
+        assert_eq!(
+            native_cli_transcript_preview(&events).as_deref(),
+            Some("我会检查文件。")
+        );
+    }
+
+    #[test]
+    fn native_cli_transcript_events_parse_gemini_new_messages_only() {
+        let command = TiffanyNativeCliCommand {
+            role: "worker-gemini".into(),
+            native_session: "latest".into(),
+            command: "gemini --resume latest".into(),
+            worktree: Some("/tmp/repo".into()),
+        };
+        let json = r#"{
+  "messages": [
+    {"type":"user","content":"old"},
+    {"type":"gemini","content":"old answer"},
+    {"type":"user","content":"new"},
+    {"type":"gemini","content":"new answer"}
+  ]
+}"#;
+
+        let events = native_cli_transcript_events_from_gemini_json(&command, json, 2);
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].content.as_deref(), Some("new"));
+        assert_eq!(events[1].content.as_deref(), Some("new answer"));
+    }
+
+    #[test]
+    fn native_cli_transcript_events_parse_gemini_cancelled_tool_as_stderr() {
+        let command = TiffanyNativeCliCommand {
+            role: "worker-gemini".into(),
+            native_session: "latest".into(),
+            command: "gemini --resume latest".into(),
+            worktree: Some("/tmp/repo".into()),
+        };
+        let json = r#"{
+  "messages": [
+    {"type":"gemini","content":"准备编辑。","toolCalls":[{"name":"replace","displayName":"Edit","status":"cancelled","result":[{"functionResponse":{"response":{"error":"[Operation Cancelled] Reason: User did not allow tool call"}}}]}]}
+  ]
+}"#;
+
+        let events = native_cli_transcript_events_from_gemini_json(&command, json, 0);
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[2].kind.as_deref(), Some("stderr"));
+        assert!(
+            events[2]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("Operation Cancelled")
+        );
+    }
+
+    #[test]
+    fn gemini_project_hash_matches_cli_storage_layout() {
+        assert_eq!(
+            gemini_project_hash("/tiffany-loop/nonexistent-gemini-project").as_deref(),
+            Some("beefa779e279137845bc9e354c1678846c66d0641b01693571f0bb86bae3fdb6")
+        );
+    }
+
+    #[test]
+    fn gemini_chat_path_uses_current_worktree_project_hash() -> std::io::Result<()> {
+        let home = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        let project_hash =
+            gemini_project_hash(&project.path().display().to_string()).expect("project hash");
+        let chat_dir = home
+            .path()
+            .join(".gemini")
+            .join("tmp")
+            .join(project_hash)
+            .join("chats");
+        std::fs::create_dir_all(&chat_dir)?;
+        let chat_path = chat_dir.join("session-2026-06-26T00-00-abcdef12.json");
+        std::fs::write(
+            &chat_path,
+            r#"{"sessionId":"abcdef12-0000-0000-0000-000000000000","messages":[]}"#,
+        )?;
+
+        let command = TiffanyNativeCliCommand {
+            role: "worker-gemini".into(),
+            native_session: "latest".into(),
+            command: "gemini --resume latest".into(),
+            worktree: Some(project.path().display().to_string()),
+        };
+
+        assert_eq!(
+            gemini_session_json_path_in_home(home.path(), &command),
+            Some(chat_path)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_cli_return_lines_show_gemini_transcript_label() {
+        let command = TiffanyNativeCliCommand {
+            role: "worker-gemini".into(),
+            native_session: "latest".into(),
+            command: "gemini --resume latest".into(),
+            worktree: Some("/tmp/repo".into()),
+        };
+        let outcome = TiffanyNativeCliReturn {
+            transcript_event_count: 2,
+            transcript_preview: Some("Gemini done".into()),
+            ..TiffanyNativeCliReturn::default()
+        };
+
+        let text = native_cli_return_lines(&command, &outcome)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("native events  2 captured from Gemini transcript"));
+        assert!(text.contains("native answer  Gemini transcript"));
     }
 
     #[test]

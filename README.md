@@ -556,7 +556,7 @@ Default native TUI slash commands:
 - `/roles` - inspect role wiring, select the active worker route, or save role/provider/model/runtime bindings
 - `/thread` - inspect worker/native CLI session reuse; `/thread clear <role>` resets a stuck native session id
 - `/continue <role|claude|codex|gemini>` - show the native CLI handoff command for a worker role
-- `/continue open <role|claude|codex|gemini>` - pause Tiffany, open the original native Claude/Codex/Gemini session, then return with Claude/Codex transcript events plus git status/stat/patch captured into the conversation and `/history kind diff`
+- `/continue open <role|claude|codex|gemini>` - pause Tiffany, open the original native Claude/Codex/Gemini session, then return with Claude/Codex/Gemini transcript events plus git status/stat/patch captured into the conversation and `/history kind diff`
 - `/history` - inspect/search saved Tiffany native conversation turns and typed worker events such as answer, tool calls/results, diff, patch, file updates, approval, stderr, and final output; use `/history role <role>`, `/history thread <id>`, or `/history kind <event-kind>` to focus the stream; `/history graph` shows a compact text flow, `/history mermaid` renders a Mermaid flowchart, `/history export-graph [--text|--mermaid] [--out file]` writes a graph file, and `/history export [role <role>|thread <id>|kind <event-kind>] [--out file.md]` writes a Markdown handoff
 - `/doctor` - diagnose config, runtimes, API keys, role wiring, local tools, and install surface
 - `/status` - show current session/config status
@@ -851,7 +851,7 @@ orchestrator/
 - [x] Terminal `/diff` and `/tests` helpers
 - [x] Role registry view and per-session role selection
 - [x] Claude/Codex/Gemini CLI handoff packages and `/continue open` native session handoff
-- [x] Native Claude/Codex return sync plus git status, diff stat, and full patch history
+- [x] Native Claude/Codex/Gemini return sync plus git status, diff stat, and full patch history
 - [x] Conversation flow graph summaries
 - [x] Patch checkpoint and rollback commands
 - [x] Optional zellij tab + --detach
