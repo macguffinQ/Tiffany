@@ -452,6 +452,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `/role`：打开角色注册表单，或用 `register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 直接注册一个角色。
 - `/roles`：查看角色接线、选择当前 worker 路由，或保存 role/provider/model/runtime 绑定。
 - `/thread`：查看 worker/native CLI 会话复用状态；`/thread clear <role>` 可清掉卡住的 native session id。
+- `/history`：查看、搜索、导出保存的原生事件流；支持 `/history role <role>`、`/history thread <id>`、`/history kind answer|tool_result|diff|approval`，以及 `/history export kind <event-kind> --out file.md`。
 - `/doctor`：诊断配置、runtime、API key、角色绑定、本地工具和安装状态。
 - `/status`：显示当前会话和配置状态。
 - `/help`：显示 Tiffany 命令帮助。

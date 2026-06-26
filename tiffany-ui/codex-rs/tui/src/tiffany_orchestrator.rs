@@ -1373,6 +1373,14 @@ fn native_history_conversation_lines(
         "show more native process events",
     ));
     lines.push(next_line(
+        "/history kind answer|tool_result|diff|approval",
+        "filter typed worker events",
+    ));
+    lines.push(next_line(
+        "/history export kind <event-kind>",
+        "write a Markdown handoff for one event kind",
+    ));
+    lines.push(next_line(
         "/thread <role>",
         "inspect native CLI resume command",
     ));
@@ -3167,6 +3175,10 @@ fn thread_list_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
         "show native events for one worker role",
     ));
     lines.push(next_line(
+        "/history kind answer|tool_result|diff|approval",
+        "filter saved native events by stream kind",
+    ));
+    lines.push(next_line(
         "/thread clear <role>",
         "start the next run with a fresh native session",
     ));
@@ -3215,6 +3227,11 @@ fn thread_detail_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
         &mut lines,
         &format!("/history role {role}"),
         "show this role's native event stream",
+    );
+    next_line_into(
+        &mut lines,
+        "/history kind answer|tool_result|diff|approval",
+        "filter answer, tool, diff, or approval events",
     );
     if let Some(thread_id) = fields
         .get("tiffany thread")
@@ -5838,44 +5855,20 @@ fn worker_question_hint_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>
         .and_then(nonempty_trimmed)
         .or_else(|| event.agent.as_deref().and_then(nonempty_trimmed))
         .unwrap_or("worker");
-    vec![Line::from(vec![
-        Span::styled(
-            "  next ",
-            Style::default()
-                .fg(TIFFANY_BLUE)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("/continue {target}"),
-            Style::default()
-                .fg(TIFFANY_SOFT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
+    vec![
+        next_line(
+            &format!("/continue {target}"),
             "answer or approve in the native CLI session",
-            Style::default().fg(Color::DarkGray),
         ),
-    ]),
-    Line::from(vec![
-        Span::styled(
-            "  info ",
-            Style::default()
-                .fg(TIFFANY_BLUE)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("/thread {target}"),
-            Style::default()
-                .fg(TIFFANY_SOFT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
+        next_line(
+            &format!("/thread {target}"),
             "inspect session, native id, and handoff state",
-            Style::default().fg(Color::DarkGray),
         ),
-    ])]
+        next_line(
+            "/history kind approval",
+            "show saved approval requests across native worker events",
+        ),
+    ]
 }
 
 fn short_task_id(task_id: Option<&str>) -> Option<&str> {
@@ -6351,6 +6344,8 @@ mod tests {
         assert!(text.contains("diff --git a/README.md b/README.md"));
         assert!(text.contains("thread abcdef12"));
         assert!(text.contains("/history full"));
+        assert!(text.contains("/history kind answer|tool_result|diff|approval"));
+        assert!(text.contains("/history export kind <event-kind>"));
         assert!(text.contains("/thread <role>"));
     }
 
@@ -7296,6 +7291,7 @@ mod tests {
         assert!(text.contains("run task to create session"));
         assert!(text.contains("next  /thread <role>"));
         assert!(text.contains("next  /history role <role>"));
+        assert!(text.contains("next  /history kind answer|tool_result|diff|approval"));
         assert!(text.contains("next  /thread clear <role>"));
         assert!(!text.contains("Worker threads"));
         assert!(!text.contains("orchestrator thread show"));
@@ -7335,6 +7331,7 @@ mod tests {
         );
         assert!(text.contains("last  00000000-0000-0000-0000-000000000456"));
         assert!(text.contains("next  /history role worker-codex"));
+        assert!(text.contains("next  /history kind answer|tool_result|diff|approval"));
         assert!(text.contains("next  /history thread 00000000"));
         assert!(text.contains("next  /thread clear worker-codex"));
         assert!(!text.contains("Worker thread 00000000"));
@@ -7983,11 +7980,15 @@ mod tests {
         );
         assert_eq!(
             line_text(&question_lines[2]),
-            "  next /continue worker-cc · answer or approve in the native CLI session"
+            "  next  /continue worker-cc  answer or approve in the native CLI session"
         );
         assert_eq!(
             line_text(&question_lines[3]),
-            "  info /thread worker-cc · inspect session, native id, and handoff state"
+            "  next  /thread worker-cc  inspect session, native id, and handoff state"
+        );
+        assert_eq!(
+            line_text(&question_lines[4]),
+            "  next  /history kind approval  show saved approval requests across native worker events"
         );
 
         let approval_visible = visible_content(&approval).expect("approval visible");
@@ -7998,7 +7999,11 @@ mod tests {
         );
         assert_eq!(
             line_text(&approval_lines[2]),
-            "  next /continue worker-cc · answer or approve in the native CLI session"
+            "  next  /continue worker-cc  answer or approve in the native CLI session"
+        );
+        assert_eq!(
+            line_text(&approval_lines[4]),
+            "  next  /history kind approval  show saved approval requests across native worker events"
         );
 
         let stderr_visible = visible_content(&stderr).expect("stderr visible");
