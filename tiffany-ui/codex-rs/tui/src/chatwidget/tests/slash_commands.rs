@@ -314,7 +314,9 @@ async fn slash_continue_guides_when_not_in_orchestrator_mode() {
         Ok(AppEvent::InsertHistoryCell(cell)) => {
             let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
             assert!(rendered.contains("tiffany-loop orchestrator mode"));
-            assert!(rendered.contains("Usage: /continue [<role>|claude|codex|gemini]"));
+            assert!(rendered.contains(
+                "Usage: /continue [open] [<role>|claude|codex|gemini]"
+            ));
         }
         other => panic!("expected InsertHistoryCell, got {other:?}"),
     }

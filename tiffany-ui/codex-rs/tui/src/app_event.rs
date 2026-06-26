@@ -265,6 +265,11 @@ pub(crate) enum AppEvent {
         args: String,
     },
 
+    /// Launch a stable worker's native CLI handoff command in the foreground.
+    TiffanyOrchestratorOpenNativeCli {
+        command: crate::tiffany_orchestrator::TiffanyNativeCliCommand,
+    },
+
     /// Inspect saved Tiffany native conversation history for the current workspace.
     TiffanyOrchestratorHistoryCommand {
         args: String,

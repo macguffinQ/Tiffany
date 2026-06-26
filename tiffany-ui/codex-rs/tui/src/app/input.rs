@@ -5,6 +5,56 @@
 
 use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
+use std::path::Path;
+use std::process::Stdio;
+
+#[cfg(windows)]
+fn default_shell_program() -> &'static str {
+    "cmd.exe"
+}
+
+#[cfg(windows)]
+fn default_shell_flag() -> &'static str {
+    "/C"
+}
+
+#[cfg(not(windows))]
+fn default_shell_program() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+}
+
+#[cfg(not(windows))]
+fn default_shell_flag() -> &'static str {
+    "-lc"
+}
+
+async fn native_cli_return_snapshot(worktree: Option<&str>) -> crate::tiffany_orchestrator::TiffanyNativeCliReturn {
+    let Some(worktree) = worktree.map(str::trim).filter(|value| !value.is_empty()) else {
+        return crate::tiffany_orchestrator::TiffanyNativeCliReturn::default();
+    };
+    let cwd = Path::new(worktree);
+    crate::tiffany_orchestrator::TiffanyNativeCliReturn {
+        status: git_output(cwd, &["status", "--short"]).await,
+        diff_stat: git_output(cwd, &["diff", "--stat"]).await,
+        staged_diff_stat: git_output(cwd, &["diff", "--cached", "--stat"]).await,
+    }
+}
+
+async fn git_output(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = tokio::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
 
 impl App {
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
@@ -48,6 +98,56 @@ impl App {
                     .add_to_history(history_cell::new_error_event(format!(
                         "Failed to open editor: {err}",
                     )));
+            }
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
+    pub(super) async fn open_tiffany_native_cli(
+        &mut self,
+        tui: &mut tui::Tui,
+        command: crate::tiffany_orchestrator::TiffanyNativeCliCommand,
+    ) {
+        let command_text = command.command.clone();
+        let status = tui
+            .with_restored(tui::RestoreMode::Full, || async move {
+                let mut shell = tokio::process::Command::new(default_shell_program());
+                shell
+                    .arg(default_shell_flag())
+                    .arg(&command_text)
+                    .stdin(Stdio::inherit())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .status()
+                    .await
+            })
+            .await;
+
+        match status {
+            Ok(status) if status.success() => {
+                let outcome = native_cli_return_snapshot(command.worktree.as_deref()).await;
+                self.chat_widget.add_plain_history_lines(
+                    crate::tiffany_orchestrator::native_cli_return_lines(&command, &outcome),
+                );
+                if let Ok(Some(path)) = crate::tiffany_orchestrator::append_native_cli_return(
+                    self.config.codex_home.as_path(),
+                    self.config.cwd.as_path(),
+                    &command,
+                    &outcome,
+                ) && let Some(config) = self.tiffany_orchestrator.clone()
+                {
+                    crate::tiffany_orchestrator::spawn_native_history_import(config, path);
+                }
+            }
+            Ok(status) => {
+                self.chat_widget.add_to_history(history_cell::new_error_event(
+                    format!("{} native CLI exited with {status}", command.role),
+                ));
+            }
+            Err(err) => {
+                self.chat_widget.add_to_history(history_cell::new_error_event(
+                    format!("Failed to open {} native CLI: {err}", command.role),
+                ));
             }
         }
         tui.frame_requester().schedule_frame();

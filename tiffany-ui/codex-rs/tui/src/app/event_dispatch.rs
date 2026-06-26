@@ -370,6 +370,9 @@ impl App {
             AppEvent::TiffanyOrchestratorContinueCommand { args } => {
                 self.handle_tiffany_orchestrator_continue_command(tui, args);
             }
+            AppEvent::TiffanyOrchestratorOpenNativeCli { command } => {
+                self.open_tiffany_native_cli(tui, command).await;
+            }
             AppEvent::TiffanyOrchestratorHistoryCommand { args } => {
                 self.handle_tiffany_orchestrator_history_command(tui, args);
             }

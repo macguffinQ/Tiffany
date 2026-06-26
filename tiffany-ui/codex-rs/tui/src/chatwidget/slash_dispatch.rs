@@ -52,7 +52,7 @@ const PROVIDER_USAGE: &str = "Usage: /provider [setup|list|delete <provider>|key
 const ROLE_USAGE: &str = "Usage: /role [<role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]";
 const ROLES_USAGE: &str = "Usage: /roles [list|show <role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]";
 const THREAD_USAGE: &str = "Usage: /thread [list|show <role>|clear <role>|export <role> [--format markdown|html|--out <path>|--clipboard]]";
-const CONTINUE_USAGE: &str = "Usage: /continue [<role>|claude|codex|gemini]";
+const CONTINUE_USAGE: &str = "Usage: /continue [open] [<role>|claude|codex|gemini]";
 const DOCTOR_USAGE: &str = "Usage: /doctor [run]";
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.

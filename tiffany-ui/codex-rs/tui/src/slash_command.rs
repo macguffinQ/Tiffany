@@ -139,7 +139,7 @@ impl SlashCommand {
             SlashCommand::History => {
                 "inspect, search, or export native Tiffany conversation history"
             }
-            SlashCommand::Continue => "show native CLI resume command for a worker",
+            SlashCommand::Continue => "show or open a worker's native CLI session",
             SlashCommand::Doctor => "diagnose tiffany-loop orchestrator setup",
             SlashCommand::Help => "show Tiffany orchestrator commands",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",

@@ -109,6 +109,21 @@ pub(crate) struct TiffanyOrchestratorTurn {
     pub(crate) result: String,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct TiffanyNativeCliCommand {
+    pub(crate) role: String,
+    pub(crate) native_session: String,
+    pub(crate) command: String,
+    pub(crate) worktree: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TiffanyNativeCliReturn {
+    pub(crate) status: Option<String>,
+    pub(crate) diff_stat: Option<String>,
+    pub(crate) staged_diff_stat: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct TiffanyOrchestratorMemory {
     #[serde(default = "memory_schema_version")]
@@ -489,23 +504,36 @@ pub(crate) fn spawn_continue_command(
     args: String,
 ) {
     tokio::spawn(async move {
-        let role = match continue_target_role(&args) {
-            Ok(role) => role,
+        let request = match continue_request(&args) {
+            Ok(request) => request,
             Err(err) => {
                 emit_lines(
                     &app_event_tx,
                     vec![
                         status_line("✗", Color::Red, "continue", &err),
-                        body_line("Usage: /continue <role|claude|codex|gemini>", true),
+                        body_line(
+                            "Usage: /continue [open] <role|claude|codex|gemini>",
+                            true,
+                        ),
                     ],
                 );
                 return;
             }
         };
-        let command_args = vec!["thread".to_string(), "show".to_string(), role.clone()];
+        let command_args = vec![
+            "thread".to_string(),
+            "show".to_string(),
+            request.role.clone(),
+        ];
 
         match run_orchestrator_command(&config, &command_args).await {
-            Ok(output) => emit_command_output(&app_event_tx, "continue", &command_args, output),
+            Ok(output) => {
+                if request.open {
+                    emit_continue_open_output(&app_event_tx, output);
+                } else {
+                    emit_command_output(&app_event_tx, "continue", &command_args, output);
+                }
+            }
             Err(err) => emit_lines(
                 &app_event_tx,
                 spawn_error_lines(
@@ -1122,6 +1150,69 @@ pub(crate) fn append_native_chat_turn(
     }
     std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
     Ok(Some(path))
+}
+
+pub(crate) fn append_native_cli_return(
+    codex_home: &Path,
+    cwd: &Path,
+    command: &TiffanyNativeCliCommand,
+    outcome: &TiffanyNativeCliReturn,
+) -> anyhow::Result<Option<PathBuf>> {
+    if outcome.status.is_none() && outcome.diff_stat.is_none() && outcome.staged_diff_stat.is_none()
+    {
+        return Ok(None);
+    }
+    let mut events = Vec::new();
+    if let Some(status) = outcome.status.as_deref().and_then(nonempty_trimmed) {
+        events.push(native_cli_return_event(command, "file_update", "git status --short", status));
+    }
+    if let Some(diff_stat) = outcome.diff_stat.as_deref().and_then(nonempty_trimmed) {
+        events.push(native_cli_return_event(command, "diff", "git diff --stat", diff_stat));
+    }
+    if let Some(diff_stat) = outcome
+        .staged_diff_stat
+        .as_deref()
+        .and_then(nonempty_trimmed)
+    {
+        events.push(native_cli_return_event(
+            command,
+            "diff",
+            "git diff --cached --stat",
+            diff_stat,
+        ));
+    }
+    append_native_chat_turn(
+        codex_home,
+        cwd,
+        &TiffanyOrchestratorTurn {
+            user_prompt: format!("/continue open {}", command.role),
+            result: "native CLI returned to Tiffany".to_string(),
+        },
+        events,
+    )
+}
+
+fn native_cli_return_event(
+    command: &TiffanyNativeCliCommand,
+    kind: &str,
+    title: &str,
+    content: &str,
+) -> TiffanyNativeChatEvent {
+    normalize_native_event(TiffanyNativeChatEvent {
+        role: "worker".to_string(),
+        status: "output".to_string(),
+        title: format!("worker {kind} · {}", command.role),
+        kind: Some(kind.to_string()),
+        content: Some(format!("{title}\n{content}")),
+        agent: None,
+        worker_role: Some(command.role.clone()),
+        model: None,
+        provider: None,
+        task_id: None,
+        worker_thread_id: None,
+        native_session_id: Some(command.native_session.clone()),
+    })
+    .expect("native CLI return event should be valid")
 }
 
 pub(crate) fn spawn_native_history_import(
@@ -2374,12 +2465,32 @@ fn thread_command_args(args: &str) -> Result<Vec<String>, String> {
     }
 }
 
-fn continue_target_role(args: &str) -> Result<String, String> {
-    let parts = args.split_whitespace().collect::<Vec<_>>();
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ContinueRequest {
+    open: bool,
+    role: String,
+}
+
+fn continue_request(args: &str) -> Result<ContinueRequest, String> {
+    let mut parts = args.split_whitespace().collect::<Vec<_>>();
+    let open = matches!(parts.first().copied(), Some("open"));
+    if open {
+        parts.remove(0);
+    }
     let target = parts.first().copied().unwrap_or("worker-cc");
     if parts.len() > 1 {
         return Err("continue accepts one target".to_string());
     }
+    let role = continue_target_role(target)?;
+    Ok(ContinueRequest { open, role })
+}
+
+fn continue_target_role(target: &str) -> Result<String, String> {
+    let target = if target.trim().is_empty() {
+        "worker-cc"
+    } else {
+        target.trim()
+    };
     let role = match target {
         "claude" | "claude-code" | "cc" => "worker-cc",
         "codex" => "worker-codex",
@@ -2659,6 +2770,50 @@ fn emit_command_output(
         lines.push(body_line(hint, true));
     }
     emit_lines(app_event_tx, lines);
+}
+
+fn emit_continue_open_output(app_event_tx: &AppEventSender, output: std::process::Output) {
+    if !output.status.success() {
+        emit_command_output(
+            app_event_tx,
+            "continue",
+            &["thread".to_string(), "show".to_string()],
+            output,
+        );
+        return;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match native_cli_command_from_thread_output(&stdout) {
+        Some(command) => {
+            let mut lines = vec![status_line(
+                "●",
+                TIFFANY_BLUE,
+                "continue",
+                &format!("opening {} native CLI", command.role),
+            )];
+            lines.push(thread_meta_line("native", &command.native_session));
+            lines.push(thread_meta_line("command", &command.command));
+            if let Some(worktree) = &command.worktree {
+                lines.push(thread_meta_line("work", worktree));
+            }
+            lines.push(body_line(
+                "Tiffany will pause and return after the native CLI exits.",
+                true,
+            ));
+            emit_lines(app_event_tx, lines);
+            app_event_tx.send(AppEvent::TiffanyOrchestratorOpenNativeCli { command });
+        }
+        None => {
+            let lines = continue_summary_lines(&stdout).unwrap_or_else(|| {
+                vec![
+                    status_line("⚠", Color::Yellow, "continue", "no native handoff found"),
+                    body_line("Run a worker task first, then retry /continue open <role>.", true),
+                ]
+            });
+            emit_lines(app_event_tx, lines);
+        }
+    }
 }
 
 fn emit_doctor_output(app_event_tx: &AppEventSender, output: std::process::Output) {
@@ -3155,12 +3310,58 @@ fn continue_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
     if let Some(worktree) = fields.get("worktree").and_then(|value| nonempty_trimmed(value)) {
         lines.push(thread_meta_line("work", worktree));
     }
-    lines.push(next_line("copy command", "paste it in a shell to continue in the native CLI"));
+    lines.push(next_line(
+        "copy command",
+        "paste it in a shell to continue in the native CLI",
+    ));
+    lines.push(next_line(
+        &format!("/continue open {role}"),
+        "open the native CLI from Tiffany",
+    ));
     lines.push(next_line(
         &format!("/thread export {role}"),
         "write full selectable handoff history",
     ));
     Some(lines)
+}
+
+fn native_cli_command_from_thread_output(text: &str) -> Option<TiffanyNativeCliCommand> {
+    if !text.contains("Worker thread") {
+        return None;
+    }
+    let fields = parse_thread_fields(text);
+    let role = fields
+        .get("role")
+        .cloned()
+        .or_else(|| parse_worker_thread_title(text))
+        .unwrap_or_else(|| "worker".to_string());
+    let native_session = fields
+        .get("native session")
+        .and_then(|value| nonempty_trimmed(value))
+        .filter(|value| *value != "none")?
+        .to_string();
+    let command = fields
+        .get("native handoff")
+        .and_then(|value| nonempty_trimmed(value))
+        .or_else(|| {
+            fields
+                .get("native resume")
+                .and_then(|value| nonempty_trimmed(value))
+        })
+        .filter(|value| *value != "none")?
+        .to_string();
+    let worktree = fields
+        .get("worktree")
+        .and_then(|value| nonempty_trimmed(value))
+        .filter(|value| *value != "none")
+        .map(ToString::to_string);
+
+    Some(TiffanyNativeCliCommand {
+        role,
+        native_session,
+        command,
+        worktree,
+    })
 }
 
 fn thread_list_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
@@ -5647,6 +5848,82 @@ fn status_line(symbol: &'static str, color: Color, role: &str, message: &str) ->
     ])
 }
 
+pub(crate) fn native_cli_return_lines(
+    command: &TiffanyNativeCliCommand,
+    outcome: &TiffanyNativeCliReturn,
+) -> Vec<Line<'static>> {
+    let has_changes = outcome
+        .status
+        .as_deref()
+        .is_some_and(|status| !status.trim().is_empty())
+        || outcome
+            .diff_stat
+            .as_deref()
+            .is_some_and(|stat| !stat.trim().is_empty())
+        || outcome
+            .staged_diff_stat
+            .as_deref()
+            .is_some_and(|stat| !stat.trim().is_empty());
+    let mut lines = vec![status_line(
+        "✓",
+        TIFFANY_BLUE,
+        &command.role,
+        if has_changes {
+            "native CLI exited with workspace changes"
+        } else {
+            "native CLI exited"
+        },
+    )];
+    lines.push(thread_meta_line("native", &command.native_session));
+    if let Some(worktree) = command.worktree.as_deref().and_then(nonempty_trimmed) {
+        lines.push(thread_meta_line("work", worktree));
+    }
+    if let Some(status) = outcome.status.as_deref().and_then(nonempty_trimmed) {
+        lines.push(thread_meta_line("status", "git status --short"));
+        for line in status.lines().take(20) {
+            lines.push(detail_continuation_line(line));
+        }
+        let hidden = status.lines().count().saturating_sub(20);
+        if hidden > 0 {
+            lines.push(detail_continuation_line(&format!(
+                "… {hidden} more file(s); run git status for all"
+            )));
+        }
+    }
+    if let Some(diff_stat) = outcome.diff_stat.as_deref().and_then(nonempty_trimmed) {
+        lines.push(thread_meta_line("diff", "git diff --stat"));
+        for line in diff_stat.lines().take(20) {
+            lines.push(detail_continuation_line(line));
+        }
+        let hidden = diff_stat.lines().count().saturating_sub(20);
+        if hidden > 0 {
+            lines.push(detail_continuation_line(&format!(
+                "… {hidden} more line(s); run git diff --stat for all"
+            )));
+        }
+    }
+    if let Some(diff_stat) = outcome
+        .staged_diff_stat
+        .as_deref()
+        .and_then(nonempty_trimmed)
+    {
+        lines.push(thread_meta_line("staged", "git diff --cached --stat"));
+        for line in diff_stat.lines().take(20) {
+            lines.push(detail_continuation_line(line));
+        }
+        let hidden = diff_stat.lines().count().saturating_sub(20);
+        if hidden > 0 {
+            lines.push(detail_continuation_line(&format!(
+                "… {hidden} more line(s); run git diff --cached --stat for all"
+            )));
+        }
+    }
+    if has_changes {
+        lines.push(next_line("/history kind diff", "inspect saved native return snapshot"));
+    }
+    lines
+}
+
 fn body_line(line: &str, dim: bool) -> Line<'static> {
     let style = if dim {
         Style::default().fg(Color::DarkGray)
@@ -6929,7 +7206,7 @@ mod tests {
 
     #[test]
     fn continue_target_role_maps_runtime_aliases() {
-        assert_eq!(continue_target_role("").unwrap(), "worker-cc");
+        assert_eq!(continue_request("").unwrap().role, "worker-cc");
         assert_eq!(continue_target_role("claude").unwrap(), "worker-cc");
         assert_eq!(continue_target_role("claude-code").unwrap(), "worker-cc");
         assert_eq!(continue_target_role("cc").unwrap(), "worker-cc");
@@ -6940,7 +7217,15 @@ mod tests {
             continue_target_role("worker-reviewer").unwrap(),
             "worker-reviewer"
         );
-        assert!(continue_target_role("worker-cc extra").is_err());
+        assert!(continue_request("worker-cc extra").is_err());
+        assert_eq!(
+            continue_request("open claude").unwrap(),
+            ContinueRequest {
+                open: true,
+                role: "worker-cc".to_string(),
+            }
+        );
+        assert!(continue_request("open worker-cc extra").is_err());
     }
 
     #[test]
@@ -7404,6 +7689,98 @@ mod tests {
         assert!(text.contains("next  /thread export worker-gemini"));
         assert!(!text.contains("Worker thread 00000000"));
         assert!(!text.contains("Status: ready for Gemini"));
+    }
+
+    #[test]
+    fn native_cli_command_from_thread_output_reads_handoff_command() {
+        let command = native_cli_command_from_thread_output(
+            "Worker thread 00000000\n\
+               role: worker-cc\n\
+               runtime: claude-code\n\
+               native session: claude-native-session\n\
+               native resume: claude --resume claude-native-session\n\
+               native handoff: cd /tmp/tiffany-worker && claude --resume claude-native-session\n\
+               worktree: /tmp/tiffany-worker\n",
+        )
+        .expect("native command");
+
+        assert_eq!(command.role, "worker-cc");
+        assert_eq!(command.native_session, "claude-native-session");
+        assert_eq!(
+            command.command,
+            "cd /tmp/tiffany-worker && claude --resume claude-native-session"
+        );
+        assert_eq!(command.worktree.as_deref(), Some("/tmp/tiffany-worker"));
+    }
+
+    #[test]
+    fn native_cli_return_lines_show_workspace_snapshot() {
+        let command = TiffanyNativeCliCommand {
+            role: "worker-cc".into(),
+            native_session: "claude-native-session".into(),
+            command: "cd /tmp/repo && claude --resume claude-native-session".into(),
+            worktree: Some("/tmp/repo".into()),
+        };
+        let outcome = TiffanyNativeCliReturn {
+            status: Some(" M src/lib.rs\n?? tests/new.rs".into()),
+            diff_stat: Some(" src/lib.rs | 2 ++\n 1 file changed, 2 insertions(+)".into()),
+            staged_diff_stat: Some(" README.md | 1 +".into()),
+        };
+
+        let text = native_cli_return_lines(&command, &outcome)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("✓ worker-cc  native CLI exited with workspace changes"));
+        assert!(text.contains("native  claude-native-session"));
+        assert!(text.contains("work  /tmp/repo"));
+        assert!(text.contains("status  git status --short"));
+        assert!(text.contains("M src/lib.rs"));
+        assert!(text.contains("diff  git diff --stat"));
+        assert!(text.contains("1 file changed"));
+        assert!(text.contains("staged  git diff --cached --stat"));
+        assert!(text.contains("README.md"));
+        assert!(text.contains("next  /history kind diff"));
+    }
+
+    #[test]
+    fn native_cli_return_appends_diff_history() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let command = TiffanyNativeCliCommand {
+            role: "worker-cc".into(),
+            native_session: "claude-native-session".into(),
+            command: "claude --resume claude-native-session".into(),
+            worktree: Some(cwd.path().display().to_string()),
+        };
+        let outcome = TiffanyNativeCliReturn {
+            status: Some(" M README.md".into()),
+            diff_stat: Some(" README.md | 1 +".into()),
+            staged_diff_stat: Some(" src/lib.rs | 1 +".into()),
+        };
+
+        append_native_cli_return(home.path(), cwd.path(), &command, &outcome)
+            .expect("append return")
+            .expect("sessions path");
+        let loaded = load_native_chat_conversation(home.path(), cwd.path())
+            .expect("load native history")
+            .expect("conversation");
+
+        assert_eq!(loaded.turns.len(), 1);
+        let turn = &loaded.turns[0];
+        assert_eq!(turn.user_prompt, "/continue open worker-cc");
+        assert_eq!(turn.events.len(), 3);
+        assert_eq!(turn.events[0].kind.as_deref(), Some("file_update"));
+        assert_eq!(turn.events[1].kind.as_deref(), Some("diff"));
+        assert_eq!(turn.events[2].kind.as_deref(), Some("diff"));
+        assert!(turn.events[1].content.as_deref().unwrap().contains("README.md"));
+        assert!(turn.events[2].content.as_deref().unwrap().contains("src/lib.rs"));
+        assert_eq!(
+            turn.events[1].native_session_id.as_deref(),
+            Some("claude-native-session")
+        );
     }
 
     #[test]
