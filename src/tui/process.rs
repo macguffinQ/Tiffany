@@ -482,31 +482,13 @@ fn summarize_worker_output(output: &str) -> String {
 
 fn compact_worker_label(label: &str) -> String {
     let mut parts = label.split_whitespace().collect::<Vec<_>>();
-    if matches!(
-        parts.last().copied(),
-        Some(
-            "assistant"
-                | "result"
-                | "final"
-                | "final_answer"
-                | "task_complete"
-                | "turn_complete"
-                | "tool"
-                | "tool_use"
-                | "tool_result"
-                | "exec"
-                | "local_shell_call"
-                | "function_call"
-                | "function_call_output"
-                | "custom_tool_call"
-                | "custom_tool_call_output"
-                | "tool_search_call"
-                | "tool_search_output"
-                | "web_search_call"
-                | "image_generation_call"
-                | "mcp_tool_call"
-        )
-    ) {
+    if parts
+        .last()
+        .copied()
+        .and_then(agent_events::normalize_event_kind)
+        .and_then(|kind| agent_events::visible_agent_output_kind_for_event_kind(&kind))
+        .is_some()
+    {
         parts.pop();
     }
     if parts.is_empty() {
@@ -1563,6 +1545,18 @@ mod tests {
         assert!(line.contains("worker  tool call"));
         assert!(line.contains("worker-codex: tool shell: cargo test --all"));
         assert!(!line.contains("local_shell_call"));
+
+        let line = format_run_event(&RunProgress::WorkerOutput {
+            task_id,
+            agent: "claude-code".into(),
+            role: "worker-cc".into(),
+            event_kind: "assistant-message".into(),
+            content: "claude-code assistant-message: Native answer".into(),
+        });
+
+        assert!(line.contains("worker  answer"));
+        assert!(line.contains("claude-code: Native answer"));
+        assert!(!line.contains("assistant-message"));
 
         let line = format_run_event(&RunProgress::RoleOutput {
             role: "diagnostic".into(),
