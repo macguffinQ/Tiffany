@@ -1044,7 +1044,7 @@ fn native_history_lines_from_conversation(
             return vec![
                 status_line("✗", Color::Red, "history", &err),
                 body_line(
-                    "Usage: /history [last|full|<count>|role <role>|thread <id>|search <text>|export [role <role>|thread <id>] [--out path]]",
+                    "Usage: /history [last|full|<count>|role <role>|thread <id>|kind <event-kind>|search <text>|export [role <role>|thread <id>|kind <event-kind>] [--out path]]",
                     true,
                 ),
             ];
@@ -1161,6 +1161,7 @@ enum NativeHistoryCommand {
 enum NativeHistoryFilter {
     Role(String),
     Thread(String),
+    Kind(String),
 }
 
 impl NativeHistoryFilter {
@@ -1168,6 +1169,7 @@ impl NativeHistoryFilter {
         match self {
             Self::Role(role) => format!("role {role}"),
             Self::Thread(thread) => format!("thread {thread}"),
+            Self::Kind(kind) => format!("kind {kind}"),
         }
     }
 
@@ -1182,6 +1184,9 @@ impl NativeHistoryFilter {
                 .worker_thread_id
                 .as_deref()
                 .is_some_and(|id| id == thread || id.starts_with(thread)),
+            Self::Kind(kind) => event.kind.as_deref().is_some_and(|event_kind| {
+                event_kind.eq_ignore_ascii_case(kind) || event_kind.starts_with(kind)
+            }),
         }
     }
 }
@@ -1228,6 +1233,13 @@ impl NativeHistoryCommand {
                 filter: Some(NativeHistoryFilter::Thread(thread.to_string())),
             })),
             ["thread", ..] => Err("history thread needs <id>".to_string()),
+            ["kind", kind] => Ok(Self::Show(NativeHistoryOptions {
+                turn_limit: 20,
+                event_limit_per_turn: usize::MAX,
+                full_event_content: true,
+                filter: Some(NativeHistoryFilter::Kind(kind.to_string())),
+            })),
+            ["kind", ..] => Err("history kind needs <event-kind>".to_string()),
             ["export", rest @ ..] => parse_native_history_export_command(rest),
             ["search" | "grep" | "find", pattern @ ..] => {
                 let pattern = pattern.join(" ").trim().to_string();
@@ -1266,6 +1278,13 @@ fn parse_native_history_export_command(parts: &[&str]) -> Result<NativeHistoryCo
                     return Err("history export thread needs <id>".to_string());
                 };
                 filter = Some(NativeHistoryFilter::Thread((*thread).to_string()));
+                i += 2;
+            }
+            "kind" => {
+                let Some(kind) = parts.get(i + 1) else {
+                    return Err("history export kind needs <event-kind>".to_string());
+                };
+                filter = Some(NativeHistoryFilter::Kind((*kind).to_string()));
                 i += 2;
             }
             value => {
@@ -6577,6 +6596,67 @@ mod tests {
     }
 
     #[test]
+    fn native_history_export_can_filter_event_kind() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let out = home.path().join("approval.md");
+
+        append_native_chat_turn(
+            home.path(),
+            cwd.path(),
+            &TiffanyOrchestratorTurn {
+                user_prompt: "需要权限".into(),
+                result: "等待用户批准".into(),
+            },
+            vec![
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker approval · worker-cc · claude-code".into(),
+                    kind: Some("approval".into()),
+                    content: Some("waiting for permission approval: write access".into()),
+                    agent: Some("claude-code".into()),
+                    worker_role: Some("worker-cc".into()),
+                    model: Some("claude-sonnet-4-6".into()),
+                    provider: Some("anthropic".into()),
+                    task_id: Some("task-approval".into()),
+                    worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
+                    native_session_id: Some("native-cc".into()),
+                },
+                TiffanyNativeChatEvent {
+                    role: "worker".into(),
+                    status: "output".into(),
+                    title: "worker answer · worker-cc · claude-code".into(),
+                    kind: Some("answer".into()),
+                    content: Some("普通回答".into()),
+                    agent: Some("claude-code".into()),
+                    worker_role: Some("worker-cc".into()),
+                    model: Some("claude-sonnet-4-6".into()),
+                    provider: Some("anthropic".into()),
+                    task_id: Some("task-answer".into()),
+                    worker_thread_id: Some("abcdef12-0000-0000-0000-000000000000".into()),
+                    native_session_id: Some("native-cc".into()),
+                },
+            ],
+        )
+        .expect("append");
+
+        let lines = native_history_lines(
+            home.path(),
+            cwd.path(),
+            &format!("export kind approval --out {}", out.display()),
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("history  exported 1 turn(s)"));
+
+        let markdown = std::fs::read_to_string(&out).expect("export body");
+        assert!(markdown.contains("- Filter: `kind approval`"));
+        assert!(markdown.contains("worker approval"));
+        assert!(markdown.contains("waiting for permission approval"));
+        assert!(!markdown.contains("普通回答"));
+    }
+
+    #[test]
     fn native_history_search_finds_turns_and_events() {
         let home = tempfile::tempdir().expect("home");
         let cwd = tempfile::tempdir().expect("cwd");
@@ -6617,7 +6697,7 @@ mod tests {
     }
 
     #[test]
-    fn native_history_can_filter_by_role_or_thread() {
+    fn native_history_can_filter_by_role_thread_or_kind() {
         let home = tempfile::tempdir().expect("home");
         let cwd = tempfile::tempdir().expect("cwd");
 
@@ -6632,8 +6712,8 @@ mod tests {
                 TiffanyNativeChatEvent {
                     role: "worker".into(),
                     status: "output".into(),
-                    title: "worker output · worker-cc · claude-code".into(),
-                    kind: Some("output".into()),
+                    title: "worker answer · worker-cc · claude-code".into(),
+                    kind: Some("answer".into()),
                     content: Some("claude role output".into()),
                     agent: Some("claude-code".into()),
                     worker_role: Some("worker-cc".into()),
@@ -6646,8 +6726,8 @@ mod tests {
                 TiffanyNativeChatEvent {
                     role: "worker".into(),
                     status: "output".into(),
-                    title: "worker output · worker-codex · codex".into(),
-                    kind: Some("output".into()),
+                    title: "worker diff · worker-codex · codex".into(),
+                    kind: Some("diff".into()),
                     content: Some("codex role output".into()),
                     agent: Some("codex".into()),
                     worker_role: Some("worker-codex".into()),
@@ -6677,6 +6757,13 @@ mod tests {
         assert!(thread_text.contains("thread abcdef12"));
         assert!(thread_text.contains("claude role output"));
         assert!(!thread_text.contains("codex role output"));
+
+        let by_kind = native_history_lines(home.path(), cwd.path(), "kind diff");
+        let kind_text = by_kind.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(kind_text.contains("filter  kind diff"));
+        assert!(kind_text.contains("kind: diff"));
+        assert!(kind_text.contains("codex role output"));
+        assert!(!kind_text.contains("claude role output"));
     }
 
     #[test]
@@ -6692,7 +6779,7 @@ mod tests {
         let bad_text = bad.iter().map(line_text).collect::<Vec<_>>().join("\n");
         assert!(bad_text.contains("unknown /history option 'wat'"));
         assert!(bad_text.contains(
-            "Usage: /history [last|full|<count>|role <role>|thread <id>|search <text>|export [role <role>|thread <id>] [--out path]]"
+            "Usage: /history [last|full|<count>|role <role>|thread <id>|kind <event-kind>|search <text>|export [role <role>|thread <id>|kind <event-kind>] [--out path]]"
         ));
     }
 
