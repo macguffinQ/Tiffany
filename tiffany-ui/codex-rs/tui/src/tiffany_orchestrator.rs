@@ -18,6 +18,7 @@ use tiffany_bridge::ConfigSummary as TiffanyConfigSummary;
 use tiffany_bridge::ContextPromptTurn as TiffanyContextPromptTurn;
 #[cfg(test)]
 use tiffany_bridge::ContinueRequest;
+use tiffany_bridge::JobSummary;
 use tiffany_bridge::NativeHistoryCommand;
 use tiffany_bridge::NativeHistoryEventView;
 use tiffany_bridge::NativeHistoryFilter;
@@ -25,15 +26,26 @@ use tiffany_bridge::NativeHistoryOptions;
 use tiffany_bridge::NativeSessionCommand as TiffanyBridgeNativeSessionCommand;
 use tiffany_bridge::NativeSessionRuntime as TiffanyNativeTranscriptRuntime;
 use tiffany_bridge::PendingVisibleOutput as TiffanyBridgePendingVisibleOutput;
+use tiffany_bridge::RoleProfileRow;
 use tiffany_bridge::VisibleOutputEvent as TiffanyBridgeVisibleOutputEvent;
 use tiffany_bridge::WorkerReadinessStatus as TiffanyWorkerReadinessStatus;
 use tiffany_bridge::continue_request;
 #[cfg(test)]
 use tiffany_bridge::continue_target_role;
 use tiffany_bridge::doctor_command_args;
+use tiffany_bridge::job_actions;
+use tiffany_bridge::job_state_summary;
 use tiffany_bridge::jobs_command_args;
 use tiffany_bridge::native_history_kind_matches;
+use tiffany_bridge::parse_job_summaries;
+use tiffany_bridge::parse_jobs_header_counts;
+use tiffany_bridge::parse_jobs_retry_handoff;
+use tiffany_bridge::parse_prefixed_field;
+use tiffany_bridge::parse_recovered_jobs_failed_count;
+use tiffany_bridge::parse_recovered_jobs_ids;
+use tiffany_bridge::parse_role_profile_rows;
 use tiffany_bridge::provider_command_args;
+use tiffany_bridge::retry_prompt_from_jobs_retry_output;
 use tiffany_bridge::roles_command_args;
 use tiffany_bridge::thread_command_args;
 use tiffany_event_format as event_format;
@@ -5183,24 +5195,6 @@ struct ThreadSummary {
     last: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct JobSummary {
-    id: String,
-    status: String,
-    prompt: String,
-    flow: Option<String>,
-    role: Option<String>,
-    task: Option<String>,
-    timing: Option<String>,
-    session: Option<String>,
-    thread: Option<String>,
-    native: Option<String>,
-    history: Option<String>,
-    next: Option<String>,
-    result: Option<String>,
-    error: Option<String>,
-}
-
 fn concise_roles_success(
     command_args: &[String],
     output: &std::process::Output,
@@ -5302,49 +5296,6 @@ fn role_profile_summary_lines(
     lines.push(next_line("/roles", "review active role bindings"));
     lines.push(next_line("/doctor", "verify provider/model/runtime wiring"));
     Some(lines)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RoleProfileRow {
-    role: String,
-    model: String,
-    runtime: String,
-    agent_teams: String,
-}
-
-fn parse_role_profile_rows(text: &str) -> Vec<RoleProfileRow> {
-    text.lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            let line = line.strip_prefix('✓')?.trim();
-            let mut parts = line.split_whitespace();
-            let role = parts.next()?.to_string();
-            let mut model = None;
-            let mut runtime = None;
-            let mut agent_teams = None;
-            for part in parts {
-                if let Some(value) = part.strip_prefix("model=") {
-                    model = Some(value.to_string());
-                } else if let Some(value) = part.strip_prefix("runtime=") {
-                    runtime = Some(value.to_string());
-                } else if let Some(value) = part.strip_prefix("agent_teams=") {
-                    agent_teams = Some(value.to_string());
-                }
-            }
-            Some(RoleProfileRow {
-                role,
-                model: model?,
-                runtime: runtime?,
-                agent_teams: agent_teams.unwrap_or_else(|| "false".to_string()),
-            })
-        })
-        .collect()
-}
-
-fn parse_prefixed_field<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-    text.lines()
-        .find_map(|line| line.trim().strip_prefix(prefix).map(str::trim))
-        .filter(|value| !value.is_empty())
 }
 
 fn role_profile_row_line(row: &RoleProfileRow) -> Line<'static> {
@@ -5523,12 +5474,6 @@ fn is_jobs_recover_command(command_args: &[String]) -> bool {
         && command_args.get(1).map(String::as_str) == Some("recover")
 }
 
-fn retry_prompt_from_jobs_retry_output(text: &str) -> Option<String> {
-    parse_prefixed_field(text, "retry prompt:")
-        .and_then(unescape_retry_prompt_from_cli)
-        .and_then(|prompt| nonempty_trimmed(&prompt).map(str::to_string))
-}
-
 fn jobs_recover_result_lines(text: &str) -> Option<Vec<Line<'static>>> {
     let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
     let header = lines.find(|line| *line == "Recovered stale jobs")?;
@@ -5570,58 +5515,6 @@ fn jobs_recover_result_lines(text: &str) -> Option<Vec<Line<'static>>> {
     }
     out.push(next_line("/jobs", "refresh persisted jobs"));
     Some(out)
-}
-
-fn parse_recovered_jobs_failed_count(detail: &str) -> Option<usize> {
-    let (_, rest) = detail.split_once("failed:")?;
-    rest.split_whitespace().next()?.parse().ok()
-}
-
-fn parse_recovered_jobs_ids(detail: &str) -> Vec<String> {
-    let Some((_, rest)) = detail.split_once("ids:") else {
-        return Vec::new();
-    };
-    rest.split(',')
-        .filter_map(|id| nonempty_trimmed(id).map(str::to_string))
-        .collect()
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct JobsRetryHandoff {
-    job_id: String,
-    prompt: String,
-    restored_prompt_lines: usize,
-}
-
-fn parse_jobs_retry_handoff(text: &str) -> Option<JobsRetryHandoff> {
-    let first = text
-        .lines()
-        .map(str::trim)
-        .find(|line| line.starts_with("Job ") && line.contains(" prepared for TUI retry"))?;
-    let mut parts = first.split_whitespace();
-    (parts.next()? == "Job").then_some(())?;
-    let job_id = parts.next()?.trim().to_string();
-    if job_id.is_empty() {
-        return None;
-    }
-
-    let status = parse_prefixed_field(text, "status:")?;
-    if !status.contains("current TUI input queue") {
-        return None;
-    }
-
-    let prompt = parse_prefixed_field(text, "prompt:")
-        .map(str::to_string)
-        .or_else(|| retry_prompt_from_jobs_retry_output(text).map(|prompt| one_line(&prompt)))?;
-    let restored_prompt_lines = retry_prompt_from_jobs_retry_output(text)
-        .map(|prompt| prompt.lines().count().max(1))
-        .unwrap_or(1);
-
-    Some(JobsRetryHandoff {
-        job_id,
-        prompt,
-        restored_prompt_lines,
-    })
 }
 
 fn jobs_retry_handoff_lines(text: &str) -> Option<Vec<Line<'static>>> {
@@ -5667,29 +5560,6 @@ fn jobs_retry_handoff_lines(text: &str) -> Option<Vec<Line<'static>>> {
         "review queued prompts before running",
     ));
     Some(lines)
-}
-
-fn unescape_retry_prompt_from_cli(value: &str) -> Option<String> {
-    let mut out = String::with_capacity(value.len());
-    let mut chars = value.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '\\' {
-            out.push(ch);
-            continue;
-        }
-        let escaped = chars.next()?;
-        match escaped {
-            '\\' => out.push('\\'),
-            'n' => out.push('\n'),
-            'r' => out.push('\r'),
-            't' => out.push('\t'),
-            other => {
-                out.push('\\');
-                out.push(other);
-            }
-        }
-    }
-    Some(out)
 }
 
 fn concise_continue_success(
@@ -6156,117 +6026,6 @@ fn jobs_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
     Some(lines)
 }
 
-fn parse_jobs_header_counts(text: &str) -> Option<(usize, usize)> {
-    text.lines().find_map(|line| {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("active:") {
-            return None;
-        }
-        let parts = trimmed.split_whitespace().collect::<Vec<_>>();
-        let active = parts
-            .windows(2)
-            .find(|window| window.first().copied() == Some("active:"))
-            .and_then(|window| window.get(1))
-            .and_then(|value| value.parse::<usize>().ok())?;
-        let shown = parts
-            .windows(2)
-            .find(|window| window.first().copied() == Some("shown:"))
-            .and_then(|window| window.get(1))
-            .and_then(|value| value.parse::<usize>().ok())?;
-        Some((active, shown))
-    })
-}
-
-fn parse_job_summaries(text: &str) -> Vec<JobSummary> {
-    let mut jobs = Vec::new();
-    let mut current: Option<JobSummary> = None;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty()
-            || trimmed == "Jobs"
-            || trimmed.starts_with("active:")
-            || trimmed.starts_with("Use `")
-            || trimmed.starts_with("Queue:")
-        {
-            continue;
-        }
-        if let Some(job) = parse_job_summary_line(trimmed) {
-            if let Some(current) = current.take() {
-                jobs.push(current);
-            }
-            current = Some(job);
-            continue;
-        }
-        if let Some(job) = current.as_mut() {
-            parse_job_meta_line_into(trimmed, job);
-        }
-    }
-    if let Some(current) = current {
-        jobs.push(current);
-    }
-    jobs
-}
-
-fn parse_job_summary_line(line: &str) -> Option<JobSummary> {
-    let (symbol, rest) = line.split_once(' ')?;
-    if !matches!(symbol, "✓" | "✗" | "●" | "↳" | "○" | "·") {
-        return None;
-    }
-    let mut parts = rest.split_whitespace();
-    let id = parts.next()?.trim().to_string();
-    let status = parts.next()?.trim().to_string();
-    if id.is_empty() || status.is_empty() {
-        return None;
-    }
-    let prompt = parts.collect::<Vec<_>>().join(" ");
-    Some(JobSummary {
-        id,
-        status,
-        prompt,
-        flow: None,
-        role: None,
-        task: None,
-        timing: None,
-        session: None,
-        thread: None,
-        native: None,
-        history: None,
-        next: None,
-        result: None,
-        error: None,
-    })
-}
-
-fn parse_job_meta_line_into(line: &str, job: &mut JobSummary) {
-    for segment in line
-        .split("  ")
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        let Some((key, value)) = segment.split_once(' ') else {
-            continue;
-        };
-        let value = value.trim();
-        if value.is_empty() {
-            continue;
-        }
-        match key {
-            "flow" => job.flow = Some(value.to_string()),
-            "role" => job.role = Some(value.to_string()),
-            "task" => job.task = Some(value.to_string()),
-            "timing" => job.timing = Some(value.to_string()),
-            "session" => job.session = Some(value.to_string()),
-            "thread" => job.thread = Some(value.to_string()),
-            "native" => job.native = Some(value.to_string()),
-            "history" => job.history = Some(value.to_string()),
-            "next" => job.next = Some(value.to_string()),
-            "error" => job.error = Some(event_format::humanize_jsonish(value, 220)),
-            "result" => job.result = Some(event_format::humanize_jsonish(value, 220)),
-            _ => {}
-        }
-    }
-}
-
 fn job_summary_card_lines(job: &JobSummary) -> Vec<Line<'static>> {
     let (symbol, color, status) = job_status_style(&job.status);
     let role = job.role.as_deref().unwrap_or("worker");
@@ -6307,131 +6066,6 @@ fn job_summary_card_lines(job: &JobSummary) -> Vec<Line<'static>> {
     }
     lines.push(session_card_actions_line(&job_actions(job)));
     lines
-}
-
-fn job_state_summary(job: &JobSummary) -> String {
-    match job.status.as_str() {
-        "queued" => "waiting in the Tiffany queue; run /queue run when ready".to_string(),
-        "running" => "active worker run; refresh with /jobs, inspect /process 200, or recover stale jobs with /jobs recover".to_string(),
-        "failed" => format!("needs attention; retry with /jobs retry {}", job.id),
-        "done" if job.native.as_deref().and_then(nonempty_trimmed).is_some() => {
-            "complete; native session is available for handoff".to_string()
-        }
-        "done" => "complete; result captured in Tiffany history".to_string(),
-        other if !other.trim().is_empty() => format!("saved with status {other}"),
-        _ => "saved job".to_string(),
-    }
-}
-
-fn job_actions(job: &JobSummary) -> Vec<String> {
-    let role = job.role.as_deref().and_then(nonempty_trimmed);
-    let show_job = format!("/jobs show {}", job.id);
-    let cancel_job = format!("/jobs cancel {}", job.id);
-    let mut actions = match job.status.as_str() {
-        "queued" => vec![
-            show_job,
-            cancel_job,
-            "/queue run".to_string(),
-            "/queue show".to_string(),
-        ],
-        "running" => vec![
-            show_job,
-            cancel_job,
-            "/jobs".to_string(),
-            "/process 200".to_string(),
-            "/jobs recover".to_string(),
-        ],
-        "failed" => vec![
-            show_job,
-            format!("/jobs retry {}", job.id),
-            "/process 200".to_string(),
-            "/jobs".to_string(),
-        ],
-        "done" => vec![show_job, "/jobs".to_string()],
-        "cancelled" | "removed" | "skipped" => {
-            vec![
-                show_job,
-                format!("/jobs retry {}", job.id),
-                "/jobs".to_string(),
-            ]
-        }
-        _ => vec![show_job, "/jobs".to_string()],
-    };
-    if let Some(role) = role {
-        match job.status.as_str() {
-            "done" => {
-                if job.native.as_deref().and_then(nonempty_trimmed).is_some() {
-                    push_unique_front_action(&mut actions, format!("/continue open {role}"));
-                    push_unique_action(&mut actions, format!("/thread export {role}"));
-                }
-                push_unique_action(&mut actions, format!("/thread {role}"));
-                push_unique_action(&mut actions, format!("/history role {role}"));
-            }
-            "failed" => {
-                push_unique_action(&mut actions, format!("/history role {role}"));
-                push_unique_action(&mut actions, format!("/thread {role}"));
-            }
-            "running" => {
-                push_unique_action(&mut actions, format!("/thread {role}"));
-                push_unique_action(&mut actions, format!("/history role {role}"));
-            }
-            _ => {
-                push_unique_action(&mut actions, format!("/thread {role}"));
-            }
-        }
-    } else if let Some(session) = job.session.as_deref().and_then(nonempty_trimmed) {
-        push_unique_action(&mut actions, format!("/history session {session}"));
-    }
-    if let Some(thread) = job.thread.as_deref().and_then(nonempty_trimmed) {
-        push_unique_action(&mut actions, format!("/history thread {thread}"));
-    }
-    if let Some(history) = job.history.as_deref().and_then(nonempty_trimmed) {
-        push_unique_action(&mut actions, history.to_string());
-    }
-    if let Some(next) = job
-        .next
-        .as_deref()
-        .and_then(tui_command_from_jobs_next_action)
-    {
-        push_unique_front_action(&mut actions, next);
-    }
-    actions
-}
-
-fn tui_command_from_jobs_next_action(next: &str) -> Option<String> {
-    let next = nonempty_trimmed(next)?;
-    if next.starts_with('/') {
-        return Some(next.to_string());
-    }
-    if let Some(command) = next.strip_prefix("open tiffany-loop and run ") {
-        return nonempty_trimmed(command).map(str::to_string);
-    }
-    if let Some(rest) = next.strip_prefix("orchestrator jobs retry ") {
-        let id = rest.split_whitespace().next()?;
-        return Some(format!("/jobs retry {id}"));
-    }
-    if let Some(rest) = next.strip_prefix("orchestrator thread show ") {
-        let role = nonempty_trimmed(rest)?;
-        return Some(format!("/thread {role}"));
-    }
-    if let Some(rest) = next.strip_prefix("orchestrator sessions show ") {
-        let id = nonempty_trimmed(rest)?;
-        return Some(format!("/history session {id}"));
-    }
-    None
-}
-
-fn push_unique_action(actions: &mut Vec<String>, action: String) {
-    if !actions.iter().any(|existing| existing == &action) {
-        actions.push(action);
-    }
-}
-
-fn push_unique_front_action(actions: &mut Vec<String>, action: String) {
-    if let Some(index) = actions.iter().position(|existing| existing == &action) {
-        actions.remove(index);
-    }
-    actions.insert(0, action);
 }
 
 fn job_status_style(status: &str) -> (&'static str, Color, &'static str) {

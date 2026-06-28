@@ -5,6 +5,7 @@ mod command_args;
 mod context_prompt;
 mod native_history;
 mod native_session;
+mod output_parse;
 mod visible_output;
 
 pub use command_args::{
@@ -22,6 +23,12 @@ pub use native_session::{
     gemini_project_hash, gemini_session_json_path_in_home, gemini_session_message_count,
     native_session_command_is_claude, native_session_command_is_codex,
     native_session_command_is_gemini, native_session_path_in_home,
+};
+pub use output_parse::{
+    JobSummary, JobsRetryHandoff, RoleProfileRow, job_actions, job_state_summary,
+    parse_job_summaries, parse_jobs_header_counts, parse_jobs_retry_handoff, parse_prefixed_field,
+    parse_recovered_jobs_failed_count, parse_recovered_jobs_ids, parse_role_profile_rows,
+    retry_prompt_from_jobs_retry_output, unescape_retry_prompt_from_cli,
 };
 pub use visible_output::{
     PendingVisibleOutput, VisibleOutputEvent, format_tiffany_summary_style,

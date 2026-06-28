@@ -351,3 +351,28 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue F5+ with another pure helper slice, likely command-output summary helpers or native-history render text shaping.
+
+## F5+ — command-output parsing extraction completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Extract command output parsing into tiffany bridge`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge output_parse --quiet` — green, 4 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 32 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_profile_summary_lines --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_summary_lines --lib --quiet` — green, 4 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_retry --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Added `tiffany-bridge/src/output_parse.rs` for pure role profile row parsing, jobs retry prompt/handoff parsing, recovered jobs detail parsing, and persisted job summary/action shaping.
+  - `codex-tui` now keeps Ratatui color/styling and card-line rendering local while delegating output parsing and action derivation to the bridge.
+  - `tiffany_orchestrator.rs` is now 16,736 lines.
+  - No push and no release.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue F5+ with another pure helper slice, likely provider/role/thread output parsers or native-history render text shaping.
