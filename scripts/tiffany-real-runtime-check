@@ -467,6 +467,41 @@ assert_log_not_contains() {
   fi
 }
 
+extract_log_field() {
+  local label="$1"
+  local field="$2"
+  local log="$tmp_root/$label.log"
+  awk -v field="$field" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      prefix = field ":"
+      if (index(line, prefix) == 1) {
+        value = substr(line, length(prefix) + 1)
+        sub(/^[[:space:]]+/, "", value)
+        sub(/[[:space:]]+$/, "", value)
+        print value
+        exit
+      }
+    }
+  ' "$log"
+}
+
+require_log_field() {
+  local label="$1"
+  local field="$2"
+  local value
+  value="$(extract_log_field "$label" "$field")"
+  if [[ -z "$value" ]]; then
+    echo "$label output did not include field: $field" >&2
+    echo "---- $label log ----" >&2
+    cat "$tmp_root/$label.log" >&2
+    echo "---- end $label log ----" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
 run_claude() {
   local binary="$1"
   local prompt="Reply with exactly: Tiffany real Claude runtime OK"
@@ -524,6 +559,20 @@ resolve_orchestrator_binary() {
       return 0
     fi
   done
+
+  for candidate in \
+    "$repo_dir/target/dev-small/tiffany-loop" \
+    "$repo_dir/target/debug/tiffany-loop" \
+    "$repo_dir/target/tiffany-dist/tiffany-loop"
+  do
+    if [[ -x "$candidate" ]]; then
+      mkdir -p "$tmp_root/bin"
+      ln -sf "$candidate" "$tmp_root/bin/orchestrator"
+      printf '%s\n' "$tmp_root/bin/orchestrator"
+      return 0
+    fi
+  done
+
   command -v orchestrator 2>/dev/null
 }
 
@@ -640,40 +689,215 @@ run_adapter_command() {
   assert_log_has_text "$label"
 }
 
-inspect_adapter_role() {
+assert_adapter_thread_detail() {
+  local label="$1"
+  local role="$2"
+  assert_log_contains "$label" "role: $role"
+  assert_log_contains "$label" "native session:"
+  assert_log_not_contains "$label" "native session: none"
+  assert_log_contains "$label" "native resume:"
+  assert_log_contains "$label" "native handoff:"
+  assert_log_contains "$label" "TUI resume: /continue open $role"
+  case "$role" in
+    worker-cc)
+      assert_log_contains "$label" "claude"
+      assert_log_contains "$label" "--resume"
+      ;;
+    worker-codex)
+      assert_log_contains "$label" "codex"
+      assert_log_contains "$label" " resume "
+      ;;
+    worker-gemini)
+      assert_log_contains "$label" "gemini"
+      assert_log_contains "$label" "--resume"
+      ;;
+  esac
+}
+
+capture_adapter_role_state() {
+  local orchestrator_bin="$1"
+  local config="$2"
+  local workdir="$3"
+  local role="$4"
+  local suffix="$5"
+  local label="thread-$role-$suffix"
+  run_adapter_command "$label" "$role" "$orchestrator_bin" "$config" "$workdir" thread show "$role"
+  assert_adapter_thread_detail "$label" "$role"
+
+  local tiffany_thread
+  local native_session
+  tiffany_thread="$(require_log_field "$label" "Tiffany thread")"
+  native_session="$(require_log_field "$label" "native session")"
+  printf '%s|%s\n' "$tiffany_thread" "$native_session"
+}
+
+assert_same_adapter_state() {
+  local role="$1"
+  local first="$2"
+  local second="$3"
+  local first_thread="${first%%|*}"
+  local first_native="${first#*|}"
+  local second_thread="${second%%|*}"
+  local second_native="${second#*|}"
+
+  if [[ "$first_thread" != "$second_thread" ]]; then
+    echo "$role did not reuse the same Tiffany worker thread" >&2
+    echo "first:  $first_thread" >&2
+    echo "second: $second_thread" >&2
+    return 1
+  fi
+
+  if [[ "$first_native" != "$second_native" ]]; then
+    echo "$role did not reuse the same native session" >&2
+    echo "first:  $first_native" >&2
+    echo "second: $second_native" >&2
+    return 1
+  fi
+}
+
+write_adapter_native_history_file() {
+  local path="$1"
+  local workdir="$2"
+  local role="$3"
+  local state="$4"
+  local expected="$5"
+  local conversation_id="$6"
+  local tiffany_thread="${state%%|*}"
+  local native_session="${state#*|}"
+  local canonical_workdir
+  canonical_workdir="$(cd "$workdir" && pwd -P)"
+  cat >"$path" <<EOF
+{
+  "conversations": [
+    {
+      "id": "$conversation_id",
+      "cwd": "$canonical_workdir",
+      "created_at_unix": 1,
+      "updated_at_unix": 2,
+      "turns": [
+        {
+          "user_prompt": "real runtime continuity check for $role",
+          "result": "$expected",
+          "captured_at_unix": 2,
+          "events": [
+            {
+              "role": "worker",
+              "status": "output",
+              "title": "worker answer · $role",
+              "kind": "answer",
+              "content": "$expected",
+              "agent": "$role",
+              "worker_role": "$role",
+              "task_id": "real-runtime-check-$role",
+              "worker_thread_id": "$tiffany_thread",
+              "native_session_id": "$native_session"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+EOF
+}
+
+existing_native_conversation_id() {
+  local orchestrator_bin="$1"
+  local config="$2"
+  local workdir="$3"
+  local role="$4"
+  local label="native-history-existing-$role"
+  run_adapter_command \
+    "$label" \
+    "$role" \
+    "$orchestrator_bin" \
+    "$config" \
+    "$workdir" \
+    sessions native-history --format json
+  sed -nE 's/^[[:space:]]*"id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$tmp_root/$label.log" | head -1
+}
+
+inspect_adapter_native_history() {
+  local orchestrator_bin="$1"
+  local config="$2"
+  local workdir="$3"
+  local role="$4"
+  local state="$5"
+  local expected="$6"
+  local tiffany_thread="${state%%|*}"
+  local native_session="${state#*|}"
+  local history_path="$tmp_root/native-history-$role.json"
+  local conversation_id
+  conversation_id="$(existing_native_conversation_id "$orchestrator_bin" "$config" "$workdir" "$role")"
+  if [[ -z "$conversation_id" ]]; then
+    conversation_id="real-runtime-check-native-history"
+  fi
+
+  write_adapter_native_history_file "$history_path" "$workdir" "$role" "$state" "$expected" "$conversation_id"
+  run_adapter_command \
+    "native-import-$role" \
+    "$role" \
+    "$orchestrator_bin" \
+    "$config" \
+    "$workdir" \
+    sessions import-native --path "$history_path"
+  assert_log_contains "native-import-$role" "imported Tiffany native history"
+  assert_log_contains "native-import-$role" "conversations: 1"
+  assert_log_contains "native-import-$role" "turns: 1"
+  assert_log_contains "native-import-$role" "events: 1"
+
+  run_adapter_command \
+    "native-history-$role" \
+    "$role" \
+    "$orchestrator_bin" \
+    "$config" \
+    "$workdir" \
+    sessions native-history --format text --role "$role"
+  assert_log_contains "native-history-$role" "Native history"
+  assert_log_contains "native-history-$role" "filter: role=$role"
+  assert_log_contains "native-history-$role" "events: 1"
+  assert_log_contains "native-history-$role" "$expected"
+  assert_log_contains "native-history-$role" "worker answer · $role"
+  assert_log_contains "native-history-$role" "thread: $tiffany_thread"
+  assert_log_contains "native-history-$role" "native: $native_session"
+  assert_log_contains "native-history-$role" "tiffany-loop /continue open $role"
+}
+
+inspect_adapter_jobs() {
   local orchestrator_bin="$1"
   local config="$2"
   local workdir="$3"
   local role="$4"
   local expected="$5"
-  run_adapter_command "thread-$role" "$role" "$orchestrator_bin" "$config" "$workdir" thread show "$role"
-  assert_log_contains "thread-$role" "role: $role"
-  assert_log_contains "thread-$role" "native session:"
-  assert_log_not_contains "thread-$role" "native session: none"
-  assert_log_contains "thread-$role" "native resume:"
-  assert_log_contains "thread-$role" "native handoff:"
-  assert_log_contains "thread-$role" "TUI resume: /continue open $role"
-  case "$role" in
-    worker-cc)
-      assert_log_contains "thread-$role" "claude"
-      assert_log_contains "thread-$role" "--resume"
-      ;;
-    worker-codex)
-      assert_log_contains "thread-$role" "codex"
-      assert_log_contains "thread-$role" " resume "
-      ;;
-    worker-gemini)
-      assert_log_contains "thread-$role" "gemini"
-      assert_log_contains "thread-$role" "--resume"
-      ;;
-  esac
-
   run_adapter_command "jobs-$role" "$role" "$orchestrator_bin" "$config" "$workdir" jobs --limit 10
   assert_log_contains "jobs-$role" "role $role"
   assert_log_contains "jobs-$role" "session "
   assert_log_contains "jobs-$role" "native "
   assert_log_contains "jobs-$role" "result "
   assert_log_contains "jobs-$role" "$expected"
+
+  local export_path="$tmp_root/thread-export-$role.md"
+  run_adapter_command \
+    "thread-export-$role" \
+    "$role" \
+    "$orchestrator_bin" \
+    "$config" \
+    "$workdir" \
+    thread export "$role" --out "$export_path"
+  assert_log_contains "thread-export-$role" "Worker thread session exported"
+  assert_log_contains "thread-export-$role" "role: $role"
+  assert_log_contains "thread-export-$role" "target: $export_path"
+  if [[ ! -s "$export_path" ]]; then
+    echo "thread export did not write a handoff file: $export_path" >&2
+    return 1
+  fi
+  if ! grep -F -- "$expected" "$export_path" >/dev/null; then
+    echo "thread export handoff file did not include expected worker result: $expected" >&2
+    echo "---- $export_path ----" >&2
+    cat "$export_path" >&2
+    echo "---- end $export_path ----" >&2
+    return 1
+  fi
 }
 
 if [[ "$mode" == "self-test" ]]; then
@@ -736,6 +960,7 @@ if [[ "$mode" == "adapter-run" ]]; then
       first \
       "Reply with exactly: $expected" \
       "$expected"
+    first_state="$(capture_adapter_role_state "$orchestrator_bin" "$config" "$workdir" worker-cc after-first)"
     run_adapter_worker \
       "$orchestrator_bin" \
       "$config" \
@@ -744,7 +969,10 @@ if [[ "$mode" == "adapter-run" ]]; then
       second \
       "Reply with exactly: $expected" \
       "$expected"
-    inspect_adapter_role "$orchestrator_bin" "$config" "$workdir" worker-cc "$expected"
+    second_state="$(capture_adapter_role_state "$orchestrator_bin" "$config" "$workdir" worker-cc after-second)"
+    assert_same_adapter_state worker-cc "$first_state" "$second_state"
+    inspect_adapter_jobs "$orchestrator_bin" "$config" "$workdir" worker-cc "$expected"
+    inspect_adapter_native_history "$orchestrator_bin" "$config" "$workdir" worker-cc "$second_state" "$expected"
     ran=1
   fi
   if need_runtime codex && [[ -n "$codex_bin" ]]; then
@@ -757,6 +985,7 @@ if [[ "$mode" == "adapter-run" ]]; then
       first \
       "Reply with exactly: $expected" \
       "$expected"
+    first_state="$(capture_adapter_role_state "$orchestrator_bin" "$config" "$workdir" worker-codex after-first)"
     run_adapter_worker \
       "$orchestrator_bin" \
       "$config" \
@@ -765,7 +994,10 @@ if [[ "$mode" == "adapter-run" ]]; then
       second \
       "Reply with exactly: $expected" \
       "$expected"
-    inspect_adapter_role "$orchestrator_bin" "$config" "$workdir" worker-codex "$expected"
+    second_state="$(capture_adapter_role_state "$orchestrator_bin" "$config" "$workdir" worker-codex after-second)"
+    assert_same_adapter_state worker-codex "$first_state" "$second_state"
+    inspect_adapter_jobs "$orchestrator_bin" "$config" "$workdir" worker-codex "$expected"
+    inspect_adapter_native_history "$orchestrator_bin" "$config" "$workdir" worker-codex "$second_state" "$expected"
     ran=1
   fi
   if need_runtime gemini && [[ -n "$gemini_bin" ]]; then
@@ -778,6 +1010,7 @@ if [[ "$mode" == "adapter-run" ]]; then
       first \
       "Reply with exactly: $expected" \
       "$expected"
+    first_state="$(capture_adapter_role_state "$orchestrator_bin" "$config" "$workdir" worker-gemini after-first)"
     run_adapter_worker \
       "$orchestrator_bin" \
       "$config" \
@@ -786,7 +1019,10 @@ if [[ "$mode" == "adapter-run" ]]; then
       second \
       "Reply with exactly: $expected" \
       "$expected"
-    inspect_adapter_role "$orchestrator_bin" "$config" "$workdir" worker-gemini "$expected"
+    second_state="$(capture_adapter_role_state "$orchestrator_bin" "$config" "$workdir" worker-gemini after-second)"
+    assert_same_adapter_state worker-gemini "$first_state" "$second_state"
+    inspect_adapter_jobs "$orchestrator_bin" "$config" "$workdir" worker-gemini "$expected"
+    inspect_adapter_native_history "$orchestrator_bin" "$config" "$workdir" worker-gemini "$second_state" "$expected"
     ran=1
   fi
 

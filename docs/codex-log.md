@@ -609,3 +609,33 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - Aligned CI workflow targeted `codex-tui` commands with release preflight by passing `--lib`.
 - Blockers / questions for Claude:
   - Local full preflight is green, but the failed remote `v0.2` tag still points at `1211d9b`. Do not move or force-push the tag until the user chooses force-move `v0.2` vs cut `v0.2.1`.
+
+## M3 real-runtime continuity gate tightened — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `bash -n scripts/tiffany-real-runtime-check` — green.
+  - `./scripts/tiffany-real-runtime-check --self-test` — green.
+  - `./scripts/tiffany-real-runtime-check --check --runtime all` — green; detected Claude Code, Codex, Gemini binaries and existing transcript stores.
+  - `./scripts/tiffany-check-script-helpers` — green.
+  - `git diff --check` — green.
+  - `claude --version && ./scripts/tiffany-real-runtime-check --adapter-run --runtime claude` — green with Claude Code `2.1.193`.
+  - `./scripts/tiffany-real-runtime-check --adapter-run --runtime codex` — green.
+  - `./scripts/tiffany-real-runtime-check --adapter-run --runtime gemini` — green.
+  - `./scripts/tiffany-real-runtime-check --adapter-run --runtime all` — green; covered Claude Code, Codex, and Gemini in one isolated state.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+- Decisions:
+  - Strengthened `scripts/tiffany-real-runtime-check --adapter-run`: after the first real adapter run it now captures `/thread show <role>`, after the second same-role run it captures the thread again, and it fails if the Tiffany worker thread id or native session id changed.
+  - Kept the existing `/thread` checks for native resume, native handoff, `/continue open <role>`, and persisted job/native/result output.
+  - Added `/thread export <role> --out ...` verification so the real-runtime gate proves a handoff file can be written and includes the worker result.
+  - Added native history import/query verification: the gate writes a minimal Tiffany native history file using the current worker thread/native session, runs `orchestrator sessions import-native --path ...`, then checks `orchestrator sessions native-history --format text --role <role>` returns the worker result, thread id, native id, and `/continue open <role>` hint.
+  - Made the script compatible with the single multi-call binary by creating a temporary `orchestrator` symlink to a local `tiffany-loop` build when no standalone `orchestrator` path exists; this preserves argv[0] runtime dispatch.
+  - Updated README, README.zh-CN, and `docs/engineering-plan.md` to describe the stronger adapter-run gate.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - M3 is improved but not complete. Remaining proof needed: `/continue open <role>` launching an interactive native session from the TUI path.
+- Next:
+  - Add a `/continue open <role>` check that exercises the native TUI handoff path without hanging CI, likely by using a fake PTY/runtime shim for interaction semantics plus keeping the real-runtime adapter continuity gate for native session proof.

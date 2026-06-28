@@ -393,6 +393,14 @@ fake-runtime proves nothing about real handoff, so this gate is mandatory):
 ./scripts/tiffany-real-runtime-check --adapter-run --runtime all
 ```
 
+The adapter gate runs two same-role prompts per selected native runtime and then
+asserts that the second run keeps the same Tiffany worker thread and the same
+native session id while `/thread` still exposes native resume, native handoff,
+`/continue open <role>` actions, and `/thread export <role>` can write a
+handoff file containing the worker result. It also imports a Tiffany native
+history file into the session DB and verifies the CLI `/history` query path via
+`orchestrator sessions native-history --format text --role <role>`.
+
 ## Milestone Status
 
 Status is tracked against milestone acceptance criteria, not a percentage.
@@ -406,8 +414,11 @@ before any release tag.
   polish; `/doctor` one-line fixes incomplete.
 - M2 Execution Display — partial. Worker waterfall de-duplication and JSON
   humanization still needed.
-- M3 Session Continuity — partial. Real-runtime handoff across restarts
-  unverified (now a required gate).
+- M3 Session Continuity — partial. Real-runtime adapter continuity now verifies
+  same-role Tiffany/native session reuse for Claude Code, Codex, and Gemini
+  locally, checks `/thread export` handoff output, and proves native history can
+  import into/query from the session DB; `/continue open` interactive recovery
+  still needs scripted proof.
 - M4 Queue/Background Jobs — partial. `/jobs` and `/queue` visual states for
   paused/retry/recover still needed.
 - M5 Release/Open-Source — partial. Milestone-based versioning not enforced;

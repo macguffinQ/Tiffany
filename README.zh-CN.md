@@ -125,7 +125,7 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-build-time-gate --target default -- ./scripts/tiffany-build --fast-release --locked`：记录完整 multi-call release 构建耗时，超过 `scripts/tiffany-build-time-baselines.tsv` 中的基线阈值就失败。CI 对 release asset 也使用同一个 gate；只有明确重校准阈值时才设置 `TIFFANY_BUILD_TIME_THRESHOLD_PERCENT`。
 - `./scripts/tiffany-e2e-fake-runtime [--bin-dir DIR]`：无网络 e2e，用 fake Claude Code CLI 跑 planner/critic/worker/reviewer，并验证 session/thread/history 持久化。
 - `./scripts/tiffany-e2e-multi-runtime [--bin-dir DIR]`：无网络 e2e，用 fake Codex 和 Gemini worker 跑真实 adapter，并验证同角色 native session 复用。
-- `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]`：可选真实 CLI 检查。默认模式不消耗额度，会报告本机 binary、model/auth 预检线索、原生 transcript store、orchestrator binary 和可复制下一步命令；`--run` 直接发送很小的原生 prompt，`--adapter-run` 通过临时 Tiffany 状态执行 `orchestrator events --worker ...` 检查 adapter 路径。两种运行模式都可能消耗模型额度。
+- `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]`：可选真实 CLI 检查。默认模式不消耗额度，会报告本机 binary、model/auth 预检线索、原生 transcript store、orchestrator binary 和可复制下一步命令；`--run` 直接发送很小的原生 prompt，`--adapter-run` 通过临时 Tiffany 状态执行 `orchestrator events --worker ...` 检查 adapter 路径，并验证第二次同角色运行复用同一个 Tiffany worker thread / native session，`/thread export` 能写出包含 worker 结果的 handoff 文件，且 native history 能导入并从 session DB 查询。两种运行模式都可能消耗模型额度。
 - `./scripts/tiffany-check-examples`：只运行仓库内示例项目测试。
 - `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]`：运行汇总后的发布前检查；打 tag 前使用 `--full --tag vX.Y.Z`。带 tag 的检查默认有 24 小时发版冷却；只有安装损坏、启动失败、安全修复等紧急情况才设置 `TIFFANY_RELEASE_ALLOW_FREQUENT=1` 覆盖。
 - `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]`：根据已发布 release asset 和源码包 checksum 生成 Homebrew tap 公式。
@@ -392,7 +392,7 @@ behavior:
 | `./scripts/tiffany-slim-smoke` | 验证 runtime-only no-TUI multi-call binary |
 | `./scripts/tiffany-codex-tui-lib-test` | 串行运行完整 `codex-tui --lib` 测试 |
 | `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |
-| `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]` | 可选真实 native CLI/Tiffany adapter 检查；默认是不消耗额度的 binary/model/auth/history/next command 预检 |
+| `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]` | 可选真实 native CLI/Tiffany adapter 检查；默认不消耗额度，`--adapter-run` 验证同角色 Tiffany/native session 复用、thread export 和 native-history DB 查询 |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | 执行汇总后的本地发布前检查：format、clippy、测试、示例、审计；full 模式再跑 dist 检查 |
 | `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]` | 为已发布版本生成并可选提交/推送 Homebrew tap 公式 |
 | `./scripts/tiffany-post-release-check --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--skip-install]` | 验证 release asset、tap 公式 checksum、安装版本、doctor 和 `brew test` |
