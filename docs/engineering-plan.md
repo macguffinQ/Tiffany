@@ -341,18 +341,19 @@ Acceptance:
 
 ## Near-Term Order
 
-1. **Foundation first.** Commit and push the unpushed and uncommitted work;
-   write `tiffany-ui/UPSTREAM.md` (frozen commit plus owned-file list); decide
-   and implement the single multi-call binary.
-2. Begin decomposing `tiffany_orchestrator.rs` into the `tiffany-bridge` crate.
-3. Finish role/provider/session display integration in the native TUI.
-4. Tighten worker waterfall de-duplication and JSON humanization.
-5. Add real-runtime resume checks for Claude Code, Codex, and Gemini across
-   restart and handoff paths (required for M3).
-6. Improve `/jobs` and `/queue` visual states for paused/running/retry/recover.
-7. Update README and README.zh-CN around the current install and setup flow.
-8. Cut `v0.2` (M0) only after the full preflight passes; stop `0.1.x` feature
-   releases.
+1. **Hold external release decisions.** Local M0 gates are green, but the failed
+   remote `v0.2` tag still points at the older commit. Do not move the tag or
+   push a replacement release until the user chooses force-move `v0.2` versus
+   cut `v0.2.1`.
+2. Tighten worker waterfall de-duplication and JSON humanization.
+3. Finish role/provider/session display polish in the native TUI.
+4. Add a future fake-PTY or manual-smoke path for `/continue open <role>` if
+   full interactive handoff needs automated evidence beyond the current shell
+   execution seam.
+5. Improve `/jobs` and `/queue` visual states for paused/running/retry/recover.
+6. Keep README and README.zh-CN aligned with the current install and setup flow.
+7. Continue small `tiffany-bridge` extractions only when they directly unblock
+   M2/M3/M4; broad extraction is paused.
 
 ## Definition Of Done
 
@@ -408,8 +409,11 @@ Markers: done, partial, not started. These are self-reported from the Current
 State section above and must be re-confirmed by running the Validation Gates
 before any release tag.
 
-- M0 Stabilize Shell — partial. Single multi-call binary not yet implemented;
-  `tiffany-ui/UPSTREAM.md` exists, but the exact upstream commit is still TODO.
+- M0 Stabilize Shell — mostly done locally. The single multi-call binary,
+  installed aliases, runtime-only slim build, upstream-update suppression, and
+  `~/.tiffany` config isolation are verified locally; the exact upstream commit
+  in `tiffany-ui/UPSTREAM.md` is still TODO, and external `v0.2` release/tag
+  handling remains on hold pending user decision.
 - M1 Provider/Role Setup — partial. `/role` and `/provider` flows need operator
   polish; `/doctor` one-line fixes incomplete.
 - M2 Execution Display — partial. Worker waterfall de-duplication and JSON

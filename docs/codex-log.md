@@ -656,3 +656,19 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - Full interactive PTY behavior is still best validated manually or with a future fake PTY shim; current automated coverage now proves parsing, event emission, shell execution, return capture, thread export, and native-history DB query.
 - Next:
   - Continue M2/M3 hardening: either add fake PTY coverage for `/continue open` return behavior, or switch back to worker waterfall de-dup/noise cleanup.
+
+## Engineering plan status refreshed — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `./scripts/tiffany-install-smoke --smoke` — green; verified `tiffany-loop`, `orchestrator`, and `tiffany` aliases from `target/dev-small`.
+  - `./scripts/tiffany-slim-smoke --quiet` — green; verified runtime-only no-TUI multi-call binary under `target/tiffany-slim/dev-small`.
+- Decisions:
+  - Updated `docs/engineering-plan.md` Near-Term Order so it no longer asks Codex to implement the already-landed single multi-call binary.
+  - Updated M0 status from stale "single multi-call binary not yet implemented" to "mostly done locally"; kept the remaining caveats explicit: exact upstream commit TODO and external `v0.2` release/tag handling still blocked on user decision.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - None for the status refresh.
+- Next:
+  - Continue with M2 worker waterfall de-duplication / JSON humanization.
