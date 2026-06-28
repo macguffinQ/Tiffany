@@ -161,6 +161,7 @@ impl TiffanyOrchestratorCommand {
             extra_args: self.event_args(),
             config_path: self.config.clone(),
             context_turn_count: 0,
+            worker_scope: String::new(),
         }
     }
 
