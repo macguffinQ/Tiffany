@@ -672,3 +672,22 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - None for the status refresh.
 - Next:
   - Continue with M2 worker waterfall de-duplication / JSON humanization.
+
+## M2 question waterfall dedupe regression covered — 2026-06-29
+
+- Commits:
+  - this commit: `Cover question waterfall dedupe`
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui bridge_state_dedupes_question_tool_call_and_error --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Added a BridgeState-level regression test for the visible AskUserQuestion path so a tool-call event plus the matching `tool error: Answer questions?` event produces one human waterfall prompt, not duplicated raw wrapper lines.
+  - Verified the normal view keeps the actionable `/continue open worker-cc` hint while hiding raw `AskUserQuestion` and `tool error` text.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M2 by adding more focused coverage for long worker tool runs: JSON reviewer/planner leakage, duplicate assistant/tool-result chunks, and final-answer completeness.

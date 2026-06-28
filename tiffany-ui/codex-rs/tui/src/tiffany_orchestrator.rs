@@ -13424,6 +13424,37 @@ mod tests {
     }
 
     #[test]
+    fn bridge_state_dedupes_question_tool_call_and_error() {
+        let base = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            ..worker_output_event("worker output", "claude-code", "placeholder")
+        };
+        let call = TiffanyProgressEvent {
+            event_kind: Some("tool_use".to_string()),
+            content: Some("claude-code tool_use: tool AskUserQuestion".to_string()),
+            ..base.clone()
+        };
+        let error = TiffanyProgressEvent {
+            event_kind: Some("tool_result".to_string()),
+            content: Some("claude-code tool_result: tool error: Answer questions?".to_string()),
+            ..base
+        };
+
+        let cells = bridge_history_cells([call, error]);
+        let text = cells
+            .iter()
+            .map(|cell| cell.join("\n"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!(text.matches("waiting for user input: Answer questions?").count(), 1);
+        assert!(text.contains("next  /continue open worker-cc"));
+        assert!(!text.contains("tool error: Answer questions?"));
+        assert!(!text.contains("AskUserQuestion"));
+    }
+
+    #[test]
     fn bridge_state_keeps_same_tool_result_text_for_different_tool_calls() {
         let base = TiffanyProgressEvent {
             worker_role: Some("worker-cc".to_string()),
