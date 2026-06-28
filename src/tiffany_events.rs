@@ -6,6 +6,7 @@ use std::collections::HashSet;
 const TEXT_OUTPUT_SUMMARY_MAX_CHARS: usize = 360;
 const COMPACT_OUTPUT_SUMMARY_MAX_CHARS: usize = 180;
 const FULL_MESSAGE_STREAM_MAX_CHARS: usize = usize::MAX;
+const OUTPUT_DEDUPE_KEY_MAX_CHARS: usize = FULL_MESSAGE_STREAM_MAX_CHARS;
 
 #[derive(Debug, Serialize)]
 pub struct TiffanyProgressEvent {
@@ -35,6 +36,8 @@ pub struct TiffanyProgressEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub task_prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -56,6 +59,12 @@ pub struct TiffanyProgressEvent {
     pub route_reason_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flow_steps: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_action: Option<String>,
 }
 
 impl From<RunProgress> for TiffanyProgressEvent {
@@ -177,20 +186,59 @@ impl From<RunProgress> for TiffanyProgressEvent {
                     ),
                 )
             },
+            RunProgress::WorkerThreadWaiting {
+                task_id,
+                role,
+                thread_id,
+                native_session_id,
+            } => TiffanyProgressEvent {
+                task_id: Some(task_id.to_string()),
+                worker_role: Some(role.clone()),
+                worker_thread_id: Some(thread_id.to_string()),
+                native_session_id,
+                ..progress_event(
+                    "worker",
+                    "running",
+                    format!("{role} waiting for worker session"),
+                )
+            },
             RunProgress::WorkerOutput {
                 task_id,
                 agent,
                 role,
                 event_kind,
                 content,
-            } => TiffanyProgressEvent {
-                task_id: Some(task_id.to_string()),
-                agent: Some(agent),
-                worker_role: Some(role.clone()),
-                event_kind: Some(event_kind),
-                content: Some(content),
-                ..progress_event("worker", "output", format!("{role} output"))
-            },
+            } => {
+                let mut event = progress_event("worker", "output", format!("{role} output"));
+                event.task_id = Some(task_id.to_string());
+                event.agent = Some(agent);
+                event.worker_role = Some(role.clone());
+                event.event_kind = Some(event_kind);
+                add_failure_hint(&mut event, &content);
+                event.content = Some(content);
+                event
+            }
+            RunProgress::WorkerRecovery {
+                task_id,
+                agent,
+                role,
+                thread_id,
+                native_session_id,
+                recovery,
+                content,
+            } => {
+                let mut event = progress_event("worker", "output", format!("{role} recovery"));
+                event.task_id = Some(task_id.to_string());
+                event.agent = Some(agent);
+                event.worker_role = Some(role);
+                event.worker_thread_id = Some(thread_id.to_string());
+                event.native_session_id = native_session_id;
+                event.event_kind = Some("status".to_string());
+                event.recovery = Some(recovery);
+                add_failure_hint(&mut event, &content);
+                event.content = Some(content);
+                event
+            }
             RunProgress::RoleOutput { role, content } => {
                 let role = match role.as_str() {
                     "planner" => "planner",
@@ -271,7 +319,11 @@ impl From<RunProgress> for TiffanyProgressEvent {
                     format!("done - {task_count} worker run(s)"),
                 )
             },
-            RunProgress::Failed(message) => progress_event("orchestrator", "failed", message),
+            RunProgress::Failed(message) => {
+                let mut event = progress_event("orchestrator", "failed", message.clone());
+                add_failure_hint(&mut event, &message);
+                event
+            }
         }
     }
 }
@@ -296,6 +348,7 @@ fn progress_event(
         native_session_id: None,
         reused: None,
         event_kind: None,
+        recovery: None,
         task_prompt: None,
         content: None,
         approved: None,
@@ -307,7 +360,20 @@ fn progress_event(
         route_label: None,
         route_reason_label: None,
         flow_steps: None,
+        failure_category: None,
+        failure_title: None,
+        failure_action: None,
     }
+}
+
+fn add_failure_hint(event: &mut TiffanyProgressEvent, content: &str) {
+    let Some(hint) = agent_events::agent_failure_hint(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)
+    else {
+        return;
+    };
+    event.failure_category = Some(format!("{:?}", hint.category).to_ascii_lowercase());
+    event.failure_title = Some(hint.title().to_string());
+    event.failure_action = Some(hint.action().to_string());
 }
 
 fn route_event(
@@ -361,10 +427,24 @@ impl TiffanyTextProgressFormatter {
                 event_kind: _,
                 content,
             } => {
-                let output =
-                    visible_non_final_agent_output(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
+                let output = visible_non_final_agent_output(content, OUTPUT_DEDUPE_KEY_MAX_CHARS)?;
                 Some(format!(
                     "worker:{}:{agent}:{role}:{}",
+                    &task_id.to_string()[..8],
+                    output.dedupe_key
+                ))
+            }
+            RunProgress::WorkerRecovery {
+                task_id,
+                agent,
+                role,
+                recovery,
+                content,
+                ..
+            } => {
+                let output = visible_non_final_agent_output(content, OUTPUT_DEDUPE_KEY_MAX_CHARS)?;
+                Some(format!(
+                    "worker-recovery:{}:{agent}:{role}:{recovery}:{}",
                     &task_id.to_string()[..8],
                     output.dedupe_key
                 ))
@@ -377,8 +457,7 @@ impl TiffanyTextProgressFormatter {
                 ) {
                     return None;
                 }
-                let output =
-                    visible_non_final_agent_output(content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)?;
+                let output = visible_non_final_agent_output(content, OUTPUT_DEDUPE_KEY_MAX_CHARS)?;
                 Some(format!("role:{role}:{}", output.dedupe_key))
             }
             _ => None,
@@ -459,11 +538,27 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
         } => {
             let native = native_session_id
                 .as_deref()
-                .map(|id| format!(" · native {}", short_str(id)))
+                .map(|id| format!(" · native {}", id.trim()))
                 .unwrap_or_default();
             Some(format!(
                 "✓ worker   {role} thread {} · {} · task {}{native}",
                 if *reused { "reused" } else { "created" },
+                short_id(thread_id),
+                short_id(task_id)
+            ))
+        }
+        RunProgress::WorkerThreadWaiting {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+        } => {
+            let native = native_session_id
+                .as_deref()
+                .map(|id| format!(" · native {}", id.trim()))
+                .unwrap_or_default();
+            Some(format!(
+                "● worker   {role} waiting for worker session · {} · task {}{native}",
                 short_id(thread_id),
                 short_id(task_id)
             ))
@@ -480,12 +575,41 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
                 event_kind,
                 FULL_MESSAGE_STREAM_MAX_CHARS,
             )?;
-            Some(format!(
+            let mut formatted = format!(
                 "↳ worker   {} · {agent} · {}\n{}",
                 short_id(task_id),
                 output.kind.label(),
                 indent_block(&output.display, "  ")
-            ))
+            );
+            append_failure_hint_lines(&mut formatted, content, TEXT_OUTPUT_SUMMARY_MAX_CHARS);
+            Some(formatted)
+        }
+        RunProgress::WorkerRecovery {
+            task_id,
+            agent,
+            role,
+            thread_id,
+            native_session_id,
+            recovery,
+            content,
+        } => {
+            let output = visible_non_final_agent_output_with_event_kind(
+                content,
+                "status",
+                FULL_MESSAGE_STREAM_MAX_CHARS,
+            )?;
+            let native = native_session_id
+                .as_deref()
+                .map(|id| format!(" · native {}", id.trim()))
+                .unwrap_or_default();
+            let mut formatted = format!(
+                "⚠ worker   {role} recovery · {recovery} · {agent} · thread {} · task {}{native}\n{}",
+                short_id(thread_id),
+                short_id(task_id),
+                indent_block(&output.display, "  ")
+            );
+            append_failure_hint_lines(&mut formatted, content, TEXT_OUTPUT_SUMMARY_MAX_CHARS);
+            Some(formatted)
         }
         RunProgress::RoleOutput { role, content } => {
             if agent_events::is_redundant_role_output(role, content, TEXT_OUTPUT_SUMMARY_MAX_CHARS)
@@ -544,10 +668,14 @@ pub fn format_text_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::Done { task_count } => {
             Some(format!("✓ done     {task_count} worker run(s) completed"))
         }
-        RunProgress::Failed(message) => Some(format!(
-            "✗ error    {}",
-            agent_events::humanize_jsonish(message, TEXT_OUTPUT_SUMMARY_MAX_CHARS)
-        )),
+        RunProgress::Failed(message) => {
+            let mut formatted = format!(
+                "✗ error    {}",
+                agent_events::humanize_jsonish(message, TEXT_OUTPUT_SUMMARY_MAX_CHARS)
+            );
+            append_failure_hint_lines(&mut formatted, message, TEXT_OUTPUT_SUMMARY_MAX_CHARS);
+            Some(formatted)
+        }
     }
 }
 
@@ -624,11 +752,27 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
         } => {
             let native = native_session_id
                 .as_deref()
-                .map(|id| format!(" · native {}", short_str(id)))
+                .map(|id| format!(" · native {}", id.trim()))
                 .unwrap_or_default();
             Some(format!(
                 "worker  {role} thread {} · {} · {}{native}",
                 if *reused { "reused" } else { "created" },
+                short_id(thread_id),
+                short_id(task_id)
+            ))
+        }
+        RunProgress::WorkerThreadWaiting {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+        } => {
+            let native = native_session_id
+                .as_deref()
+                .map(|id| format!(" · native {}", id.trim()))
+                .unwrap_or_default();
+            Some(format!(
+                "worker  {role} waiting · {} · {}{native}",
                 short_id(thread_id),
                 short_id(task_id)
             ))
@@ -642,11 +786,36 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
         } => {
             let output = visible_non_final_agent_output_with_event_kind(content, event_kind, 160)?;
             let display = compact_output_summary(&output.display, 160)?;
-            Some(format!(
+            let mut formatted = format!(
                 "worker  {} · {} {agent}: {display}",
                 output.kind.label(),
                 short_id(task_id),
-            ))
+            );
+            append_compact_failure_hint(&mut formatted, content);
+            Some(formatted)
+        }
+        RunProgress::WorkerRecovery {
+            task_id,
+            agent,
+            role,
+            thread_id,
+            native_session_id,
+            recovery,
+            content,
+        } => {
+            let output = visible_non_final_agent_output_with_event_kind(content, "status", 160)?;
+            let display = compact_output_summary(&output.display, 160)?;
+            let native = native_session_id
+                .as_deref()
+                .map(|id| format!(" · native {}", id.trim()))
+                .unwrap_or_default();
+            let mut formatted = format!(
+                "worker  {role} recovery · {recovery} · {agent} · thread {} · {}{native}: {display}",
+                short_id(thread_id),
+                short_id(task_id),
+            );
+            append_compact_failure_hint(&mut formatted, content);
+            Some(formatted)
         }
         RunProgress::RoleOutput { role, content } => {
             if agent_events::is_redundant_role_output(
@@ -704,10 +873,14 @@ pub fn format_compact_progress_event(event: &RunProgress) -> Option<String> {
         RunProgress::Done { task_count } => {
             Some(format!("done  {task_count} worker run(s) completed"))
         }
-        RunProgress::Failed(message) => Some(format!(
-            "error  {}",
-            agent_events::humanize_jsonish(message, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)
-        )),
+        RunProgress::Failed(message) => {
+            let mut formatted = format!(
+                "error  {}",
+                agent_events::humanize_jsonish(message, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)
+            );
+            append_compact_failure_hint(&mut formatted, message);
+            Some(formatted)
+        }
     }
 }
 
@@ -752,6 +925,29 @@ fn compact_output_summary(display: &str, max: usize) -> Option<String> {
     (!summary.trim().is_empty()).then(|| agent_events::sanitize_text(&summary, max))
 }
 
+fn append_failure_hint_lines(out: &mut String, content: &str, max: usize) {
+    let Some(hint) = agent_events::agent_failure_hint(content, max) else {
+        return;
+    };
+    out.push_str("\n  diagnostics: ");
+    out.push_str(hint.title());
+    if !hint.evidence.trim().is_empty() {
+        out.push_str(" - ");
+        out.push_str(&agent_events::sanitize_text(&hint.evidence, max));
+    }
+    out.push_str("\n  next: ");
+    out.push_str(hint.action());
+}
+
+fn append_compact_failure_hint(out: &mut String, content: &str) {
+    let Some(hint) = agent_events::agent_failure_hint(content, COMPACT_OUTPUT_SUMMARY_MAX_CHARS)
+    else {
+        return;
+    };
+    out.push_str(" · next: ");
+    out.push_str(hint.action());
+}
+
 fn provider_model_label(provider: Option<&str>, model: &str) -> String {
     match provider.map(str::trim).filter(|value| !value.is_empty()) {
         Some(provider) => format!("{provider}/{model}"),
@@ -793,10 +989,6 @@ fn compact_role_label_from_control(role: &str) -> &'static str {
 
 fn short_id(id: &uuid::Uuid) -> String {
     id.to_string().chars().take(8).collect()
-}
-
-fn short_str(value: &str) -> String {
-    value.chars().take(8).collect()
 }
 
 fn format_duration_ms(duration_ms: u64) -> String {
@@ -886,6 +1078,33 @@ mod tests {
     }
 
     #[test]
+    fn text_formatter_does_not_dedupe_long_outputs_that_differ_after_summary_prefix() {
+        let task_id = Uuid::new_v4();
+        let mut formatter = TiffanyTextProgressFormatter::new();
+        let shared_prefix = "x".repeat(TEXT_OUTPUT_SUMMARY_MAX_CHARS + 32);
+        let first = worker_output(
+            task_id,
+            "claude-code",
+            "worker-cc",
+            "assistant",
+            format!("claude assistant: {shared_prefix}\nfirst unique ending"),
+        );
+        let second = worker_output(
+            task_id,
+            "claude-code",
+            "worker-cc",
+            "assistant",
+            format!("claude assistant: {shared_prefix}\nsecond unique ending"),
+        );
+
+        let first_line = formatter.format(&first).expect("first visible output");
+        let second_line = formatter.format(&second).expect("second visible output");
+
+        assert!(first_line.contains("first unique ending"));
+        assert!(second_line.contains("second unique ending"));
+    }
+
+    #[test]
     fn text_formatter_labels_worker_output_kind() {
         let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
 
@@ -934,6 +1153,86 @@ mod tests {
     }
 
     #[test]
+    fn worker_failure_output_surfaces_diagnostics_and_next_step() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let event = worker_output(
+            task_id,
+            "codex",
+            "worker-codex",
+            "stderr",
+            "codex stderr: unexpected status 401 Unauthorized: invalid_api_key",
+        );
+
+        let line = format_text_progress_event(&event).expect("failure output line");
+        assert!(line.contains("diagnostics: provider authentication failed"));
+        assert!(line.contains("next: Set the provider key in /provider"));
+
+        let compact = format_compact_progress_event(&event).expect("compact failure output");
+        assert!(compact.contains("next: Set the provider key in /provider"));
+
+        let json =
+            serde_json::to_value(TiffanyProgressEvent::from(event)).expect("serializes failure");
+        assert_eq!(json["failure_category"], "auth");
+        assert_eq!(json["failure_title"], "provider authentication failed");
+        assert!(json["failure_action"]
+            .as_str()
+            .expect("failure action")
+            .contains("/provider"));
+    }
+
+    #[test]
+    fn worker_trust_failure_output_surfaces_diagnostics_and_next_step() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let event = worker_output(
+            task_id,
+            "codex",
+            "worker-codex",
+            "stderr",
+            "codex stderr: Not inside a trusted directory and --skip-git-repo-check was not specified.",
+        );
+
+        let line = format_text_progress_event(&event).expect("trust failure output line");
+        assert!(line.contains("diagnostics: project trust or git check blocked execution"));
+        assert!(line.contains("next: Trust the project or run from a Git repo"));
+
+        let compact = format_compact_progress_event(&event).expect("compact trust failure output");
+        assert!(compact.contains("next: Trust the project or run from a Git repo"));
+
+        let json =
+            serde_json::to_value(TiffanyProgressEvent::from(event)).expect("serializes failure");
+        assert_eq!(json["failure_category"], "trust");
+        assert_eq!(
+            json["failure_title"],
+            "project trust or git check blocked execution"
+        );
+        assert!(json["failure_action"]
+            .as_str()
+            .expect("failure action")
+            .contains("--skip-git-repo-check"));
+    }
+
+    #[test]
+    fn terminal_failure_event_surfaces_model_diagnostics() {
+        let event = RunProgress::Failed(
+            "executing single worker task: model not found [1211][模型不存在，请检查模型代码。]"
+                .into(),
+        );
+
+        let line = format_text_progress_event(&event).expect("terminal failure line");
+        assert!(line.contains("diagnostics: model not found"));
+        assert!(line.contains("next: Check the role's provider/model in /role"));
+
+        let json =
+            serde_json::to_value(TiffanyProgressEvent::from(event)).expect("serializes failure");
+        assert_eq!(json["failure_category"], "model");
+        assert_eq!(json["failure_title"], "model not found");
+        assert!(json["failure_action"]
+            .as_str()
+            .expect("failure action")
+            .contains("/role"));
+    }
+
+    #[test]
     fn text_formatter_does_not_truncate_worker_message_stream() {
         let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
         let long_message = format!("{}END", "x".repeat(TEXT_OUTPUT_SUMMARY_MAX_CHARS + 128));
@@ -970,6 +1269,89 @@ mod tests {
             line,
             "● worker   worker-cc started · claude-code · agent reviewer · minimax/MiniMax-M3 · 12345678"
         );
+    }
+
+    #[test]
+    fn worker_thread_ready_keeps_full_native_session_id() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let thread_id = Uuid::parse_str("87654321-0000-0000-0000-000000000000").unwrap();
+        let event = RunProgress::WorkerThreadReady {
+            task_id,
+            role: "worker-cc".into(),
+            thread_id,
+            native_session_id: Some("fake-claude-native-session".into()),
+            reused: true,
+        };
+
+        let line = format_text_progress_event(&event).expect("thread line");
+        assert!(line.contains("native fake-claude-native-session"));
+        assert!(!line.contains("native fake-cla ·"));
+
+        let compact = format_compact_progress_event(&event).expect("compact thread line");
+        assert!(compact.contains("native fake-claude-native-session"));
+        assert!(!compact.contains("native fake-cla "));
+    }
+
+    #[test]
+    fn worker_thread_waiting_formats_and_serializes_native_session() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let thread_id = Uuid::parse_str("87654321-0000-0000-0000-000000000000").unwrap();
+        let event = RunProgress::WorkerThreadWaiting {
+            task_id,
+            role: "worker-cc".into(),
+            thread_id,
+            native_session_id: Some("fake-claude-native-session".into()),
+        };
+
+        let line = format_text_progress_event(&event).expect("thread waiting line");
+        assert!(line.contains("waiting for worker session"));
+        assert!(line.contains("native fake-claude-native-session"));
+
+        let compact = format_compact_progress_event(&event).expect("compact waiting line");
+        assert!(compact.contains("worker-cc waiting"));
+        assert!(compact.contains("native fake-claude-native-session"));
+
+        let json =
+            serde_json::to_value(TiffanyProgressEvent::from(event)).expect("serializes waiting");
+        assert_eq!(json["status"], "running");
+        assert_eq!(json["worker_role"], "worker-cc");
+        assert_eq!(json["worker_thread_id"], thread_id.to_string());
+        assert_eq!(json["native_session_id"], "fake-claude-native-session");
+    }
+
+    #[test]
+    fn worker_recovery_formats_and_serializes_native_session() {
+        let task_id = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let thread_id = Uuid::parse_str("87654321-0000-0000-0000-000000000000").unwrap();
+        let event = RunProgress::WorkerRecovery {
+            task_id,
+            agent: "claude-code".into(),
+            role: "worker-cc".into(),
+            thread_id,
+            native_session_id: Some("fake-claude-native-session".into()),
+            recovery: "busy".into(),
+            content: "native session busy · retry 1/4 with same native session fake-claude-native-session"
+                .into(),
+        };
+
+        let line = format_text_progress_event(&event).expect("recovery line");
+        assert!(line.contains("worker-cc recovery · busy"));
+        assert!(line.contains("thread 87654321"));
+        assert!(line.contains("native fake-claude-native-session"));
+        assert!(line.contains("retry 1/4 with same native session"));
+
+        let compact = format_compact_progress_event(&event).expect("compact recovery line");
+        assert!(compact.contains("worker  worker-cc recovery · busy"));
+        assert!(compact.contains("native fake-claude-native-session"));
+
+        let json =
+            serde_json::to_value(TiffanyProgressEvent::from(event)).expect("serializes recovery");
+        assert_eq!(json["status"], "output");
+        assert_eq!(json["worker_role"], "worker-cc");
+        assert_eq!(json["worker_thread_id"], thread_id.to_string());
+        assert_eq!(json["native_session_id"], "fake-claude-native-session");
+        assert_eq!(json["recovery"], "busy");
+        assert_eq!(json["event_kind"], "status");
     }
 
     #[test]

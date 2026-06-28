@@ -4,7 +4,7 @@
 //! concurrency caps) and only proceed when dependencies are satisfied.
 
 use crate::agent_events;
-use crate::core::session_store::SessionStore;
+use crate::core::session_store::{NativeEvent, SessionStore};
 use crate::core::types::{Event, PlanOutput, Role, Session, Task, TaskStatus};
 use crate::core::worker::WorkerAdapter;
 use crate::roles::critic::Critic;
@@ -17,21 +17,33 @@ use crate::task_policy::{
 };
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-type WorkerDiffJoinOutput = (Session, Option<String>);
+type WorkerDiffJoinOutput = (Session, Option<String>, Vec<WorkerVisibleEvent>);
 type WorkerJoinOutput = (
     Uuid,
     Option<Uuid>,
     String,
     String,
+    Option<String>,
     u64,
     Result<WorkerDiffJoinOutput>,
 );
+
+const NATIVE_SESSION_BUSY_RETRY_DELAYS_MS: &[u64] = &[500, 1_000, 2_000, 4_000, 8_000, 12_000];
+
+#[derive(Clone, Debug)]
+struct WorkerVisibleEvent {
+    agent: String,
+    role: String,
+    kind: String,
+    content: String,
+}
 
 /// Progress events emitted by the orchestrator for live terminal chat display.
 /// (Borrowed from Claude Code's terminal pattern: background task + mpsc channel.)
@@ -82,6 +94,12 @@ pub enum RunProgress {
         provider: Option<String>,
         prompt: String,
     },
+    WorkerThreadWaiting {
+        task_id: Uuid,
+        role: String,
+        thread_id: Uuid,
+        native_session_id: Option<String>,
+    },
     WorkerThreadReady {
         task_id: Uuid,
         role: String,
@@ -94,6 +112,15 @@ pub enum RunProgress {
         agent: String,
         role: String,
         event_kind: String,
+        content: String,
+    },
+    WorkerRecovery {
+        task_id: Uuid,
+        agent: String,
+        role: String,
+        thread_id: Uuid,
+        native_session_id: Option<String>,
+        recovery: String,
         content: String,
     },
     RoleOutput {
@@ -183,6 +210,9 @@ impl Orchestrator {
             Session::new(top_task.id, "orchestrator", Role::Orchestrator);
         orchestration_session.model = "pipeline".to_string();
         orchestration_session.parent_session_ids = top_task.parent_session_ids.clone();
+        orchestration_session.worktree_path = std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.canonicalize().unwrap_or(cwd));
         self.session_store
             .finalize(&orchestration_session)
             .context("starting orchestration session")?;
@@ -654,6 +684,7 @@ impl Orchestrator {
         let by_id: HashMap<Uuid, Task> = tasks.iter().map(|t| (t.id, t.clone())).collect();
         let mut successful_ids: HashSet<Uuid> = HashSet::new();
         let mut terminal_ids: HashSet<Uuid> = HashSet::new();
+        let mut failed_tasks: Vec<(Uuid, String, String)> = Vec::new();
         let mut results: Vec<Task> = Vec::new();
         let mut active_thread_ids: HashSet<Uuid> = HashSet::new();
         let mut joinset: JoinSet<WorkerJoinOutput> = JoinSet::new();
@@ -740,6 +771,11 @@ impl Orchestrator {
                     .clone();
                 let task_id = t.id;
                 let agent = adapter.name().to_string();
+                let runtime_binary = adapter
+                    .binary_hint()
+                    .map(str::trim)
+                    .filter(|binary| !binary.is_empty())
+                    .map(ToString::to_string);
                 let worker_role = assignment.role.clone();
                 let worker_start = std::time::Instant::now();
                 let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
@@ -748,6 +784,9 @@ impl Orchestrator {
                 let lifecycle_tx = tx.clone();
                 let output_agent = agent.clone();
                 let output_role = worker_role.clone();
+                let visible_events: Arc<StdMutex<Vec<WorkerVisibleEvent>>> =
+                    Arc::new(StdMutex::new(Vec::new()));
+                let visible_events_for_forwarder = visible_events.clone();
                 let forwarder = tokio::spawn(async move {
                     let mut last_output_key: Option<String> = None;
                     while let Some(event) = event_rx.recv().await {
@@ -764,6 +803,14 @@ impl Orchestrator {
                             }
                             last_output_key = Some(key);
                         }
+                        if let Ok(mut events) = visible_events_for_forwarder.lock() {
+                            events.push(WorkerVisibleEvent {
+                                agent: output_agent.clone(),
+                                role: output_role.clone(),
+                                kind: event.kind.clone(),
+                                content: content.clone(),
+                            });
+                        }
                         let _ = event_progress_tx.send(RunProgress::WorkerOutput {
                             task_id,
                             agent: output_agent.clone(),
@@ -776,6 +823,14 @@ impl Orchestrator {
                 let session_store = self.session_store.clone();
                 let runtime = assignment.runtime.clone();
                 joinset.spawn(async move {
+                    if reused {
+                        let _ = lifecycle_tx.send(RunProgress::WorkerThreadWaiting {
+                            task_id,
+                            role: worker_role.clone(),
+                            thread_id: thread.id,
+                            native_session_id: thread.native_session_id.clone(),
+                        });
+                    }
                     let _guard = thread_lock.lock().await;
                     let _lease = match session_store.acquire_worker_thread_lease(thread.id).await {
                         Ok(lease) => lease,
@@ -788,6 +843,7 @@ impl Orchestrator {
                                 Some(thread.id),
                                 agent,
                                 worker_role,
+                                runtime_binary,
                                 duration_ms(worker_start.elapsed()),
                                 Err(err.context("acquiring worker thread lease")),
                             );
@@ -814,6 +870,7 @@ impl Orchestrator {
                                         Some(thread.id),
                                         agent,
                                         worker_role,
+                                        runtime_binary,
                                         duration_ms(worker_start.elapsed()),
                                         Err(err.context(
                                             "clearing stale claude native session under lease",
@@ -842,6 +899,7 @@ impl Orchestrator {
                                 Some(thread.id),
                                 agent,
                                 worker_role,
+                                runtime_binary,
                                 duration_ms(worker_start.elapsed()),
                                 Err(err.context("refreshing worker thread under lease")),
                             );
@@ -870,22 +928,58 @@ impl Orchestrator {
                         prompt: locked_task.prompt.clone(),
                     });
                     let mut res = adapter.start(&locked_task, Some(event_tx.clone())).await;
+                    if locked_task.native_session_id.is_some() {
+                        for (attempt, delay_ms) in
+                            NATIVE_SESSION_BUSY_RETRY_DELAYS_MS.iter().enumerate()
+                        {
+                            let raw_error = match &res {
+                                Ok(_) => break,
+                                Err(err) => format!("{err:#}"),
+                            };
+                            if !is_native_session_occupied(&raw_error) {
+                                break;
+                            }
+                            emit_worker_recovery_progress(
+                                &lifecycle_tx,
+                                task_id,
+                                &agent,
+                                &worker_role,
+                                thread.id,
+                                locked_task.native_session_id.clone(),
+                                "busy",
+                                &format!(
+                                    "native session busy · waiting for saved session {} and retry {}/{} after {}ms with the same native session",
+                                    locked_task
+                                        .native_session_id
+                                        .as_deref()
+                                        .unwrap_or("unknown"),
+                                    attempt + 1,
+                                    NATIVE_SESSION_BUSY_RETRY_DELAYS_MS.len(),
+                                    delay_ms
+                                ),
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+                            res = adapter.start(&locked_task, Some(event_tx.clone())).await;
+                        }
+                    }
                     if let Err(err) = &res {
                         let raw_error = format!("{err:#}");
-                        if is_recoverable_native_session_error(&raw_error)
+                        if is_native_session_missing(&raw_error)
                             && locked_task.native_session_id.is_some()
                         {
-                            let recovery_kind = native_session_recovery_kind(&raw_error);
                             let previous_native = locked_task.native_session_id.take();
                             match session_store.clear_worker_thread_native_session(thread.id) {
                                 Ok(()) => {
-                                    emit_worker_recovery_event(
-                                        &pipeline_event_tx,
+                                    emit_worker_recovery_progress(
+                                        &lifecycle_tx,
                                         task_id,
                                         &agent,
                                         &worker_role,
+                                        thread.id,
+                                        previous_native.clone(),
+                                        "missing",
                                         &format!(
-                                            "{recovery_kind} · cleared saved session {} and retrying once with a fresh native session",
+                                            "native session missing · cleared saved session {} and retrying once with a fresh native session",
                                             previous_native.as_deref().unwrap_or("unknown")
                                         ),
                                     );
@@ -893,7 +987,7 @@ impl Orchestrator {
                                 }
                                 Err(clear_err) => {
                                     res = Err(clear_err.context(
-                                        "clearing occupied native session before retry",
+                                        "clearing missing native session before retry",
                                     ));
                                 }
                             }
@@ -902,6 +996,10 @@ impl Orchestrator {
                     drop(event_tx);
                     drop(pipeline_event_tx);
                     let _ = forwarder.await;
+                    let visible_events = visible_events
+                        .lock()
+                        .map(|events| events.clone())
+                        .unwrap_or_default();
                     let res = match res {
                         Ok(handle) => {
                             let mut session = handle.session;
@@ -939,12 +1037,13 @@ impl Orchestrator {
                                         Some(thread.id),
                                         agent,
                                         worker_role,
+                                        runtime_binary,
                                         duration_ms(worker_start.elapsed()),
                                         Err(err),
                                     );
                                 }
                             }
-                            Ok((session, diff))
+                            Ok((session, diff, visible_events))
                         }
                         Err(err) => Err(err),
                     };
@@ -953,6 +1052,7 @@ impl Orchestrator {
                         Some(thread.id),
                         agent,
                         worker_role,
+                        runtime_binary,
                         duration_ms(worker_start.elapsed()),
                         res,
                     )
@@ -986,16 +1086,19 @@ impl Orchestrator {
                         remaining
                     );
                 }
+                if !failed_tasks.is_empty() {
+                    anyhow::bail!("{}", summarize_failed_worker_tasks(&failed_tasks));
+                }
                 break;
             }
 
             if let Some(joined) = joinset.join_next().await {
-                let (task_id, thread_id, agent, role, duration_ms, res) = joined?;
+                let (task_id, thread_id, agent, role, runtime_binary, duration_ms, res) = joined?;
                 if let Some(thread_id) = thread_id {
                     active_thread_ids.remove(&thread_id);
                 }
                 match res {
-                    Ok((mut session, diff)) => {
+                    Ok((mut session, diff, visible_events)) => {
                         let done_agent = if session.agent.trim().is_empty() {
                             agent
                         } else {
@@ -1013,9 +1116,9 @@ impl Orchestrator {
                             }
                         }
                         session.ended_at = Some(chrono::Utc::now());
-                        if let Some(diff) = diff {
+                        if let Some(diff) = diff.as_deref() {
                             if let Some(diff_event) =
-                                worker_diff_progress_event(task_id, &session.agent, &role, &diff)
+                                worker_diff_progress_event(task_id, &session.agent, &role, diff)
                             {
                                 let _ = tx.send(diff_event);
                             }
@@ -1023,6 +1126,23 @@ impl Orchestrator {
                         self.session_store
                             .finalize(&session)
                             .with_context(|| format!("finalizing worker session {}", session.id))?;
+                        let task_for_history = tasks
+                            .iter()
+                            .find(|task| task.id == task_id)
+                            .or_else(|| by_id.get(&task_id));
+                        if let Err(err) = record_worker_native_history_turn(
+                            &self.session_store,
+                            &session,
+                            &role,
+                            task_for_history,
+                            &visible_events,
+                            diff.as_deref(),
+                        ) {
+                            tracing::warn!(
+                                "failed to record native worker history for session {}: {err:#}",
+                                session.id
+                            );
+                        }
                         // Mark the task complete.
                         if let Some(slot) = tasks.iter_mut().find(|t| t.id == task_id) {
                             slot.status = TaskStatus::Completed;
@@ -1056,6 +1176,7 @@ impl Orchestrator {
                             &raw_error,
                             &agent,
                             &role,
+                            runtime_binary.as_deref(),
                             thread_id,
                             &self.session_store,
                         );
@@ -1065,6 +1186,7 @@ impl Orchestrator {
                             slot.error = Some(error_message.clone());
                         }
                         terminal_ids.insert(task_id);
+                        failed_tasks.push((task_id, role.clone(), error_message.clone()));
                         let _ = tx.send(RunProgress::WorkerOutput {
                             task_id,
                             agent: agent.clone(),
@@ -1087,6 +1209,212 @@ impl Orchestrator {
         tracing::info!("executed {} / {} tasks", results.len(), total);
         Ok(results)
     }
+}
+
+fn summarize_failed_worker_tasks(failed_tasks: &[(Uuid, String, String)]) -> String {
+    let mut out = format!("{} worker task(s) failed", failed_tasks.len());
+    for (task_id, role, error) in failed_tasks.iter().take(3) {
+        out.push_str(&format!(
+            "; {} ({}) {}",
+            &task_id.to_string()[..8],
+            role,
+            first_error_line(error)
+        ));
+    }
+    if failed_tasks.len() > 3 {
+        out.push_str(&format!("; ... {} more", failed_tasks.len() - 3));
+    }
+    out
+}
+
+fn record_worker_native_history_turn(
+    store: &SessionStore,
+    session: &Session,
+    worker_role: &str,
+    task: Option<&Task>,
+    visible_events: &[WorkerVisibleEvent],
+    diff: Option<&str>,
+) -> Result<()> {
+    let cwd = native_history_cwd_for_worker_session(store, session, task)?;
+    let mut events = Vec::new();
+    for visible in visible_events {
+        push_worker_native_event(
+            &mut events,
+            session,
+            visible.agent.as_str(),
+            visible.role.as_str(),
+            visible.kind.as_str(),
+            visible.content.as_str(),
+            task,
+        );
+    }
+    if let Some(diff) = diff.and_then(nonempty_str) {
+        push_worker_native_event(
+            &mut events,
+            session,
+            session.agent.as_str(),
+            worker_role,
+            "diff",
+            &format!(
+                "{} diff: {}",
+                session.agent,
+                summarize_worker_diff(diff, 240_000)
+            ),
+            task,
+        );
+    }
+    if events.is_empty() {
+        push_worker_native_event(
+            &mut events,
+            session,
+            session.agent.as_str(),
+            worker_role,
+            "status",
+            "worker session completed without visible output",
+            task,
+        );
+    }
+    let result = worker_native_turn_result(&events);
+    store.append_native_turn(
+        &native_conversation_id(&cwd),
+        &cwd,
+        &task
+            .map(|task| task.prompt.clone())
+            .unwrap_or_else(|| "worker task".to_string()),
+        &result,
+        now_unix_seconds(),
+        &events,
+    )?;
+    Ok(())
+}
+
+fn push_worker_native_event(
+    events: &mut Vec<NativeEvent>,
+    session: &Session,
+    agent: &str,
+    worker_role: &str,
+    kind: &str,
+    content: &str,
+    task: Option<&Task>,
+) {
+    let Some(content) = nonempty_str(content) else {
+        return;
+    };
+    let kind = worker_native_event_kind(kind, content);
+    let event_index = events.len() as u32;
+    events.push(NativeEvent {
+        event_index,
+        role: "worker".to_string(),
+        status: if kind == "stderr" { "error" } else { "output" }.to_string(),
+        title: format!("worker {kind} · {worker_role} · {agent}"),
+        kind: Some(kind.to_string()),
+        content: Some(content.to_string()),
+        agent: Some(agent.to_string()),
+        worker_role: Some(worker_role.to_string()),
+        model: nonempty_str(&session.model).map(str::to_string),
+        provider: task.and_then(|task| task.model_provider_hint.clone()),
+        task_id: Some(session.task_id.to_string()),
+        worker_thread_id: session.worker_thread_id.map(|id| id.to_string()),
+        native_session_id: session.native_session_id.clone(),
+    });
+}
+
+fn worker_native_event_kind(kind: &str, content: &str) -> &'static str {
+    let kind = kind.trim().to_ascii_lowercase();
+    if kind == "diff" || content.trim_start().starts_with("diff --git") {
+        return "diff";
+    }
+    if kind == "error"
+        || kind == "stderr"
+        || agent_events::agent_failure_hint(content, 240).is_some()
+    {
+        return "stderr";
+    }
+    if let Some(visible_kind) = agent_events::visible_agent_output_kind_for_event_kind(&kind) {
+        return match visible_kind {
+            agent_events::VisibleAgentOutputKind::Final => "final",
+            agent_events::VisibleAgentOutputKind::Answer => "answer",
+            agent_events::VisibleAgentOutputKind::Question => "question",
+            agent_events::VisibleAgentOutputKind::Approval => "approval",
+            agent_events::VisibleAgentOutputKind::ToolCall => "tool_call",
+            agent_events::VisibleAgentOutputKind::ToolResult => "tool_result",
+            agent_events::VisibleAgentOutputKind::Diff => "diff",
+            agent_events::VisibleAgentOutputKind::Patch => "patch",
+            agent_events::VisibleAgentOutputKind::FileUpdate => "file_update",
+            agent_events::VisibleAgentOutputKind::Stderr => "stderr",
+            agent_events::VisibleAgentOutputKind::Actionable => "alert",
+            agent_events::VisibleAgentOutputKind::Normal => "output",
+        };
+    }
+    "output"
+}
+
+fn worker_native_turn_result(events: &[NativeEvent]) -> String {
+    events
+        .iter()
+        .rev()
+        .find(|event| event.kind.as_deref() == Some("final"))
+        .or_else(|| {
+            events
+                .iter()
+                .rev()
+                .find(|event| event.kind.as_deref() == Some("answer"))
+        })
+        .or_else(|| {
+            events
+                .iter()
+                .rev()
+                .find(|event| event.kind.as_deref() == Some("output"))
+        })
+        .or_else(|| events.iter().rev().find(|event| event.content.is_some()))
+        .and_then(|event| event.content.as_deref())
+        .and_then(nonempty_str)
+        .map(|content| truncate_chars(content, 4_000))
+        .unwrap_or_else(|| "worker session completed".to_string())
+}
+
+fn native_history_cwd_for_worker_session(
+    store: &SessionStore,
+    session: &Session,
+    task: Option<&Task>,
+) -> Result<String> {
+    let path = task
+        .map(|task| task.parent_session_ids.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .find_map(|parent_id| {
+            store.get_many(&[*parent_id]).ok().and_then(|sessions| {
+                sessions
+                    .into_iter()
+                    .find(|session| session.role == Role::Orchestrator)
+                    .and_then(|session| session.worktree_path)
+            })
+        })
+        .or_else(|| session.worktree_path.clone())
+        .unwrap_or(std::env::current_dir().context("reading current directory")?);
+    let path = path.canonicalize().unwrap_or(path);
+    Ok(path.to_string_lossy().to_string())
+}
+
+fn native_conversation_id(cwd_key: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in cwd_key.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("tiffany-native-{hash:016x}")
+}
+
+fn now_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn nonempty_str(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
 }
 
 fn worker_diff_progress_event(
@@ -1176,10 +1504,11 @@ fn enrich_worker_error(
     raw: &str,
     agent: &str,
     role: &str,
+    runtime_binary: Option<&str>,
     thread_id: Option<Uuid>,
     session_store: &SessionStore,
 ) -> String {
-    if !is_native_session_occupied(raw) {
+    if !is_recoverable_native_session_error(raw) {
         return raw.to_string();
     }
 
@@ -1190,20 +1519,33 @@ fn enrich_worker_error(
         .map(|id| id.to_string())
         .unwrap_or_else(|| "unknown".into());
     let native = native_session_id
-        .unwrap_or_else(|| extract_occupied_session_id(raw).unwrap_or_else(|| "unknown".into()));
-    let resume = native_resume_command(agent, &native);
+        .unwrap_or_else(|| extract_native_session_id(raw).unwrap_or_else(|| "unknown".into()));
+    let resume = native_resume_command(agent, runtime_binary, &native);
+    if is_native_session_missing(raw) {
+        return format!(
+            "Native session was not found; agent={agent}; role={role}; worker_thread={thread}; native_session={native}; Tiffany already clears missing saved sessions and retries once with a fresh native session when possible. If it still fails, inspect `/thread {role}`, clear it with `/thread clear {role}`, or start the native CLI manually with `{resume}`. Raw error: {raw}"
+        );
+    }
     format!(
-        "Native session is already in use; agent={agent}; role={role}; worker_thread={thread}; native_session={native}; Tiffany already retries once with a fresh native session when possible. If it still fails, wait for the current native run to finish, inspect `/thread {role}`, clear it with `/thread clear {role}`, or resume manually with `{resume}`. Raw error: {raw}"
+        "Native session is already in use; agent={agent}; role={role}; worker_thread={thread}; native_session={native}; Tiffany waits and retries with the same native session to preserve continuity. If it still fails, wait for the current native run to finish, inspect `/thread {role}`, clear it with `/thread clear {role}`, or resume manually with `{resume}`. Raw error: {raw}"
     )
 }
 
 fn is_native_session_occupied(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
-    let mentions_session =
-        lower.contains("session id") || lower.contains("session_id") || lower.contains("session");
+    let mentions_session = lower.contains("session id")
+        || lower.contains("session_id")
+        || lower.contains("session")
+        || lower.contains("conversation id")
+        || lower.contains("conversation");
     let occupied = lower.contains("already in use")
         || lower.contains("currently in use")
         || lower.contains("is in use")
+        || lower.contains("is busy")
+        || lower.contains("session busy")
+        || lower.contains("session is busy")
+        || lower.contains("session is locked")
+        || lower.contains("session locked")
         || lower.contains("locked by another")
         || lower.contains("another process");
     mentions_session && occupied
@@ -1211,67 +1553,115 @@ fn is_native_session_occupied(message: &str) -> bool {
 
 fn is_native_session_missing(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
-    let mentions_session =
-        lower.contains("session id") || lower.contains("session_id") || lower.contains("session");
-    let missing = lower.contains("no conversation found")
+    let mentions_session = lower.contains("session id")
+        || lower.contains("session_id")
+        || lower.contains("session")
+        || lower.contains("conversation id");
+    let conversation_missing = lower.contains("no conversation found")
         || lower.contains("conversation not found")
-        || lower.contains("session not found")
+        || lower.contains("conversation does not exist")
+        || lower.contains("cannot find conversation");
+    let session_missing = lower.contains("session not found")
         || lower.contains("no session found")
+        || lower.contains("cannot find session")
         || lower.contains("not found")
         || lower.contains("unknown session")
-        || lower.contains("invalid session");
-    mentions_session && missing
+        || lower.contains("invalid session")
+        || lower.contains("not a valid session");
+    conversation_missing || (mentions_session && session_missing)
 }
 
 fn is_recoverable_native_session_error(message: &str) -> bool {
     is_native_session_occupied(message) || is_native_session_missing(message)
 }
 
-fn native_session_recovery_kind(message: &str) -> &'static str {
-    if is_native_session_missing(message) {
-        "native session missing"
-    } else {
-        "native session busy"
-    }
-}
-
-fn emit_worker_recovery_event(
-    event_tx: &UnboundedSender<Event>,
+fn emit_worker_recovery_progress(
+    progress_tx: &UnboundedSender<RunProgress>,
     task_id: Uuid,
     agent: &str,
     role: &str,
+    thread_id: Uuid,
+    native_session_id: Option<String>,
+    recovery: &str,
     message: &str,
 ) {
-    let event = Event {
-        session_id: Uuid::new_v4(),
+    let _ = progress_tx.send(RunProgress::WorkerRecovery {
         task_id,
-        ts: chrono::Utc::now(),
-        kind: "status".into(),
-        payload: serde_json::json!({
-            "source": "orchestrator",
-            "agent": agent,
-            "role": role,
-            "line": message,
-        }),
-    };
-    let _ = event_tx.send(event);
+        agent: agent.to_string(),
+        role: role.to_string(),
+        thread_id,
+        native_session_id,
+        recovery: recovery.to_string(),
+        content: message.to_string(),
+    });
 }
 
-fn native_resume_command(agent: &str, native_session_id: &str) -> String {
+fn native_resume_command(
+    agent: &str,
+    runtime_binary: Option<&str>,
+    native_session_id: &str,
+) -> String {
+    let binary = runtime_binary
+        .map(str::trim)
+        .filter(|binary| !binary.is_empty())
+        .unwrap_or_else(|| default_native_binary(agent));
+    let binary = shell_quote_arg(binary);
+    let native_session_id = shell_quote_arg(native_session_id);
     if agent == "claude-code" {
-        return format!("claude --resume {native_session_id}");
+        return format!("{binary} --resume {native_session_id}");
     }
     if agent == "codex" {
-        return format!("codex exec resume {native_session_id}");
+        return format!("{binary} exec resume {native_session_id}");
     }
     if agent == "gemini" {
-        return format!("gemini --resume {native_session_id}");
+        return format!("{binary} --resume {native_session_id}");
     }
-    format!("{agent} resume {native_session_id}")
+    format!("{binary} resume {native_session_id}")
 }
 
-fn extract_occupied_session_id(message: &str) -> Option<String> {
-    for marker in ["Session ID ", "session_id ", "session "] {
+fn default_native_binary(agent: &str) -> &str {
+    if agent == "claude-code" {
+        return "claude";
+    }
+    if agent == "codex" {
+        return "codex";
+    }
+    if agent == "gemini" {
+        return "gemini";
+    }
+    agent
+}
+
+fn shell_quote_arg(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | ':'))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn extract_native_session_id(message: &str) -> Option<String> {
+    for marker in [
+        "Session ID: ",
+        "Session ID ",
+        "session_id: ",
+        "session_id=",
+        "session_id ",
+        "native_session_id: ",
+        "native_session_id=",
+        "conversation ID: ",
+        "conversation ID ",
+        "conversation_id: ",
+        "conversation_id=",
+        "with ID: ",
+        "with ID ",
+        "session ",
+    ] {
         let Some(start) = find_case_insensitive(message, marker) else {
             continue;
         };
@@ -1279,11 +1669,18 @@ fn extract_occupied_session_id(message: &str) -> Option<String> {
         let id = rest.split_whitespace().next()?.trim_matches(|ch: char| {
             ch == '\'' || ch == '"' || ch == ',' || ch == ';' || ch == '.'
         });
-        if !id.is_empty() {
+        if !id.is_empty() && !is_native_session_id_stopword(id) {
             return Some(id.to_string());
         }
     }
     None
+}
+
+fn is_native_session_id_stopword(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "found" | "not" | "unknown" | "invalid" | "busy" | "locked" | "is" | "was"
+    )
 }
 
 fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
@@ -1495,6 +1892,23 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "task_prompt": prompt,
             }),
         ),
+        RunProgress::WorkerThreadWaiting {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+        } => (
+            "worker",
+            *task_id,
+            serde_json::json!({
+                "status": "running",
+                "message": format!("{role} waiting for worker session"),
+                "task_id": task_id,
+                "worker_role": role,
+                "worker_thread_id": thread_id,
+                "native_session_id": native_session_id,
+            }),
+        ),
         RunProgress::WorkerThreadReady {
             task_id,
             role,
@@ -1523,10 +1937,8 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
             role,
             event_kind,
             content,
-        } => (
-            "worker",
-            *task_id,
-            serde_json::json!({
+        } => {
+            let mut payload = serde_json::json!({
                 "status": "output",
                 "message": format!("{role} output"),
                 "task_id": task_id,
@@ -1534,8 +1946,34 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "worker_role": role,
                 "event_kind": event_kind,
                 "content": content,
-            }),
-        ),
+            });
+            add_failure_hint_payload(&mut payload, content);
+            ("worker", *task_id, payload)
+        }
+        RunProgress::WorkerRecovery {
+            task_id,
+            agent,
+            role,
+            thread_id,
+            native_session_id,
+            recovery,
+            content,
+        } => {
+            let mut payload = serde_json::json!({
+                "status": "output",
+                "message": format!("{role} recovery"),
+                "task_id": task_id,
+                "agent": agent,
+                "worker_role": role,
+                "worker_thread_id": thread_id,
+                "native_session_id": native_session_id,
+                "event_kind": "status",
+                "recovery": recovery,
+                "content": content,
+            });
+            add_failure_hint_payload(&mut payload, content);
+            ("worker", *task_id, payload)
+        }
         RunProgress::RoleOutput { role, content } => (
             role.as_str(),
             top_task_id,
@@ -1625,14 +2063,14 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
                 "count": task_count,
             }),
         ),
-        RunProgress::Failed(message) => (
-            "orchestrator",
-            top_task_id,
-            serde_json::json!({
+        RunProgress::Failed(message) => {
+            let mut payload = serde_json::json!({
                 "status": "failed",
                 "message": message,
-            }),
-        ),
+            });
+            add_failure_hint_payload(&mut payload, message);
+            ("orchestrator", top_task_id, payload)
+        }
     };
 
     Event {
@@ -1641,6 +2079,26 @@ fn run_progress_to_event(session_id: Uuid, top_task_id: Uuid, event: &RunProgres
         ts: chrono::Utc::now(),
         kind: kind.to_string(),
         payload,
+    }
+}
+
+fn add_failure_hint_payload(payload: &mut serde_json::Value, content: &str) {
+    let Some(hint) = agent_events::agent_failure_hint(content, 360) else {
+        return;
+    };
+    if let Some(map) = payload.as_object_mut() {
+        map.insert(
+            "failure_category".to_string(),
+            serde_json::Value::String(format!("{:?}", hint.category).to_ascii_lowercase()),
+        );
+        map.insert(
+            "failure_title".to_string(),
+            serde_json::Value::String(hint.title().to_string()),
+        );
+        map.insert(
+            "failure_action".to_string(),
+            serde_json::Value::String(hint.action().to_string()),
+        );
     }
 }
 
@@ -1719,6 +2177,148 @@ mod tests {
     };
     use crate::core::worker::WorkerHandle;
     use futures::stream::{self, BoxStream};
+
+    #[test]
+    fn worker_native_history_turn_records_visible_output_and_diff() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let project = tempfile::tempdir().expect("project");
+        let store = SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("state.db"))
+            .expect("store");
+        let mut task = Task::new("修复 README");
+        task.model_provider_hint = Some("fake".into());
+        let thread_id = Uuid::parse_str("aaaaaaaa-0000-0000-0000-000000000000").unwrap();
+        let mut session = Session::new(task.id, "claude-code", Role::Worker);
+        session.model = "fake-claude".into();
+        session.worker_thread_id = Some(thread_id);
+        session.native_session_id = Some("native-claude-session".into());
+        session.worktree_path = Some(project.path().to_path_buf());
+        let visible_events = vec![WorkerVisibleEvent {
+            agent: "claude-code".into(),
+            role: "worker-cc".into(),
+            kind: "assistant".into(),
+            content: "Fake Claude worker completed the Tiffany e2e smoke run".into(),
+        }];
+
+        record_worker_native_history_turn(
+            &store,
+            &session,
+            "worker-cc",
+            Some(&task),
+            &visible_events,
+            Some("diff --git a/README.md b/README.md\n+done"),
+        )
+        .expect("record native turn");
+        let cwd = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let conversation = store
+            .native_conversation_by_cwd(&cwd)
+            .expect("load native conversation")
+            .expect("conversation");
+
+        assert_eq!(conversation.turns.len(), 1);
+        let turn = &conversation.turns[0];
+        assert_eq!(turn.user_prompt, "修复 README");
+        assert!(turn.result.contains("Fake Claude worker completed"));
+        assert_eq!(turn.events.len(), 2);
+        assert_eq!(turn.events[0].kind.as_deref(), Some("answer"));
+        assert_eq!(turn.events[1].kind.as_deref(), Some("diff"));
+        assert!(turn.events[1]
+            .content
+            .as_deref()
+            .unwrap()
+            .contains("README.md"));
+        assert!(turn
+            .events
+            .iter()
+            .all(|event| event.worker_thread_id.as_deref()
+                == Some("aaaaaaaa-0000-0000-0000-000000000000")));
+        assert!(turn
+            .events
+            .iter()
+            .all(|event| event.native_session_id.as_deref() == Some("native-claude-session")));
+    }
+
+    #[test]
+    fn worker_native_event_kind_reuses_shared_visible_kind_mapping() {
+        assert_eq!(
+            worker_native_event_kind("assistant_delta", "claude assistant: partial"),
+            "answer"
+        );
+        assert_eq!(
+            worker_native_event_kind("turn_complete", "codex turn_complete: done"),
+            "final"
+        );
+        assert_eq!(
+            worker_native_event_kind("final_answer", "gemini final_answer: done"),
+            "final"
+        );
+        assert_eq!(
+            worker_native_event_kind("exec_command_begin", "tool Bash: cargo test"),
+            "tool_call"
+        );
+        assert_eq!(
+            worker_native_event_kind("exec_command_end", "tool result: ok"),
+            "tool_result"
+        );
+        assert_eq!(
+            worker_native_event_kind("patch_apply", "*** Begin Patch"),
+            "patch"
+        );
+        assert_eq!(
+            worker_native_event_kind("file_write", "File created successfully"),
+            "file_update"
+        );
+        assert_eq!(
+            worker_native_event_kind("stderr", "codex stderr: model not found"),
+            "stderr"
+        );
+    }
+
+    #[test]
+    fn worker_native_turn_result_prefers_final_over_answer_and_process_output() {
+        let base = NativeEvent {
+            event_index: 0,
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            title: "worker output".to_string(),
+            kind: Some("tool_result".to_string()),
+            content: Some("tests passed".to_string()),
+            agent: Some("codex".to_string()),
+            worker_role: Some("worker-codex".to_string()),
+            model: None,
+            provider: None,
+            task_id: None,
+            worker_thread_id: None,
+            native_session_id: None,
+        };
+        let answer = NativeEvent {
+            event_index: 3,
+            kind: Some("answer".to_string()),
+            content: Some("later draft answer".to_string()),
+            ..base.clone()
+        };
+        let final_event = NativeEvent {
+            event_index: 2,
+            kind: Some("final".to_string()),
+            content: Some("final answer".to_string()),
+            ..base.clone()
+        };
+        let process_output = NativeEvent {
+            event_index: 4,
+            kind: Some("output".to_string()),
+            content: Some("later process output".to_string()),
+            ..base
+        };
+
+        assert_eq!(
+            worker_native_turn_result(&[final_event, answer, process_output]),
+            "final answer"
+        );
+    }
 
     #[test]
     fn route_progress_event_persists_display_metadata() {
@@ -1804,6 +2404,7 @@ mod tests {
             "claude exited with status exit status: 1; stderr: Error: Session ID native-123 is already in use.",
             "claude-code",
             "worker-cc",
+            None,
             Some(thread.id),
             &store,
         );
@@ -1822,7 +2423,10 @@ mod tests {
         for message in [
             "Error: Session ID native-123 is already in use.",
             "session_id native-123 currently in use",
+            "session_id=native-123 session is locked",
+            "Session native-123 is busy.",
             "Claude session native-123 is in use by another process",
+            "conversation id native-123 is busy",
             "Codex session native-123 locked by another process",
         ] {
             assert!(
@@ -1835,6 +2439,7 @@ mod tests {
             "model not found",
             "permission denied while reading file",
             "session expired; please login again",
+            "conversation summary: model not found",
         ] {
             assert!(
                 !is_native_session_occupied(message),
@@ -1847,8 +2452,12 @@ mod tests {
     fn native_session_missing_detection_accepts_runtime_wording_variants() {
         for message in [
             "No conversation found with session ID: native-123",
+            "No conversation found with ID native-456",
             "conversation not found for session native-123",
+            "conversation does not exist: conversation_id=native-789",
             "session_id native-123 not found",
+            "No session found with ID native-999",
+            "session_id=native-abc is not a valid session",
             "unknown session native-123",
             "invalid session native-123",
         ] {
@@ -1866,6 +2475,7 @@ mod tests {
             "model not found",
             "permission denied while reading file",
             "session expired; please login again",
+            "conversation summary: model not found",
         ] {
             assert!(
                 !is_native_session_missing(message),
@@ -1885,12 +2495,116 @@ mod tests {
             "claude-code",
             "worker-cc",
             None,
+            None,
             &store,
         );
 
         assert!(message.contains("Native session is already in use"));
         assert!(message.contains("native_session=native-456"));
         assert!(message.contains("claude --resume native-456"));
+    }
+
+    #[test]
+    fn worker_error_explains_missing_native_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db")).unwrap();
+        let thread = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        store
+            .update_worker_thread_after_session(
+                thread.id,
+                Some("native-missing"),
+                Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+
+        let message = enrich_worker_error(
+            "claude exited with status exit status: 1; stderr: No conversation found with session ID: native-missing",
+            "claude-code",
+            "worker-cc",
+            None,
+            Some(thread.id),
+            &store,
+        );
+
+        assert!(message.contains("Native session was not found"));
+        assert!(message.contains("agent=claude-code"));
+        assert!(message.contains("role=worker-cc"));
+        assert!(message.contains("native_session=native-missing"));
+        assert!(message.contains("/thread worker-cc"));
+        assert!(message.contains("/thread clear worker-cc"));
+        assert!(message.contains("claude --resume native-missing"));
+        assert!(message.contains("retries once with a fresh native session"));
+    }
+
+    #[test]
+    fn worker_error_extracts_missing_native_session_from_colon_variant() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db")).unwrap();
+
+        let message = enrich_worker_error(
+            "No conversation found with session ID: native-789",
+            "codex",
+            "worker-codex",
+            None,
+            None,
+            &store,
+        );
+
+        assert!(message.contains("Native session was not found"));
+        assert!(message.contains("native_session=native-789"));
+        assert!(message.contains("codex exec resume native-789"));
+    }
+
+    #[test]
+    fn worker_error_extracts_native_session_from_equals_and_with_id_variants() {
+        assert_eq!(
+            extract_native_session_id("session_id=native-eq session is locked").as_deref(),
+            Some("native-eq")
+        );
+        assert_eq!(
+            extract_native_session_id("No conversation found with ID native-with-id").as_deref(),
+            Some("native-with-id")
+        );
+        assert_eq!(
+            extract_native_session_id("No conversation found with ID: native-colon").as_deref(),
+            Some("native-colon")
+        );
+        assert_eq!(
+            extract_native_session_id("No conversation found for this request").as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn worker_error_uses_configured_binary_in_resume_hint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db")).unwrap();
+
+        let message = enrich_worker_error(
+            "Claude session native custom is in use by another process.",
+            "claude-code",
+            "worker-cc",
+            Some("/Applications/Claude Code.app/Contents/MacOS/claude"),
+            None,
+            &store,
+        );
+
+        assert!(message.contains("Native session is already in use"));
+        assert!(message.contains("native_session=native"));
+        assert!(message
+            .contains("'/Applications/Claude Code.app/Contents/MacOS/claude' --resume native"));
     }
 
     #[test]
@@ -2246,6 +2960,7 @@ mod tests {
         seen: Arc<std::sync::Mutex<Vec<Option<String>>>>,
         next_native: Option<String>,
         fail_once_on_native: Option<String>,
+        fail_times_on_native: usize,
         missing_once_on_native: Option<String>,
     }
 
@@ -2267,7 +2982,12 @@ mod tests {
                     .filter(|native| native.as_deref() == task.native_session_id.as_deref())
                     .count()
             };
-            if matching_native_seen == 1
+            let allowed_busy_failures = if self.fail_times_on_native == 0 {
+                1
+            } else {
+                self.fail_times_on_native
+            };
+            if matching_native_seen <= allowed_busy_failures
                 && self
                     .fail_once_on_native
                     .as_ref()
@@ -3139,6 +3859,75 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
     }
 
     #[tokio::test]
+    async fn run_with_progress_reports_worker_failure_as_terminal_failure() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("sessions"), &tmp.path().join("state.db"))
+                .expect("session store"),
+        );
+        let mut roles = std::collections::HashMap::new();
+        roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "test-model".to_string(),
+                runtime: "test-runtime".to_string(),
+                agent_teams: false,
+            },
+        );
+        let mut adapters: std::collections::HashMap<String, Arc<dyn WorkerAdapter>> =
+            std::collections::HashMap::new();
+        adapters.insert("test-runtime".to_string(), Arc::new(PromptFailingAdapter));
+        let orch = Orchestrator::new(
+            Arc::new(FailingPlanner),
+            Arc::new(FailingCritic),
+            Arc::new(FailingReviewer),
+            Arc::new(CapabilityRouter::new(&roles, &[])),
+            adapters,
+            store,
+            1,
+            true,
+            true,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut top_task = Task::new("fail single worker");
+        top_task.tags = vec!["single_worker".to_string()];
+
+        let err = orch
+            .run_with_progress(top_task, tx)
+            .await
+            .expect_err("worker failure must be terminal");
+
+        assert!(
+            format!("{:#}", err).contains("1 worker task(s) failed"),
+            "unexpected error: {:#}",
+            err
+        );
+
+        let mut saw_failed_worker = false;
+        let mut saw_failed_terminal = false;
+        let mut saw_done = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RunProgress::WorkerDone { ok, .. } => saw_failed_worker = !ok,
+                RunProgress::Failed(message) => {
+                    saw_failed_terminal = message.contains("1 worker task(s) failed");
+                }
+                RunProgress::Done { .. } => saw_done = true,
+                _ => {}
+            }
+        }
+        assert!(saw_failed_worker, "worker failure should be visible");
+        assert!(
+            saw_failed_terminal,
+            "pipeline should emit a terminal failure"
+        );
+        assert!(
+            !saw_done,
+            "worker failure must not be reported as a successful empty run"
+        );
+    }
+
+    #[tokio::test]
     async fn full_pipeline_reviews_atomic_tagged_child_tasks() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = Arc::new(
@@ -3339,6 +4128,45 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         assert!(
             !saw_dependent_started,
             "dependent task must not start after a failed dependency"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_dag_errors_when_single_worker_task_fails() {
+        let (_tmp, mut orch) = test_orchestrator(Arc::new(ApprovingCritic));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert("test-runtime".to_string(), Arc::new(PromptFailingAdapter));
+        let task = Task::new("fail single");
+        let task_id = task.id;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let err = orch
+            .execute_dag(vec![task], tx)
+            .await
+            .expect_err("worker failure should fail the DAG");
+
+        let message = format!("{:#}", err);
+        assert!(
+            message.contains("1 worker task(s) failed"),
+            "unexpected error: {message}"
+        );
+        assert!(message.contains(&task_id.to_string()[..8]));
+        assert!(message.contains("worker-cc"));
+        assert!(message.contains("intentional worker failure"));
+
+        let mut saw_worker_failed = false;
+        while let Ok(event) = rx.try_recv() {
+            if let RunProgress::WorkerDone {
+                task_id: id, ok, ..
+            } = event
+            {
+                saw_worker_failed = id == task_id && !ok;
+            }
+        }
+        assert!(
+            saw_worker_failed,
+            "failed worker should still emit WorkerDone(ok=false)"
         );
     }
 
@@ -3607,6 +4435,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                     seen: seen.clone(),
                     next_native: Some("latest".into()),
                     fail_once_on_native: None,
+                    fail_times_on_native: 0,
                     missing_once_on_native: None,
                 }),
             );
@@ -3692,6 +4521,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                     seen: seen.clone(),
                     next_native: Some("native-from-first-run".into()),
                     fail_once_on_native: None,
+                    fail_times_on_native: 0,
                     missing_once_on_native: None,
                 }),
             );
@@ -3760,7 +4590,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
     }
 
     #[tokio::test]
-    async fn execute_dag_clears_occupied_native_session_and_retries_once() {
+    async fn execute_dag_waits_for_occupied_native_session_and_retries_same_session() {
         let (_tmp, mut orch) =
             test_orchestrator_with_runtime(Arc::new(ApprovingCritic), "test-runtime");
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -3770,8 +4600,9 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                 "test-runtime".to_string(),
                 Arc::new(NativeSessionAdapter {
                     seen: seen.clone(),
-                    next_native: Some("native-fresh".into()),
+                    next_native: None,
                     fail_once_on_native: Some("native-busy".into()),
+                    fail_times_on_native: 0,
                     missing_once_on_native: None,
                 }),
             );
@@ -3805,7 +4636,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         let completed = orch
             .execute_dag(vec![second_task], second_tx)
             .await
-            .expect("occupied native session should be retried once");
+            .expect("occupied native session should be retried with the same native session");
         assert_eq!(completed.len(), 1);
 
         let seen = seen.lock().unwrap().clone();
@@ -3814,7 +4645,11 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
             seen.get(1).cloned().flatten().as_deref(),
             Some("native-busy")
         );
-        assert_eq!(seen.get(2).cloned().flatten(), None);
+        assert_eq!(
+            seen.get(2).cloned().flatten().as_deref(),
+            Some("native-busy"),
+            "busy sessions should be retried with the same native session before abandoning continuity"
+        );
 
         let second_session = orch
             .session_store
@@ -3826,23 +4661,34 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         assert_eq!(second_session.worker_thread_id, Some(thread_id));
         assert_eq!(
             second_session.native_session_id.as_deref(),
-            Some("native-fresh")
+            Some("native-busy")
         );
         let thread = orch
             .session_store
             .worker_thread_by_role("worker-cc")
             .unwrap()
             .expect("worker thread");
-        assert_eq!(thread.native_session_id.as_deref(), Some("native-fresh"));
+        assert_eq!(thread.native_session_id.as_deref(), Some("native-busy"));
 
         let mut saw_retry_notice = false;
         let mut saw_success = false;
         while let Ok(event) = second_rx.try_recv() {
             match event {
-                RunProgress::WorkerOutput { content, .. } => {
-                    saw_retry_notice |= content.contains("native session busy")
-                        && content.contains("retrying once")
-                        && content.contains("native-busy");
+                RunProgress::WorkerRecovery {
+                    content,
+                    recovery,
+                    thread_id: recovery_thread_id,
+                    native_session_id,
+                    ..
+                } => {
+                    saw_retry_notice |= recovery == "busy"
+                        && recovery_thread_id == thread_id
+                        && native_session_id.as_deref() == Some("native-busy")
+                        && content.contains("native session busy")
+                        && content.contains("retry 1/")
+                        && content.contains("same native session")
+                        && content.contains("native-busy")
+                        && !content.contains("cleared saved session");
                 }
                 RunProgress::WorkerDone { ok, .. } => {
                     saw_success |= ok;
@@ -3852,6 +4698,86 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         }
         assert!(saw_retry_notice, "expected native session retry progress");
         assert!(saw_success, "expected worker to succeed after retry");
+    }
+
+    #[tokio::test]
+    async fn execute_dag_keeps_waiting_for_temporarily_busy_native_session() {
+        let (_tmp, mut orch) =
+            test_orchestrator_with_runtime(Arc::new(ApprovingCritic), "test-runtime");
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert(
+                "test-runtime".to_string(),
+                Arc::new(NativeSessionAdapter {
+                    seen: seen.clone(),
+                    next_native: None,
+                    fail_once_on_native: Some("native-busy".into()),
+                    fail_times_on_native: 3,
+                    missing_once_on_native: None,
+                }),
+            );
+
+        let first_task = Task::new("first turn");
+        let first_task_id = first_task.id;
+        let (first_tx, _first_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = orch.execute_dag(vec![first_task], first_tx).await.unwrap();
+        let first_session = orch
+            .session_store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.task_id == first_task_id)
+            .expect("first worker session");
+        let thread_id = first_session
+            .worker_thread_id
+            .expect("first session should record worker thread");
+        orch.session_store
+            .update_worker_thread_after_session(
+                thread_id,
+                Some("native-busy"),
+                first_session.id,
+                first_session.worktree_path.as_deref(),
+            )
+            .unwrap();
+
+        let (second_tx, mut second_rx) = tokio::sync::mpsc::unbounded_channel();
+        let completed = orch
+            .execute_dag(vec![Task::new("second turn")], second_tx)
+            .await
+            .expect("temporarily occupied native session should eventually succeed");
+        assert_eq!(completed.len(), 1);
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(
+            seen.iter()
+                .filter(|native| native.as_deref() == Some("native-busy"))
+                .count(),
+            4,
+            "three busy failures plus one successful retry should preserve the same native session"
+        );
+
+        let mut retry_notices = 0;
+        while let Ok(event) = second_rx.try_recv() {
+            if let RunProgress::WorkerRecovery {
+                content,
+                recovery,
+                thread_id: recovery_thread_id,
+                native_session_id,
+                ..
+            } = event
+            {
+                if recovery == "busy" {
+                    retry_notices += 1;
+                    assert_eq!(recovery_thread_id, thread_id);
+                    assert_eq!(native_session_id.as_deref(), Some("native-busy"));
+                    assert!(content.contains("native session busy"));
+                    assert!(content.contains("same native session"));
+                    assert!(!content.contains("cleared saved session"));
+                }
+            }
+        }
+        assert_eq!(retry_notices, 3);
     }
 
     #[tokio::test]
@@ -3867,6 +4793,7 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                     seen: seen.clone(),
                     next_native: Some("native-fresh".into()),
                     fail_once_on_native: None,
+                    fail_times_on_native: 0,
                     missing_once_on_native: Some("native-missing".into()),
                 }),
             );
@@ -3934,8 +4861,17 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
         let mut saw_success = false;
         while let Ok(event) = second_rx.try_recv() {
             match event {
-                RunProgress::WorkerOutput { content, .. } => {
-                    saw_retry_notice |= content.contains("native session missing")
+                RunProgress::WorkerRecovery {
+                    content,
+                    recovery,
+                    thread_id: recovery_thread_id,
+                    native_session_id,
+                    ..
+                } => {
+                    saw_retry_notice |= recovery == "missing"
+                        && recovery_thread_id == thread_id
+                        && native_session_id.as_deref() == Some("native-missing")
+                        && content.contains("native session missing")
                         && content.contains("retrying once")
                         && content.contains("native-missing");
                 }
@@ -3983,6 +4919,83 @@ Previous turns:\nuser:\n优化 TUI 显示\n\nassistant result:\n已完成提交�
                 .parent_session_ids
                 .contains(&first_session.id),
             "second task in the same run should resume from the first worker session"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_dag_passes_native_session_between_same_thread_tasks_in_one_run() {
+        let (_tmp, mut orch) =
+            test_orchestrator_with_runtime(Arc::new(ApprovingCritic), "test-runtime");
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        Arc::get_mut(&mut orch.adapters)
+            .expect("orchestrator should be uniquely owned")
+            .insert(
+                "test-runtime".to_string(),
+                Arc::new(NativeSessionAdapter {
+                    seen: seen.clone(),
+                    next_native: Some("native-continuous".into()),
+                    fail_once_on_native: None,
+                    fail_times_on_native: 0,
+                    missing_once_on_native: None,
+                }),
+            );
+
+        let first = Task::new("first same-run native task");
+        let first_task_id = first.id;
+        let second = Task::new("second same-run native task");
+        let second_task_id = second.id;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let completed = orch.execute_dag(vec![first, second], tx).await.unwrap();
+
+        assert_eq!(completed.len(), 2);
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.first().cloned().flatten(), None);
+        assert_eq!(
+            seen.get(1).cloned().flatten().as_deref(),
+            Some("native-continuous"),
+            "second same-role task in one orchestration should resume the first task's native session"
+        );
+
+        let sessions = orch.session_store.list(10).unwrap();
+        let first_session = sessions
+            .iter()
+            .find(|session| session.task_id == first_task_id)
+            .expect("first session should be finalized");
+        let second_session = sessions
+            .iter()
+            .find(|session| session.task_id == second_task_id)
+            .expect("second session should be finalized");
+        assert_eq!(
+            first_session.worker_thread_id,
+            second_session.worker_thread_id
+        );
+        assert_eq!(
+            first_session.native_session_id,
+            second_session.native_session_id
+        );
+        assert_eq!(
+            second_session.native_session_id.as_deref(),
+            Some("native-continuous")
+        );
+
+        let mut saw_second_ready_with_native = false;
+        while let Ok(event) = rx.try_recv() {
+            if let RunProgress::WorkerThreadReady {
+                task_id,
+                native_session_id,
+                reused,
+                ..
+            } = event
+            {
+                saw_second_ready_with_native |= task_id == second_task_id
+                    && reused
+                    && native_session_id.as_deref() == Some("native-continuous");
+            }
+        }
+        assert!(
+            saw_second_ready_with_native,
+            "UI should show the second same-role task reusing the first task's native session"
         );
     }
 

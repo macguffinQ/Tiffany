@@ -57,6 +57,10 @@ impl VisibleAgentOutputKind {
                 | Self::FileUpdate
         )
     }
+
+    fn is_artifact_event(self) -> bool {
+        matches!(self, Self::Diff | Self::Patch | Self::FileUpdate)
+    }
 }
 
 pub fn visible_agent_output_kind_for_event_kind(
@@ -64,9 +68,11 @@ pub fn visible_agent_output_kind_for_event_kind(
 ) -> Option<VisibleAgentOutputKind> {
     match normalize_event_kind(event_kind)?.as_str() {
         "stderr" => Some(VisibleAgentOutputKind::Stderr),
-        "approval" | "permission_request" | "command_approval" | "patch_approval" => {
-            Some(VisibleAgentOutputKind::Approval)
-        }
+        "approval"
+        | "permission_request"
+        | "command_approval"
+        | "patch_approval"
+        | "guardian_assessment" => Some(VisibleAgentOutputKind::Approval),
         "tool"
         | "tool_use"
         | "exec"
@@ -108,6 +114,9 @@ pub fn normalize_event_kind(event_kind: &str) -> Option<String> {
         "assistant_message"
         | "assistant_delta"
         | "agent_message"
+        | "agent_reasoning"
+        | "gemini"
+        | "model"
         | "message"
         | "text"
         | "response_output_text"
@@ -119,6 +128,7 @@ pub fn normalize_event_kind(event_kind: &str) -> Option<String> {
         | "tool_invocation"
         | "exec"
         | "exec_command"
+        | "exec_command_begin"
         | "command"
         | "shell"
         | "bash"
@@ -134,25 +144,27 @@ pub fn normalize_event_kind(event_kind: &str) -> Option<String> {
         | "tool_response"
         | "exec_output"
         | "exec_result"
+        | "exec_command_end"
         | "command_output"
         | "command_result"
         | "function_call_output"
         | "custom_tool_call_output"
         | "tool_search_output" => "tool_result",
-        "patch_apply" | "apply_patch" | "patch_set" => "patch",
-        "file"
-        | "file_write"
-        | "file_edit"
-        | "file_create"
-        | "file_delete"
-        | "file_changed"
-        | "file_change"
-        | "file_update" => "file_update",
+        "patch_apply"
+        | "patch_apply_begin"
+        | "patch_apply_updated"
+        | "patch_apply_end"
+        | "apply_patch"
+        | "patch_set" => "patch",
+        "turn_diff" => "diff",
+        "file" | "file_write" | "file_edit" | "file_create" | "file_delete" | "file_changed"
+        | "file_change" | "file_update" => "file_update",
         "permission"
         | "permission_request"
         | "approval_request"
         | "command_approval"
-        | "patch_approval" => "approval",
+        | "patch_approval"
+        | "guardian_assessment" => "approval",
         "error" | "stderr" => "stderr",
         "response_completed" | "turn_complete" | "task_complete" | "final_answer" => {
             "turn_complete"
@@ -176,6 +188,7 @@ pub enum AgentFailureCategory {
     Auth,
     Permission,
     RateLimit,
+    Trust,
     Runtime,
     Dependency,
     Network,
@@ -189,6 +202,7 @@ impl AgentFailureCategory {
             Self::Auth => "provider authentication failed",
             Self::Permission => "permission blocked execution",
             Self::RateLimit => "provider rate limit or quota",
+            Self::Trust => "project trust or git check blocked execution",
             Self::Runtime => "worker runtime is not available",
             Self::Dependency => "dependency blocked by failed worker",
             Self::Network => "network or endpoint failure",
@@ -209,6 +223,9 @@ impl AgentFailureCategory {
             }
             Self::RateLimit => {
                 "Retry later or switch the affected role to another provider/model with /role."
+            }
+            Self::Trust => {
+                "Trust the project or run from a Git repo; for Codex workers, verify the runtime supports --skip-git-repo-check with /doctor."
             }
             Self::Runtime => {
                 "Install the missing worker CLI or update the role runtime in /role; verify with /doctor."
@@ -764,11 +781,11 @@ pub fn summarize_event_value(value: &Value, max: usize) -> Option<AgentEventSumm
     if let Some(payload) = event_wrapper_payload(value) {
         return summarize_event_value(payload, max);
     }
-    let kind = event_kind_from_value(value)
-        .unwrap_or_else(|| "event".to_string());
+    let kind = event_kind_from_value(value).unwrap_or_else(|| "event".to_string());
     let text = value
         .as_object()
-        .and_then(summarize_inline_tool_object)
+        .and_then(summarize_named_agent_event_object)
+        .or_else(|| value.as_object().and_then(summarize_inline_tool_object))
         .or_else(|| extract_text_from_value(value))
         .or_else(|| {
             value
@@ -806,6 +823,7 @@ pub fn tool_name_from_value(value: &Value) -> Option<String> {
         Value::Object(object) => {
             if let Some(name) = object
                 .get("name")
+                .or_else(|| object.get("displayName"))
                 .or_else(|| object.get("tool_name"))
                 .or_else(|| object.get("tool"))
                 .and_then(Value::as_str)
@@ -822,7 +840,17 @@ pub fn tool_name_from_value(value: &Value) -> Option<String> {
             {
                 return Some(name);
             }
-            for key in ["input", "parameters", "args", "arguments", "action"] {
+            for key in [
+                "input",
+                "parameters",
+                "args",
+                "arguments",
+                "action",
+                "payload",
+                "item",
+                "event_msg",
+                "response_item",
+            ] {
                 if let Some(found) = object.get(key).and_then(tool_name_from_value) {
                     return Some(found);
                 }
@@ -841,6 +869,12 @@ pub fn summarize_event_payload(payload: &Value, max: usize) -> String {
     if let Some(text) = payload.as_str() {
         return sanitize_text(text, max);
     }
+    if let Some(summary) = payload
+        .as_object()
+        .and_then(summarize_named_agent_event_object)
+    {
+        return sanitize_text(&summary, max);
+    }
     if let Some(text) = extract_text_from_value(payload) {
         return sanitize_text(&text, max);
     }
@@ -856,6 +890,7 @@ pub fn extract_text_from_value(value: &Value) -> Option<String> {
     let object = value.as_object()?;
     if let Some(name) = object
         .get("name")
+        .or_else(|| object.get("displayName"))
         .or_else(|| object.get("tool_name"))
         .and_then(Value::as_str)
         .and_then(non_empty)
@@ -878,13 +913,27 @@ fn collect_text_parts(value: &Value) -> Vec<String> {
     let Some(object) = value.as_object() else {
         return Vec::new();
     };
+    if let Some(summary) = summarize_named_agent_event_object(object) {
+        return vec![summary];
+    }
     if let Some(summary) = summarize_inline_tool_object(object) {
         return vec![summary];
     }
 
     let mut parts = Vec::new();
     for key in [
-        "text", "summary", "delta", "line", "result", "message", "content", "error",
+        "text",
+        "summary",
+        "delta",
+        "line",
+        "result",
+        "message",
+        "content",
+        "error",
+        "item",
+        "event_msg",
+        "response_item",
+        "payload",
     ] {
         if let Some(value) = object.get(key) {
             parts.extend(collect_text_parts(value));
@@ -956,9 +1005,9 @@ pub fn clean_visible_agent_output(content: &str, max: usize) -> Option<String> {
     let display = humanize_jsonish(&cleaned, max);
     let display = normalize_output_summary(&display);
     let display = strip_known_final_heading(&display);
+    let display = normalize_agent_status_display(&display);
     (!is_low_value_output(&display)).then_some(display)
 }
-
 pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOutput> {
     let hinted_kind = visible_output_kind_hint(content);
     let hinted_tool_event = hinted_kind.is_some_and(VisibleAgentOutputKind::is_process_event);
@@ -993,19 +1042,22 @@ pub fn visible_agent_output(content: &str, max: usize) -> Option<VisibleAgentOut
             display: question,
         });
     }
-    let kind = if hinted_kind == Some(VisibleAgentOutputKind::Answer)
+    let display_kind = visible_output_kind_from_display(&display);
+    let kind = if let Some(kind) = display_kind.filter(|kind| kind.is_artifact_event()) {
+        kind
+    } else if hinted_kind == Some(VisibleAgentOutputKind::Answer)
         && looks_like_actionable_output(&display)
     {
         VisibleAgentOutputKind::Actionable
     } else {
         hinted_kind.unwrap_or_else(|| {
-        if let Some(kind) = visible_output_kind_from_display(&display) {
-            kind
-        } else if looks_like_actionable_output(&display) {
-            VisibleAgentOutputKind::Actionable
-        } else {
-            VisibleAgentOutputKind::Normal
-        }
+            if let Some(kind) = display_kind {
+                kind
+            } else if looks_like_actionable_output(&display) {
+                VisibleAgentOutputKind::Actionable
+            } else {
+                VisibleAgentOutputKind::Normal
+            }
         })
     };
     let dedupe_key = sanitize_text(&normalize_output_summary(&display), max);
@@ -1033,6 +1085,8 @@ fn visible_output_kind_from_display(display: &str) -> Option<VisibleAgentOutputK
         || lower.starts_with("file updated:")
         || lower.starts_with("file created:")
         || lower.starts_with("file deleted:")
+        || lower.starts_with("file created successfully at:")
+        || (lower.starts_with("the file ") && lower.contains(" has been updated successfully"))
     {
         return Some(VisibleAgentOutputKind::FileUpdate);
     }
@@ -1069,10 +1123,11 @@ fn visible_output_kind_hint(content: &str) -> Option<VisibleAgentOutputKind> {
         | "function_call_output"
         | "custom_tool_call_output"
         | "tool_search_output" => Some(VisibleAgentOutputKind::ToolResult),
+        "approval" => Some(VisibleAgentOutputKind::Approval),
         "diff" => Some(VisibleAgentOutputKind::Diff),
         "patch" => Some(VisibleAgentOutputKind::Patch),
         "file_change" | "file_update" => Some(VisibleAgentOutputKind::FileUpdate),
-        "user" => visible_output_kind_from_display(body),
+        "user" | "output" => visible_output_kind_from_display(body),
         "assistant" => Some(VisibleAgentOutputKind::Answer),
         "status" | "process_exit" => visible_output_kind_from_display(body).or_else(|| {
             if user_action_request_display(content, body, TOOL_DETAIL_MAX_CHARS).is_some() {
@@ -1089,6 +1144,13 @@ fn question_output_display(content: &str, display: &str, max: usize) -> Option<S
     let normalized = normalize_output_summary(display);
     let normalized = normalized.trim();
     let lower = format!("{content}\n{normalized}").to_ascii_lowercase();
+    let normalized_lower = normalized.to_ascii_lowercase();
+
+    if normalized_lower.starts_with("question requested")
+        || normalized_lower.starts_with("waiting for user input")
+    {
+        return Some(sanitize_text(normalized, max));
+    }
 
     if lower.contains("tool error: answer questions")
         || lower.contains("tool askuserquestion error")
@@ -1101,24 +1163,52 @@ fn question_output_display(content: &str, display: &str, max: usize) -> Option<S
     }
 
     if lower.contains("askuserquestion") || lower.contains("request_user_input") {
-        let display = normalized
-            .replace("tool AskUserQuestion", "question requested")
-            .replace("tool askuserquestion", "question requested")
-            .replace("request_user_input", "question requested");
-        return Some(sanitize_text(display.trim(), max));
-    }
-
-    if normalized
-        .to_ascii_lowercase()
-        .starts_with("question requested")
-        || normalized
-            .to_ascii_lowercase()
-            .starts_with("waiting for user input")
-    {
-        return Some(sanitize_text(normalized, max));
+        let content_detail = question_detail_from_text(content);
+        let display_detail = question_detail_from_text(display);
+        let detail = content_detail.or(display_detail);
+        return Some(sanitize_text(
+            &format_question_waiting_summary(
+                detail.or_else(|| Some("Answer questions?".to_string())),
+            ),
+            max,
+        ));
     }
 
     None
+}
+
+fn question_detail_from_text(text: &str) -> Option<String> {
+    if let Some(value) = first_embedded_json_value(text) {
+        if let Some(object) = value.as_object() {
+            if let Some(detail) = question_tool_detail_text(object) {
+                return Some(detail);
+            }
+        }
+    }
+
+    for marker in ["AskUserQuestion", "ask_user_question", "request_user_input"] {
+        let Some(idx) = text.to_ascii_lowercase().find(&marker.to_ascii_lowercase()) else {
+            continue;
+        };
+        let detail = text[idx + marker.len()..]
+            .trim_start_matches(|ch: char| ch == ':' || ch == '-' || ch.is_whitespace())
+            .trim();
+        if !detail.is_empty()
+            && !detail.eq_ignore_ascii_case("tool")
+            && !detail.eq_ignore_ascii_case("tool_use")
+        {
+            return Some(humanize_argument_text(detail));
+        }
+    }
+    None
+}
+
+fn first_embedded_json_value(text: &str) -> Option<Value> {
+    let start = text
+        .char_indices()
+        .find_map(|(idx, ch)| (ch == '{').then_some(idx))?;
+    let mut iter = serde_json::Deserializer::from_str(&text[start..]).into_iter::<Value>();
+    iter.next()?.ok()
 }
 
 fn user_action_request_display(content: &str, display: &str, max: usize) -> Option<String> {
@@ -1319,14 +1409,40 @@ pub fn normalized_output_key(content: &str, max: usize) -> Option<String> {
 
 pub fn normalize_output_summary(display: &str) -> String {
     let trimmed = display.trim();
+    let secondary = strip_secondary_output_prefix(trimmed);
+    if secondary != trimmed {
+        return humanize_user_visible_text(secondary, usize::MAX);
+    }
     let Some((prefix, body)) = trimmed.split_once(": ") else {
         return humanize_user_visible_text(trimmed, usize::MAX);
     };
 
     match runtime_output_kind_from_prefix(prefix) {
-        Some(_) => humanize_user_visible_text(body.trim(), usize::MAX),
+        Some(_) => {
+            humanize_user_visible_text(strip_secondary_output_prefix(body.trim()), usize::MAX)
+        }
         None => humanize_user_visible_text(trimmed, usize::MAX),
     }
+}
+
+fn strip_secondary_output_prefix(body: &str) -> &str {
+    let lower = body.to_ascii_lowercase();
+    for prefix in [
+        "tool result:",
+        "tool_result:",
+        "tool output:",
+        "tool_output:",
+        "tool error:",
+        "tool_error:",
+        "assistant:",
+        "result:",
+        "final:",
+    ] {
+        if lower.starts_with(prefix) {
+            return body[prefix.len()..].trim_start();
+        }
+    }
+    body
 }
 
 fn runtime_output_kind_from_prefix(prefix: &str) -> Option<String> {
@@ -1361,9 +1477,12 @@ fn known_runtime_output_kind(kind: &str) -> Option<String> {
             kind.as_str(),
             "assistant"
                 | "event"
+                | "output"
                 | "user"
+                | "system"
                 | "status"
                 | "process_exit"
+                | "approval"
                 | "diff"
                 | "patch"
                 | "file_update"
@@ -1375,6 +1494,42 @@ fn known_runtime_output_kind(kind: &str) -> Option<String> {
                 | "tool_result"
         )
     })
+}
+
+fn normalize_agent_status_display(display: &str) -> String {
+    let trimmed = strip_claude_context_note(display.trim());
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(path) = lower
+        .starts_with("file created successfully at:")
+        .then(|| trimmed["file created successfully at:".len()..].trim())
+        .filter(|path| !path.is_empty())
+    {
+        return format!("file created: {path}");
+    }
+    if lower.starts_with("the file ") && lower.contains(" has been updated successfully") {
+        if let Some(path) = trimmed
+            .strip_prefix("The file ")
+            .or_else(|| trimmed.strip_prefix("the file "))
+            .and_then(|rest| rest.split(" has been updated successfully").next())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            return format!("file updated: {path}");
+        }
+    }
+    trimmed.to_string()
+}
+
+fn strip_claude_context_note(text: &str) -> &str {
+    for marker in [
+        " (file state is current in your context",
+        " (no need to Read it back",
+    ] {
+        if let Some(idx) = text.find(marker) {
+            return text[..idx].trim_end();
+        }
+    }
+    text
 }
 
 pub fn humanize_jsonish(content: &str, max: usize) -> String {
@@ -1423,6 +1578,12 @@ pub fn is_low_value_output(text: &str) -> bool {
     if stderr_like && !looks_like_actionable_stderr(&lower) {
         return true;
     }
+    if looks_like_internal_tool_selection(&lower) {
+        return true;
+    }
+    if looks_like_successful_process_exit(&lower) {
+        return true;
+    }
 
     matches!(
         lower.as_str(),
@@ -1438,11 +1599,36 @@ pub fn is_low_value_output(text: &str) -> bool {
             | "codex assistant: thinking"
             | "codex finished"
             | "tool result"
+            | "(bash completed with no output)"
+            | "bash completed with no output"
+            | "(tool completed with no output)"
+            | "tool completed with no output"
     ) || lower.contains(" heartbeat")
         || lower.ends_with(" system: system")
         || lower.ends_with(" assistant: assistant")
         || lower.ends_with(" assistant: thinking")
         || lower.contains("starting model=")
+        || lower.contains("could not create path aliases")
+}
+
+fn looks_like_successful_process_exit(lower: &str) -> bool {
+    if !lower.contains("exited with status") {
+        return false;
+    }
+    lower.contains("exit status: 0")
+        || lower.ends_with(" status 0")
+        || lower.ends_with(" status: 0")
+}
+
+fn looks_like_internal_tool_selection(lower: &str) -> bool {
+    let lower = lower.trim();
+    if !lower.starts_with("tool ") {
+        return false;
+    }
+    lower.starts_with("tool toolsearch:")
+        || lower.starts_with("tool tool_search:")
+        || lower.starts_with("tool select:")
+        || lower.starts_with("tool selecttool:")
 }
 
 fn looks_like_actionable_stderr(lower: &str) -> bool {
@@ -1471,7 +1657,12 @@ fn looks_like_actionable_lowercase_output(lower: &str) -> bool {
         "api key",
         "login",
         "native session busy",
+        "native session missing",
+        "native session was not found",
         "exited with status",
+        "trusted directory",
+        "skip-git-repo-check",
+        "git repo check",
         "model not found",
         "unknown model",
         "invalid model",
@@ -1525,6 +1716,18 @@ fn classify_failure_category(lower: &str) -> Option<AgentFailureCategory> {
         ],
     ) {
         return Some(AgentFailureCategory::Permission);
+    }
+    if contains_any(
+        lower,
+        &[
+            "not inside a trusted directory",
+            "trusted directory",
+            "--skip-git-repo-check",
+            "skip-git-repo-check",
+            "git repo check",
+        ],
+    ) {
+        return Some(AgentFailureCategory::Trust);
     }
     if contains_any(
         lower,
@@ -1731,19 +1934,114 @@ fn semantic_event_kind_from_value(value: &Value) -> Option<String> {
     }
 
     let object = value.as_object()?;
+    if object
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("system"))
+    {
+        return Some("system".to_string());
+    }
+    if let Some(kind) = object
+        .get("message")
+        .and_then(semantic_event_kind_from_value)
+    {
+        return Some(kind);
+    }
     if let Some(kind) = semantic_event_kind_from_object(object) {
         return Some(kind);
     }
     if let Some(kind) = semantic_message_event_kind(object) {
         return Some(kind);
     }
+    if let Some(kind) = semantic_event_kind_from_named_fields(object) {
+        return Some(kind);
+    }
+    if let Some(kind) = semantic_event_kind_from_type_field(object) {
+        return Some(kind);
+    }
 
-    for key in ["message", "item", "event", "msg", "data"] {
+    for key in [
+        "item",
+        "event_msg",
+        "response_item",
+        "payload",
+        "event",
+        "msg",
+        "data",
+    ] {
         if let Some(kind) = object.get(key).and_then(semantic_event_kind_from_value) {
             return Some(kind);
         }
     }
 
+    None
+}
+
+fn semantic_event_kind_from_type_field(object: &Map<String, Value>) -> Option<String> {
+    let kind = object
+        .get("type")
+        .or_else(|| object.get("kind"))
+        .or_else(|| object.get("event"))
+        .or_else(|| object.get("event_type"))
+        .and_then(Value::as_str)
+        .and_then(normalize_event_kind)?;
+    matches!(
+        kind.as_str(),
+        "assistant"
+            | "tool_use"
+            | "tool_result"
+            | "diff"
+            | "patch"
+            | "file_update"
+            | "approval"
+            | "stderr"
+            | "turn_complete"
+            | "system"
+            | "user"
+    )
+    .then_some(kind)
+}
+
+fn semantic_event_kind_from_named_fields(object: &Map<String, Value>) -> Option<String> {
+    if object.get("exec_command_end").is_some() {
+        return Some("tool_result".to_string());
+    }
+    if object.get("exec_command_begin").is_some() {
+        return Some("tool_use".to_string());
+    }
+    if object.get("patch_apply_begin").is_some()
+        || object.get("patch_apply_updated").is_some()
+        || object.get("patch_apply_end").is_some()
+    {
+        return Some("patch".to_string());
+    }
+    if object.get("turn_diff").is_some() {
+        return Some("diff".to_string());
+    }
+    if object.get("guardian_assessment").is_some() {
+        return Some("approval".to_string());
+    }
+    if object.get("toolResults").is_some() {
+        return Some("tool_result".to_string());
+    }
+    if let Some(tool_calls) = object.get("toolCalls").and_then(Value::as_array) {
+        if tool_calls.iter().any(gemini_tool_call_has_result) {
+            return Some("tool_result".to_string());
+        }
+        if !tool_calls.is_empty() {
+            return Some("tool_use".to_string());
+        }
+    }
+    if object.get("agent_message").is_some()
+        || object.get("agent_reasoning").is_some()
+        || object.get("gemini").is_some()
+        || object.get("model").is_some()
+    {
+        return Some("assistant".to_string());
+    }
+    if object.get("user_message").is_some() {
+        return Some("user".to_string());
+    }
     None
 }
 
@@ -1836,6 +2134,102 @@ fn tool_summary_kind_from_raw(raw_kind: &str) -> Option<String> {
     }
 }
 
+fn summarize_named_agent_event_object(object: &Map<String, Value>) -> Option<String> {
+    for key in [
+        "payload",
+        "item",
+        "event_msg",
+        "response_item",
+        "event",
+        "msg",
+        "data",
+    ] {
+        if let Some(summary) = object
+            .get(key)
+            .and_then(Value::as_object)
+            .and_then(summarize_named_agent_event_object)
+        {
+            return Some(summary);
+        }
+    }
+
+    if let Some(message) = object.get("agent_message") {
+        return json_string_or_message(message);
+    }
+    if let Some(message) = object.get("agent_reasoning") {
+        return json_string_or_message(message);
+    }
+    if let Some(message) = object.get("user_message") {
+        return json_string_or_message(message);
+    }
+    if let Some(message) = object.get("message").and_then(json_string_or_message) {
+        return Some(message);
+    }
+    if object
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("system"))
+    {
+        return Some("system".to_string());
+    }
+    if let Some(message) = object.get("gemini").or_else(|| object.get("model")) {
+        return json_string_or_message(message);
+    }
+    if let Some(tool) = object.get("exec_command_begin") {
+        return codex_exec_command_summary(tool);
+    }
+    if let Some(tool) = object.get("exec_command_end") {
+        return codex_exec_result_summary(tool);
+    }
+    if let Some(patch) = object
+        .get("patch_apply_begin")
+        .or_else(|| object.get("patch_apply_updated"))
+        .or_else(|| object.get("patch_apply_end"))
+    {
+        return patch_summary_text(patch).map(|patch| sanitize_text(&patch, TOOL_RESULT_MAX_CHARS));
+    }
+    if let Some(diff) = object.get("turn_diff") {
+        return diff_summary_text(diff).map(|diff| sanitize_text(&diff, TOOL_RESULT_MAX_CHARS));
+    }
+    if let Some(guardian) = object.get("guardian_assessment") {
+        return guardian_assessment_summary(guardian);
+    }
+    if object
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(normalize_event_kind)
+        .as_deref()
+        == Some("approval")
+    {
+        return guardian_assessment_summary(&Value::Object(object.clone()));
+    }
+    if let Some(tool_calls) = object.get("toolCalls").and_then(Value::as_array) {
+        let summaries = tool_calls
+            .iter()
+            .filter_map(gemini_tool_call_summary)
+            .collect::<Vec<_>>();
+        if !summaries.is_empty() {
+            return Some(summaries.join("\n"));
+        }
+    }
+    if let Some(tool_results) = object.get("toolResults").and_then(Value::as_array) {
+        let summaries = tool_results
+            .iter()
+            .filter_map(gemini_tool_result_summary)
+            .collect::<Vec<_>>();
+        if !summaries.is_empty() {
+            return Some(summaries.join("\n"));
+        }
+    }
+    if let Some(summary) = gemini_tool_call_summary(&Value::Object(object.clone())) {
+        return Some(summary);
+    }
+    if let Some(summary) = gemini_tool_result_summary(&Value::Object(object.clone())) {
+        return Some(summary);
+    }
+    None
+}
+
 fn summarize_json_value(value: &Value) -> String {
     if let Some(object) = value.as_object() {
         if let Some(summary) = summarize_error_object(object) {
@@ -1845,6 +2239,9 @@ fn summarize_json_value(value: &Value) -> String {
             return summary;
         }
         if let Some(summary) = summarize_review_object(object) {
+            return summary;
+        }
+        if let Some(summary) = summarize_named_agent_event_object(object) {
             return summary;
         }
         if let Some(summary) = summarize_inline_tool_object(object) {
@@ -1989,6 +2386,13 @@ fn summarize_tool_object(object: &Map<String, Value>) -> Option<String> {
             object,
         )));
     }
+    if is_permission_tool_name(&raw_name) {
+        let detail = permission_request_detail_text(object);
+        return Some(match detail {
+            Some(detail) => format!("tool {name}: {}", sanitize_text(&detail, 160)),
+            None => format!("tool {name}"),
+        });
+    }
 
     let detail = tool_detail_text(object);
     Some(match detail {
@@ -2129,6 +2533,217 @@ fn summarize_tool_search_output_object(object: &Map<String, Value>) -> Option<St
     Some(format_tool_result_summary(Some("search"), detail, false))
 }
 
+fn json_string_or_message(value: &Value) -> Option<String> {
+    value_to_text(value)
+        .or_else(|| value.get("message").and_then(json_string_or_message))
+        .or_else(|| value.get("text").and_then(json_string_or_message))
+        .or_else(|| value.get("content").and_then(json_string_or_message))
+        .or_else(|| value.get("summary").and_then(json_string_or_message))
+        .or_else(|| extract_text_from_value(value))
+}
+
+fn codex_exec_command_summary(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let detail = object
+        .get("command")
+        .or_else(|| object.get("cmd"))
+        .or_else(|| object.get("argv"))
+        .or_else(|| object.get("args"))
+        .and_then(command_value_to_text)
+        .or_else(|| object.get("action").and_then(codex_exec_command_summary));
+    Some(format_tool_summary("shell", detail))
+}
+
+fn codex_exec_result_summary(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let mut parts = Vec::new();
+    if let Some(exit_code) = object
+        .get("exit_code")
+        .or_else(|| object.get("exitCode"))
+        .and_then(value_to_text)
+    {
+        parts.push(format!("exit {exit_code}"));
+    }
+    if let Some(stdout) = object.get("stdout").and_then(output_body_text) {
+        parts.push(stdout);
+    }
+    if let Some(stderr) = object.get("stderr").and_then(output_body_text) {
+        parts.push(stderr);
+    }
+    let detail = if parts.is_empty() {
+        output_body_text(value)
+    } else {
+        Some(parts.join("\n"))
+    };
+    Some(format_tool_result_summary(Some("shell"), detail, false))
+}
+
+fn patch_summary_text(value: &Value) -> Option<String> {
+    value
+        .get("patch")
+        .or_else(|| value.get("changes"))
+        .or_else(|| value.get("summary"))
+        .and_then(output_body_text)
+        .or_else(|| output_body_text(value))
+}
+
+fn diff_summary_text(value: &Value) -> Option<String> {
+    value
+        .get("diff")
+        .or_else(|| value.get("unified_diff"))
+        .or_else(|| value.get("changes"))
+        .and_then(output_body_text)
+        .or_else(|| output_body_text(value))
+}
+
+fn guardian_assessment_summary(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let action = object.get("action").and_then(guardian_action_summary);
+    let status = object.get("status").and_then(value_to_text);
+    let outcome = object.get("outcome").and_then(value_to_text);
+    let detail = [status, outcome, action]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if detail.trim().is_empty() {
+        Some("waiting for permission approval".to_string())
+    } else {
+        Some(format!("waiting for permission approval: {detail}"))
+    }
+}
+
+fn guardian_action_summary(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let kind = object
+        .get("type")
+        .or_else(|| object.get("source"))
+        .and_then(value_to_text)
+        .unwrap_or_else(|| "action".to_string());
+    let detail = object
+        .get("command")
+        .or_else(|| object.get("cmd"))
+        .or_else(|| object.get("argv"))
+        .and_then(command_value_to_text)
+        .or_else(|| object.get("tool").and_then(value_to_text))
+        .or_else(|| object.get("name").and_then(value_to_text));
+    Some(match detail {
+        Some(detail) if !detail.trim().is_empty() => format!("{kind}: {detail}"),
+        _ => kind,
+    })
+}
+
+fn gemini_tool_call_has_result(value: &Value) -> bool {
+    value.get("result").is_some()
+        || value.get("response").is_some()
+        || value.get("functionResponse").is_some()
+        || value.get("error").is_some()
+}
+
+fn gemini_tool_call_summary(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let gemini_shape = object.get("displayName").is_some()
+        || object.get("args").is_some()
+        || object.get("status").is_some()
+        || object.get("response").is_some()
+        || object.get("functionResponse").is_some();
+    if !gemini_shape {
+        return None;
+    }
+    if let Some(result) = object
+        .get("result")
+        .or_else(|| object.get("response"))
+        .or_else(|| object.get("functionResponse"))
+    {
+        let is_error = object
+            .get("status")
+            .and_then(value_to_text)
+            .map(|status| {
+                matches!(
+                    status.to_ascii_lowercase().as_str(),
+                    "cancelled" | "canceled" | "error" | "failed"
+                )
+            })
+            .unwrap_or(false)
+            || object.get("error").is_some()
+            || gemini_response_has_error(result);
+        let name = object
+            .get("displayName")
+            .or_else(|| object.get("name"))
+            .and_then(Value::as_str);
+        let detail = gemini_response_text(result)
+            .or_else(|| object.get("error").and_then(output_body_text))
+            .or_else(|| object.get("status").and_then(value_to_text));
+        return Some(format_tool_result_summary(name, detail, is_error));
+    }
+
+    let name = object
+        .get("displayName")
+        .or_else(|| object.get("name"))
+        .and_then(Value::as_str)
+        .and_then(non_empty)?;
+    let detail = object
+        .get("description")
+        .and_then(value_to_text)
+        .or_else(|| object.get("args").and_then(argument_value_to_text));
+    Some(format_tool_summary(&name, detail))
+}
+
+fn gemini_tool_result_summary(value: &Value) -> Option<String> {
+    if !gemini_tool_result_like(value) {
+        return None;
+    }
+    let name = value
+        .get("displayName")
+        .or_else(|| value.get("name"))
+        .and_then(Value::as_str);
+    let is_error = gemini_response_has_error(value);
+    let detail = gemini_response_text(value);
+    Some(format_tool_result_summary(name, detail, is_error))
+}
+
+fn gemini_response_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Array(items) => {
+            let text = items
+                .iter()
+                .filter_map(gemini_response_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.trim().is_empty()).then_some(text)
+        }
+        Value::Object(_) => value
+            .get("functionResponse")
+            .and_then(gemini_response_text)
+            .or_else(|| value.get("response").and_then(gemini_response_text))
+            .or_else(|| value.get("error").and_then(output_body_text))
+            .or_else(|| value.get("output").and_then(output_body_text))
+            .or_else(|| value.get("result").and_then(output_body_text)),
+        _ => output_body_text(value),
+    }
+}
+
+fn gemini_tool_result_like(value: &Value) -> bool {
+    value.get("functionResponse").is_some()
+        || value.get("response").is_some()
+        || value.get("error").is_some()
+        || value.get("output").is_some()
+}
+
+fn gemini_response_has_error(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().any(gemini_response_has_error),
+        Value::Object(_) => {
+            value.get("error").is_some()
+                || value
+                    .get("functionResponse")
+                    .is_some_and(gemini_response_has_error)
+                || value.get("response").is_some_and(gemini_response_has_error)
+        }
+        _ => false,
+    }
+}
+
 fn summarize_web_search_call_object(object: &Map<String, Value>) -> Option<String> {
     let detail = object
         .get("action")
@@ -2235,6 +2850,18 @@ fn is_question_tool_name(name: &str) -> bool {
     )
 }
 
+fn is_permission_tool_name(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "request_permissions"
+            | "request_permission"
+            | "requestpermissions"
+            | "permission_request"
+            | "permissions_request"
+    )
+}
+
 fn is_question_tool_error(content: &str) -> bool {
     let lower = content.trim().to_ascii_lowercase();
     lower == "answer questions?"
@@ -2264,11 +2891,57 @@ fn format_question_waiting_summary(detail: Option<String>) -> String {
     }
 }
 
+fn permission_request_detail_text(object: &Map<String, Value>) -> Option<String> {
+    let input = object
+        .get("input")
+        .or_else(|| object.get("parameters"))
+        .or_else(|| object.get("args"))
+        .or_else(|| object.get("arguments"));
+    let source = input.and_then(Value::as_object).unwrap_or(object);
+
+    let mut parts = Vec::new();
+    for key in [
+        "permissions",
+        "permission",
+        "scopes",
+        "scope",
+        "access",
+        "capabilities",
+        "capability",
+    ] {
+        if let Some(text) = source.get(key).and_then(permission_value_to_text) {
+            push_unique_summary_line(&mut parts, text);
+        }
+    }
+    for key in ["reason", "rationale", "description", "message", "prompt"] {
+        if let Some(text) = source.get(key).and_then(value_to_text) {
+            push_unique_summary_line(&mut parts, text);
+        }
+    }
+    if parts.is_empty() {
+        tool_detail_text(object)
+    } else {
+        Some(parts.join(" · "))
+    }
+}
+
+fn permission_value_to_text(value: &Value) -> Option<String> {
+    if let Some(text) = value_to_text(value) {
+        return Some(text);
+    }
+    let array = value.as_array()?;
+    let parts = array.iter().filter_map(value_to_text).collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join(" / "))
+}
+
 fn question_tool_detail_text(object: &Map<String, Value>) -> Option<String> {
     for key in ["question", "prompt", "message", "header"] {
         if let Some(text) = object.get(key).and_then(value_to_text) {
             return Some(text);
         }
+    }
+    if let Some(text) = object.get("questions").and_then(question_array_detail_text) {
+        return Some(text);
     }
 
     let input = object
@@ -2285,25 +2958,28 @@ fn question_tool_detail_text(object: &Map<String, Value>) -> Option<String> {
             return Some(text);
         }
     }
-    if let Some(questions) = input.get("questions").and_then(Value::as_array) {
-        let text = questions
-            .iter()
-            .filter_map(|question| {
-                question
-                    .get("question")
-                    .or_else(|| question.get("prompt"))
-                    .or_else(|| question.get("header"))
-                    .and_then(value_to_text)
-                    .or_else(|| extract_text_from_value(question))
-            })
-            .take(3)
-            .collect::<Vec<_>>()
-            .join(" / ");
-        if !text.trim().is_empty() {
-            return Some(text);
-        }
+    if let Some(text) = input.get("questions").and_then(question_array_detail_text) {
+        return Some(text);
     }
     tool_detail_text(object)
+}
+
+fn question_array_detail_text(value: &Value) -> Option<String> {
+    let questions = value.as_array()?;
+    let text = questions
+        .iter()
+        .filter_map(|question| {
+            question
+                .get("question")
+                .or_else(|| question.get("prompt"))
+                .or_else(|| question.get("header"))
+                .and_then(value_to_text)
+                .or_else(|| extract_text_from_value(question))
+        })
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    (!text.trim().is_empty()).then_some(text)
 }
 
 fn tool_result_content_text(value: &Value) -> Option<String> {
@@ -2589,10 +3265,15 @@ fn summarize_loose_review_json(s: &str) -> Option<String> {
     let approved = find_loose_bool_field(s, "approved")?;
     let issues = extract_loose_string_array(s, "issues");
     let suggestions = extract_loose_string_array(s, "suggestions");
+    let visible_issue_count = if issues.is_empty() && !suggestions.is_empty() && !approved {
+        suggestions.len()
+    } else {
+        issues.len()
+    };
     let mut out = if approved {
         format!("approved: {} issue(s)", issues.len())
     } else {
-        format!("needs changes: {} issue(s)", issues.len())
+        format!("needs changes: {visible_issue_count} issue(s)")
     };
 
     for issue in issues.iter().take(6) {
@@ -2620,12 +3301,20 @@ fn summarize_loose_plan_json(s: &str) -> Option<String> {
         return None;
     }
     let prompts = extract_loose_repeated_string_field(s, "prompt");
+    let agents = extract_loose_repeated_string_field(s, "agent_hint")
+        .into_iter()
+        .chain(extract_loose_repeated_string_field(s, "agent"))
+        .collect::<Vec<_>>();
     if prompts.is_empty() {
         return Some("plan ready: worker run(s)".into());
     }
     let mut out = format!("plan ready: {} worker run(s)", prompts.len());
     for (idx, prompt) in prompts.iter().take(6).enumerate() {
         out.push_str(&format!("\n  {}. {}", idx + 1, sanitize_text(prompt, 140)));
+        if let Some(agent) = agents.get(idx).filter(|agent| !agent.trim().is_empty()) {
+            out.push_str(" · ");
+            out.push_str(&sanitize_text(agent, 48));
+        }
     }
     if prompts.len() > 6 {
         out.push_str(&format!("\n  … {} more", prompts.len() - 6));
@@ -2757,6 +3446,52 @@ mod tests {
 
         assert_eq!(summary.kind, "assistant");
         assert_eq!(summary.text, "planning step one");
+    }
+
+    #[test]
+    fn claude_stream_system_model_metadata_is_not_an_answer() {
+        let line = serde_json::json!({
+            "type": "system",
+            "subtype": "init",
+            "model": "glm-5.1",
+            "session_id": "4546ea8f-efd9-4a1a-a1f5-29d3be5cc61c"
+        })
+        .to_string();
+
+        let summary = summarize_cli_stream_line(&line, 200).unwrap();
+
+        assert_eq!(classify_json_line(&line), "system");
+        assert_eq!(summary.kind, "system");
+        assert_eq!(summary.text, "system");
+        assert!(!summary.text.contains("glm-5.1"));
+    }
+
+    #[test]
+    fn claude_stream_assistant_prefers_message_content_over_model_metadata() {
+        let payload = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "glm-5.2",
+                "content": [
+                    { "type": "text", "text": "Tiffany adapter Claude runtime OK" }
+                ]
+            },
+            "session_id": "4546ea8f-efd9-4a1a-a1f5-29d3be5cc61c"
+        });
+
+        let summary = summarize_event_value(&payload, 200).unwrap();
+        let text = format_runtime_output("claude-code", "assistant", &payload, 200);
+
+        assert_eq!(summary.kind, "assistant");
+        assert_eq!(summary.text, "Tiffany adapter Claude runtime OK");
+        assert_eq!(
+            text,
+            "claude-code assistant: Tiffany adapter Claude runtime OK"
+        );
+        assert!(!text.contains("glm-5.2"));
     }
 
     #[test]
@@ -2908,6 +3643,23 @@ mod tests {
         assert_eq!(summary.text, "Working on the fix");
         assert!(!summary.text.contains('{'));
 
+        let completed_agent_message = serde_json::json!({
+            "type": "item.completed",
+            "item": {
+                "id": "item_0",
+                "type": "agent_message",
+                "text": "Tiffany adapter Codex runtime OK"
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&completed_agent_message), "assistant");
+        let summary = summarize_cli_stream_line(&completed_agent_message, 500).unwrap();
+        assert_eq!(summary.kind, "assistant");
+        assert_eq!(summary.text, "Tiffany adapter Codex runtime OK");
+        assert!(!summary.text.contains("item.completed"));
+        assert!(!summary.text.contains('{'));
+
         let call = serde_json::json!({
             "type": "response_item",
             "payload": {
@@ -2938,6 +3690,182 @@ mod tests {
         let summary = summarize_cli_stream_line(&output, 500).unwrap();
         assert_eq!(summary.kind, "tool_result");
         assert_eq!(summary.text, "tool result: tests passed");
+    }
+
+    #[test]
+    fn unwraps_codex_rollout_event_msg_fields_without_raw_json() {
+        let answer = serde_json::json!({
+            "timestamp": "2026-06-26T00:00:00Z",
+            "item": {
+                "event_msg": {
+                    "agent_message": { "message": "我会检查代码。" }
+                }
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&answer), "assistant");
+        let summary = summarize_cli_stream_line(&answer, 500).unwrap();
+        assert_eq!(summary.kind, "assistant");
+        assert_eq!(summary.text, "我会检查代码。");
+        assert!(!summary.text.contains("structured output"));
+        assert!(!summary.text.contains('{'));
+
+        let command = serde_json::json!({
+            "timestamp": "2026-06-26T00:00:01Z",
+            "item": {
+                "event_msg": {
+                    "exec_command_begin": { "command": ["cargo", "test", "--all"] }
+                }
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&command), "tool_use");
+        let summary = summarize_cli_stream_line(&command, 500).unwrap();
+        assert_eq!(summary.kind, "tool_use");
+        assert_eq!(summary.text, "tool shell: cargo test --all");
+        assert!(!summary.text.contains('{'));
+
+        let result = serde_json::json!({
+            "timestamp": "2026-06-26T00:00:02Z",
+            "item": {
+                "event_msg": {
+                    "exec_command_end": {
+                        "exit_code": 0,
+                        "stdout": "ok"
+                    }
+                }
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&result), "tool_result");
+        let summary = summarize_cli_stream_line(&result, 500).unwrap();
+        assert_eq!(summary.kind, "tool_result");
+        assert!(summary.text.contains("tool shell result"));
+        assert!(summary.text.contains("exit 0"));
+        assert!(summary.text.contains("ok"));
+        assert!(!summary.text.contains('{'));
+
+        let diff = serde_json::json!({
+            "timestamp": "2026-06-26T00:00:03Z",
+            "item": {
+                "event_msg": {
+                    "turn_diff": { "diff": "diff --git a/lib.rs b/lib.rs\n+done" }
+                }
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&diff), "diff");
+        let summary = summarize_cli_stream_line(&diff, 500).unwrap();
+        assert_eq!(summary.kind, "diff");
+        assert!(summary.text.contains("diff --git"));
+        assert!(!summary.text.contains("turn_diff"));
+    }
+
+    #[test]
+    fn summarizes_codex_guardian_approval_without_raw_json() {
+        let event = serde_json::json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "guardian_assessment",
+                "status": "in_progress",
+                "action": {
+                    "type": "command",
+                    "source": "shell",
+                    "command": "rm -rf /tmp/guardian"
+                }
+            }
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&event), "approval");
+        let summary = summarize_cli_stream_line(&event, 500).unwrap();
+        assert_eq!(summary.kind, "approval");
+        assert_eq!(
+            summary.text,
+            "waiting for permission approval: in_progress · command: rm -rf /tmp/guardian"
+        );
+        assert!(!summary.text.contains('{'));
+
+        let visible = visible_agent_output(&format!("codex approval: {}", summary.text), 500)
+            .expect("visible approval");
+        assert_eq!(visible.kind, VisibleAgentOutputKind::Approval);
+        assert!(visible.display.contains("waiting for permission approval"));
+    }
+
+    #[test]
+    fn summarizes_gemini_tool_calls_and_function_responses_without_raw_json() {
+        let call = serde_json::json!({
+            "type": "gemini",
+            "content": "我会检查文件。",
+            "toolCalls": [
+                {
+                    "name": "read_file",
+                    "displayName": "Read",
+                    "args": { "file_path": "/tmp/repo/README.md" }
+                }
+            ]
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&call), "tool_use");
+        let summary = summarize_cli_stream_line(&call, 500).unwrap();
+        assert_eq!(summary.kind, "tool_use");
+        assert_eq!(summary.text, "tool Read: /tmp/repo/README.md");
+        assert!(!summary.text.contains('{'));
+
+        let result = serde_json::json!({
+            "toolResults": [
+                {
+                    "name": "read_file",
+                    "displayName": "Read",
+                    "functionResponse": {
+                        "response": {
+                            "output": "README body"
+                        }
+                    }
+                }
+            ]
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&result), "tool_result");
+        let summary = summarize_cli_stream_line(&result, 500).unwrap();
+        assert_eq!(summary.kind, "tool_result");
+        assert_eq!(summary.text, "tool Read result: README body");
+        assert!(!summary.text.contains('{'));
+
+        let cancelled = serde_json::json!({
+            "toolCalls": [
+                {
+                    "name": "replace",
+                    "displayName": "Edit",
+                    "status": "cancelled",
+                    "result": [
+                        {
+                            "functionResponse": {
+                                "response": {
+                                    "error": "[Operation Cancelled] Reason: User did not allow tool call"
+                                }
+                            }
+                        }
+                    ]
+                }
+            ]
+        })
+        .to_string();
+
+        assert_eq!(classify_json_line(&cancelled), "tool_result");
+        let summary = summarize_cli_stream_line(&cancelled, 500).unwrap();
+        assert_eq!(summary.kind, "tool_result");
+        assert_eq!(
+            summary.text,
+            "tool Edit error: [Operation Cancelled] Reason: User did not allow tool call"
+        );
+        assert!(!summary.text.contains("functionResponse"));
     }
 
     #[test]
@@ -3098,8 +4026,11 @@ mod tests {
             Some("assistant".to_string())
         );
         assert_eq!(
-            clean_visible_agent_output("codex patch-apply: *** Begin Patch\n*** Update File: README.md", 500)
-                .as_deref(),
+            clean_visible_agent_output(
+                "codex patch-apply: *** Begin Patch\n*** Update File: README.md",
+                500
+            )
+            .as_deref(),
             Some("*** Begin Patch\n*** Update File: README.md")
         );
     }
@@ -3137,6 +4068,14 @@ mod tests {
         .expect("actionable error");
         assert_eq!(error.kind, VisibleAgentOutputKind::Stderr);
         assert!(error.display.contains("模型不存在"));
+        assert!(
+            visible_agent_output(
+                "codex stderr: WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)",
+                500,
+            )
+            .is_none(),
+            "Codex startup alias warning should not pollute worker waterfall"
+        );
         assert!(!error.display.contains('{'));
 
         let worker_error = visible_agent_output(
@@ -3153,28 +4092,44 @@ mod tests {
         assert_eq!(tool_call.kind, VisibleAgentOutputKind::ToolCall);
         assert_eq!(tool_call.kind.label(), "tool call");
         assert_eq!(tool_call.display, "tool shell: cargo test --all");
+        let internal_tool_selection_content =
+            "claude-code tool_use: tool ToolSearch: select:WebFetch";
+        let internal_tool_selection = visible_agent_output(internal_tool_selection_content, 500);
+        assert!(
+            internal_tool_selection.is_none(),
+            "internal tool selection should not pollute the worker waterfall"
+        );
 
         let tool_result =
             visible_agent_output("claude-code tool_result: tool result: tests passed", 500)
                 .expect("tool result");
         assert_eq!(tool_result.kind, VisibleAgentOutputKind::ToolResult);
         assert_eq!(tool_result.kind.label(), "tool result");
-        assert_eq!(tool_result.display, "tool result: tests passed");
+        assert_eq!(tool_result.display, "tests passed");
 
         let user_tool_result =
             visible_agent_output("claude-code user: tool result: tests passed", 500)
                 .expect("user tool result");
         assert_eq!(user_tool_result.kind, VisibleAgentOutputKind::ToolResult);
-        assert_eq!(user_tool_result.display, "tool result: tests passed");
+        assert_eq!(user_tool_result.display, "tests passed");
         assert!(visible_agent_output("claude-code user: tool result", 500).is_none());
 
         let recovery = visible_agent_output(
-            "claude-code status: native session busy · cleared saved session native-busy and retrying once with a fresh native session",
+            "claude-code status: native session busy · waiting for saved session native-busy and retrying once with the same native session",
             500,
         )
         .expect("recovery status");
         assert_eq!(recovery.kind, VisibleAgentOutputKind::Actionable);
         assert!(recovery.display.contains("native session busy"));
+        assert!(recovery.display.contains("same native session"));
+
+        let missing_recovery = visible_agent_output(
+            "claude-code status: native session missing · cleared saved session native-missing and retrying once with a fresh native session",
+            500,
+        )
+        .expect("missing recovery status");
+        assert_eq!(missing_recovery.kind, VisibleAgentOutputKind::Actionable);
+        assert!(missing_recovery.display.contains("native session missing"));
 
         let process_exit = visible_agent_output(
             "claude-code process_exit: claude exited with status exit status: 1",
@@ -3183,11 +4138,44 @@ mod tests {
         .expect("process exit");
         assert_eq!(process_exit.kind, VisibleAgentOutputKind::Actionable);
 
+        assert!(
+            visible_agent_output(
+                "claude-code process_exit: claude exited with status exit status: 0",
+                500,
+            )
+            .is_none(),
+            "successful native process exits should not add waterfall noise"
+        );
+        assert!(
+            visible_agent_output("codex process_exit: codex exited with status 0", 500).is_none(),
+            "successful native process exits should be hidden across runtimes"
+        );
+
         let question_call = visible_agent_output("claude-code tool_use: tool AskUserQuestion", 500)
             .expect("question call");
         assert_eq!(question_call.kind, VisibleAgentOutputKind::Question);
         assert_eq!(question_call.kind.label(), "question");
-        assert_eq!(question_call.display, "question requested");
+        assert_eq!(
+            question_call.display,
+            "waiting for user input: Answer questions?"
+        );
+        let question_payload = serde_json::json!({
+            "type": "tool_use",
+            "name": "AskUserQuestion",
+            "input": {
+                "questions": [
+                    { "question": "想了解比赛规则，还是直接写参赛 agent？" }
+                ]
+            }
+        });
+        let question_payload_line = format!("claude-code tool_use: {question_payload}");
+        let question_with_detail = visible_agent_output(&question_payload_line, 500);
+        let question_with_detail = question_with_detail.expect("question payload");
+        assert_eq!(question_with_detail.kind, VisibleAgentOutputKind::Question);
+        assert_eq!(
+            question_with_detail.display,
+            "question requested: 想了解比赛规则，还是直接写参赛 agent？"
+        );
 
         let question_error = visible_agent_output(
             "claude-code tool_result: tool error: Answer questions?",
@@ -3199,6 +4187,7 @@ mod tests {
             question_error.display,
             "waiting for user input: Answer questions?"
         );
+        assert_eq!(question_call.dedupe_key, question_error.dedupe_key);
 
         let permissions = visible_agent_output(
             "codex tool_use: tool request_permissions: network access and write access",
@@ -3210,6 +4199,22 @@ mod tests {
         assert_eq!(
             permissions.display,
             "waiting for permission approval: network access and write access"
+        );
+        let permission_payload = serde_json::json!({
+            "type": "tool_use",
+            "name": "request_permissions",
+            "input": {
+                "permissions": ["network access", "write access"],
+                "reason": "fetch Kaggle competition page"
+            }
+        });
+        let permission_payload_line = format!("codex tool_use: {permission_payload}");
+        let permission_payload_visible = visible_agent_output(&permission_payload_line, 500);
+        let permission_payload_visible =
+            permission_payload_visible.expect("permission payload approval");
+        assert_eq!(
+            permission_payload_visible.display,
+            "waiting for permission approval: network access / write access · fetch Kaggle competition page"
         );
 
         let command_approval = visible_agent_output(
@@ -3265,6 +4270,37 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_claude_tool_status_wrappers() {
+        let system_note =
+            visible_agent_output("claude-code system: Create venv and install deps", 500)
+                .expect("system note");
+        assert_eq!(system_note.kind, VisibleAgentOutputKind::Normal);
+        assert_eq!(system_note.display, "Create venv and install deps");
+
+        let created = visible_agent_output(
+            "claude-code user: tool result: File created successfully at: /tmp/agent.py (file state is current in your context -- no need to Read it back)",
+            500,
+        )
+        .expect("file created");
+        assert_eq!(created.kind, VisibleAgentOutputKind::FileUpdate);
+        assert_eq!(created.display, "file created: /tmp/agent.py");
+
+        let updated = visible_agent_output(
+            "claude-code user: tool result: The file /tmp/requirements.txt has been updated successfully. (file state is current in your context -- no need to Read it back)",
+            500,
+        )
+        .expect("file updated");
+        assert_eq!(updated.kind, VisibleAgentOutputKind::FileUpdate);
+        assert_eq!(updated.display, "file updated: /tmp/requirements.txt");
+
+        assert!(visible_agent_output(
+            "claude-code user: tool result: (Bash completed with no output)",
+            500
+        )
+        .is_none());
+    }
+
+    #[test]
     fn normalizes_native_cli_event_kind_aliases() {
         let assistant = summarize_cli_stream_line(
             &serde_json::json!({
@@ -3291,7 +4327,10 @@ mod tests {
 
         assert_eq!(shell.kind, "tool_use");
         assert_eq!(shell.text, "tool shell: cargo test");
-        assert_eq!(classify_json_line(r#"{"event_type":"patch-apply"}"#), "patch");
+        assert_eq!(
+            classify_json_line(r#"{"event_type":"patch-apply"}"#),
+            "patch"
+        );
     }
 
     #[test]
@@ -3413,12 +4452,56 @@ mod tests {
     }
 
     #[test]
+    fn humanizes_loose_review_json_with_only_suggestions() {
+        let display = humanize_jsonish(
+            "reviewer>\n  {\"approved\": false, \"issues\": [], \"suggestions\": [\"return a direct final answer\", \"avoid repository inspection\"",
+            800,
+        );
+
+        assert!(display.contains("reviewer: needs changes: 2 issue(s)"));
+        assert!(display.contains("suggestions:"));
+        assert!(display.contains("return a direct final answer"));
+        assert!(display.contains("avoid repository inspection"));
+        assert!(!display.contains('{'));
+        assert!(!display.contains("\"suggestions\""));
+    }
+
+    #[test]
+    fn humanizes_loose_plan_json_with_agent_hints() {
+        let display = humanize_jsonish(
+            "planner>\n  {\"sub_tasks\": [{\"prompt\": \"检查 TUI 输出重复\", \"agent_hint\": \"worker-cc\"}, {\"prompt\": \"修复 Codex worker session\", \"agent_hint\": \"worker-codex\"",
+            800,
+        );
+
+        assert!(display.contains("planner: plan ready: 2 worker run(s)"));
+        assert!(display.contains("1. 检查 TUI 输出重复 · worker-cc"));
+        assert!(display.contains("2. 修复 Codex worker session · worker-codex"));
+        assert!(!display.contains('{'));
+        assert!(!display.contains("agent_hint"));
+    }
+
+    #[test]
     fn normalizes_duplicate_assistant_and_result_outputs() {
         let assistant = normalized_output_key("claude assistant: useful summary", 200).unwrap();
         let result = normalized_output_key("claude result: useful summary", 200).unwrap();
 
         assert_eq!(assistant, result);
         assert_eq!(assistant, "useful summary");
+    }
+
+    #[test]
+    fn normalizes_duplicate_tool_result_outputs() {
+        let direct =
+            normalized_output_key("claude-code tool_result: tool result: tests passed", 200)
+                .unwrap();
+        let user =
+            normalized_output_key("claude-code user: tool result: tests passed", 200).unwrap();
+        let output =
+            normalized_output_key("claude-code output: tool result: tests passed", 200).unwrap();
+
+        assert_eq!(direct, user);
+        assert_eq!(direct, output);
+        assert_eq!(direct, "tests passed");
     }
 
     #[test]
@@ -3541,6 +4624,15 @@ mod tests {
         .expect("runtime hint");
         assert_eq!(runtime.category, AgentFailureCategory::Runtime);
         assert!(runtime.action().contains("Install"));
+
+        let trust = agent_failure_hint(
+            "codex stderr: Not inside a trusted directory and --skip-git-repo-check was not specified.",
+            500,
+        )
+        .expect("trust hint");
+        assert_eq!(trust.category, AgentFailureCategory::Trust);
+        assert!(trust.title().contains("project trust"));
+        assert!(trust.action().contains("--skip-git-repo-check"));
 
         let parse = agent_failure_hint(
             "replanning after critique round 1: planner returned no sub_tasks (parse failed)",
