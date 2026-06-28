@@ -67,9 +67,13 @@ assert_contains() {
 
 assert_contains 'homepage "https://github.com/example/tiffany-loop"'
 assert_contains 'url "https://github.com/example/tiffany-loop/releases/download/v9.8.7/tiffany-loop-v9.8.7-aarch64-apple-darwin.tar.gz"'
+assert_contains 'url "https://github.com/example/tiffany-loop/releases/download/v9.8.7/tiffany-loop-v9.8.7-x86_64-apple-darwin.tar.gz"'
+assert_contains 'url "https://github.com/example/tiffany-loop/releases/download/v9.8.7/tiffany-loop-v9.8.7-x86_64-unknown-linux-gnu.tar.gz"'
+assert_contains 'url "https://github.com/example/tiffany-loop/releases/download/v9.8.7/tiffany-loop-v9.8.7-aarch64-unknown-linux-gnu.tar.gz"'
 assert_contains 'sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
 assert_contains 'url "https://github.com/example/tiffany-loop/archive/refs/tags/v9.8.7.tar.gz"'
 assert_contains "sha256 \"${source_sha}\""
+assert_contains 'if (OS.mac? || OS.linux?) && (Hardware::CPU.arm? || Hardware::CPU.intel?)'
 assert_contains 'bin.install "orchestrator", "tiffany-loop", "tiffany"'
 assert_contains 'system "cargo", "install", *std_cargo_args, "--profile", "tiffany-dist"'
 assert_contains 'system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/tiffany-cli"), "--profile", "tiffany-dist"'

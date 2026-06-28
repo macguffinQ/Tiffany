@@ -142,8 +142,19 @@ if [[ -z "$tap_dir" || "$skip_install" != "true" ]]; then
 fi
 
 version="${tag#v}"
-asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
-asset_url="https://github.com/${release_repo}/releases/download/${tag}/${asset}"
+assets=(
+  "tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
+  "tiffany-loop-${tag}-x86_64-apple-darwin.tar.gz"
+  "tiffany-loop-${tag}-x86_64-unknown-linux-gnu.tar.gz"
+  "tiffany-loop-${tag}-aarch64-unknown-linux-gnu.tar.gz"
+  "tiffany-loop-${tag}-x86_64-pc-windows-msvc.zip"
+)
+homebrew_assets=(
+  "tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
+  "tiffany-loop-${tag}-x86_64-apple-darwin.tar.gz"
+  "tiffany-loop-${tag}-x86_64-unknown-linux-gnu.tar.gz"
+  "tiffany-loop-${tag}-aarch64-unknown-linux-gnu.tar.gz"
+)
 source_url="https://github.com/${release_repo}/archive/refs/tags/${tag}.tar.gz"
 formula_ref="${tap_repo}/${formula_name}"
 tap_name="$(homebrew_tap_name "$tap_repo")"
@@ -208,16 +219,19 @@ release_tag="$(gh release view "$tag" --repo "$release_repo" --json tagName --jq
 release_draft="$(gh release view "$tag" --repo "$release_repo" --json isDraft --jq '.isDraft')"
 assert_eq "release tag" "$tag" "$release_tag"
 assert_eq "release draft state" "false" "$release_draft"
-asset_digest="$(gh release view "$tag" --repo "$release_repo" --json assets --jq ".assets[] | select(.name == \"${asset}\") | .digest")"
-asset_size="$(gh release view "$tag" --repo "$release_repo" --json assets --jq ".assets[] | select(.name == \"${asset}\") | .size")"
-if [[ -z "$asset_digest" || "$asset_digest" == "null" ]]; then
-  echo "release asset not found: $asset" >&2
-  exit 1
-fi
-arm_sha="${asset_digest#sha256:}"
-echo "asset: $asset"
-echo "asset sha256: $arm_sha"
-echo "asset size: $asset_size"
+declare -A asset_shas=()
+for asset in "${assets[@]}"; do
+  asset_digest="$(gh release view "$tag" --repo "$release_repo" --json assets --jq ".assets[] | select(.name == \"${asset}\") | .digest")"
+  asset_size="$(gh release view "$tag" --repo "$release_repo" --json assets --jq ".assets[] | select(.name == \"${asset}\") | .size")"
+  if [[ -z "$asset_digest" || "$asset_digest" == "null" || "$asset_digest" != sha256:* ]]; then
+    echo "release asset not found or missing digest: $asset" >&2
+    exit 1
+  fi
+  asset_shas["$asset"]="${asset_digest#sha256:}"
+  echo "asset: $asset"
+  echo "asset sha256: ${asset_shas[$asset]}"
+  echo "asset size: $asset_size"
+done
 
 step "Homebrew tap formula"
 if [[ -n "$tap_dir" ]]; then
@@ -233,11 +247,14 @@ if [[ ! -f "$formula_path" ]]; then
 fi
 
 formula_text="$(cat "$formula_path")"
-if ! grep -F -- "$asset_url" "$formula_path" >/dev/null; then
-  echo "formula does not reference expected asset URL: $asset_url" >&2
-  print_tap_checkout_diagnostics "$tap_dir" "$tap_repo"
-  exit 1
-fi
+for asset in "${homebrew_assets[@]}"; do
+  asset_url="https://github.com/${release_repo}/releases/download/${tag}/${asset}"
+  if ! grep -F -- "$asset_url" "$formula_path" >/dev/null; then
+    echo "formula does not reference expected asset URL: $asset_url" >&2
+    print_tap_checkout_diagnostics "$tap_dir" "$tap_repo"
+    exit 1
+  fi
+done
 if ! grep -F -- "$source_url" "$formula_path" >/dev/null; then
   echo "formula does not reference expected source URL: $source_url" >&2
   print_tap_checkout_diagnostics "$tap_dir" "$tap_repo"
@@ -251,14 +268,17 @@ assert_formula_contains "brew untap ${tap_name}"
 assert_formula_contains "brew tap ${tap_name}"
 assert_formula_contains "brew reinstall ${tap_name}/${formula_name}"
 assert_formula_contains "tiffany-loop is the primary command"
-formula_arm_sha="$(printf '%s' "$formula_text" | awk -v url="$asset_url" '
-  $0 ~ "url \"" url "\"" { in_url = 1; next }
-  in_url && $1 == "sha256" {
-    gsub(/"/, "", $2)
-    print $2
-    exit
-  }
-')"
+formula_sha_for_url() {
+  local url="$1"
+  printf '%s' "$formula_text" | awk -v url="$url" '
+    $0 ~ "url \"" url "\"" { in_url = 1; next }
+    in_url && $1 == "sha256" {
+      gsub(/"/, "", $2)
+      print $2
+      exit
+    }
+  '
+}
 formula_source_sha="$(printf '%s' "$formula_text" | awk -v url="$source_url" '
   $0 ~ "url \"" url "\"" { in_url = 1; next }
   in_url && $1 == "sha256" {
@@ -267,7 +287,11 @@ formula_source_sha="$(printf '%s' "$formula_text" | awk -v url="$source_url" '
     exit
   }
 ')"
-assert_eq "formula asset sha256" "$arm_sha" "$formula_arm_sha"
+for asset in "${homebrew_assets[@]}"; do
+  asset_url="https://github.com/${release_repo}/releases/download/${tag}/${asset}"
+  formula_asset_sha="$(formula_sha_for_url "$asset_url")"
+  assert_eq "formula asset sha256 for $asset" "${asset_shas[$asset]}" "$formula_asset_sha"
+done
 source_sha="$(curl -fsSL "$source_url" | sha256_stream)"
 assert_eq "formula source sha256" "$source_sha" "$formula_source_sha"
 echo "formula: $formula_path"

@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Tiny Gemini CLI protocol simulator for Tiffany smoke tests."""
+
+import json
+import os
+import sys
+
+
+def append_log(args, prompt):
+    path = os.environ.get("TIFFANY_FAKE_GEMINI_LOG")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"args": args, "prompt": prompt}, ensure_ascii=False))
+        handle.write("\n")
+
+
+def emit(value):
+    print(json.dumps(value, ensure_ascii=False), flush=True)
+
+
+def short_text(text, limit=180):
+    compact = " ".join(text.split())
+    if len(compact) > limit:
+        return compact[: limit - 1] + "…"
+    return compact
+
+
+def main():
+    args = sys.argv[1:]
+    prompt = args[-1] if args else ""
+    append_log(args, prompt)
+    session_id = os.environ.get("TIFFANY_FAKE_GEMINI_SESSION", "fake-gemini-native-session")
+    emit(
+        {
+            "type": "init",
+            "session_id": session_id,
+            "model": "fake-gemini",
+        }
+    )
+    if os.environ.get("TIFFANY_FAKE_GEMINI_FAIL_WORKER") == "1":
+        print("Fake Gemini worker failed intentionally for Tiffany e2e.", file=sys.stderr)
+        return 44
+
+    answer = "Fake Gemini worker completed the Tiffany multi-runtime smoke run."
+    if prompt.strip():
+        answer += f" Prompt: {short_text(prompt)}"
+    emit(
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": answer}],
+        }
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

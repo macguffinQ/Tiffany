@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Tiny Claude Code protocol simulator for Tiffany smoke tests."""
+
+import json
+import os
+import pathlib
+import sys
+
+
+def emit(value):
+    print(json.dumps(value, ensure_ascii=False), flush=True)
+
+
+def append_log(args, prompt):
+    path = os.environ.get("TIFFANY_FAKE_CLAUDE_LOG")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"args": args, "prompt": prompt}, ensure_ascii=False))
+        handle.write("\n")
+
+
+def short_text(text, limit=180):
+    compact = " ".join(text.split())
+    if len(compact) > limit:
+        return compact[: limit - 1] + "…"
+    return compact
+
+
+def maybe_write_diff_artifact(args):
+    if os.environ.get("TIFFANY_FAKE_CLAUDE_WRITE_DIFF") != "1":
+        return
+    try:
+        add_dir = args[args.index("--add-dir") + 1]
+    except (ValueError, IndexError):
+        return
+    path = pathlib.Path(add_dir) / "README.md"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("\nFake Claude diff artifact from Tiffany e2e.\n")
+
+
+def main():
+    args = sys.argv[1:]
+    prompt = args[-1] if args else ""
+    append_log(args, prompt)
+    session_id = os.environ.get(
+        "TIFFANY_FAKE_CLAUDE_SESSION", "fake-claude-native-session"
+    )
+
+    emit({"type": "system", "session_id": session_id})
+
+    if "Decompose into 1-5 sub-tasks" in prompt or "Re-plan" in prompt:
+        result = {
+            "sub_tasks": [
+                {
+                    "prompt": "Fake worker: answer the smoke-test request and preserve context.",
+                    "tags": ["smoke", "fake-runtime"],
+                }
+            ],
+            "rationale": "fake planner keeps the smoke test to one worker run",
+        }
+        emit({"type": "result", "session_id": session_id, "result": json.dumps(result)})
+        return 0
+
+    if "Critique it" in prompt and "Proposed plan" in prompt:
+        result = {
+            "approved": True,
+            "issues": [],
+            "suggestions": ["continue with the fake worker run"],
+        }
+        emit({"type": "result", "session_id": session_id, "result": json.dumps(result)})
+        return 0
+
+    if "Review against the user's intent" in prompt:
+        result = {"approved": True, "issues": []}
+        emit({"type": "result", "session_id": session_id, "result": json.dumps(result)})
+        return 0
+
+    if os.environ.get("TIFFANY_FAKE_CLAUDE_FAIL_WORKER") == "1":
+        print("Fake Claude worker failed intentionally for Tiffany e2e.", file=sys.stderr)
+        return 42
+
+    maybe_write_diff_artifact(args)
+
+    answer = "Fake Claude worker completed the Tiffany e2e smoke run."
+    if prompt.strip():
+        answer += f" Prompt: {short_text(prompt)}"
+    emit(
+        {
+            "type": "assistant",
+            "session_id": session_id,
+            "message": {"content": [{"type": "text", "text": answer}]},
+        }
+    )
+    emit({"type": "result", "session_id": session_id, "result": answer})
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

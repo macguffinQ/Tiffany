@@ -1,0 +1,354 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/tiffany-e2e-multi-runtime [--bin-dir DIR]
+
+Runs a no-network Tiffany worker e2e against fake Codex and Gemini CLIs.
+It verifies:
+  - worker-codex can execute through the production Codex adapter
+  - worker-gemini can execute through the production Gemini adapter
+  - both roles persist worker/native session state
+  - a second same-role run resumes the saved native session handle
+
+Default binaries: ./target/dev-small/orchestrator
+EOF
+}
+
+target_dir="${TIFFANY_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_dir/target}}"
+case "$target_dir" in
+  /*) ;;
+  *) target_dir="$repo_dir/$target_dir" ;;
+esac
+
+bin_dir="$target_dir/dev-small"
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --bin-dir)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      bin_dir="$2"
+      shift
+      ;;
+    --bin-dir=*)
+      bin_dir="${1#--bin-dir=}"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+case "$bin_dir" in
+  /*) ;;
+  *) bin_dir="$repo_dir/$bin_dir" ;;
+esac
+
+exe_suffix=""
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) exe_suffix=".exe" ;;
+esac
+
+orchestrator_bin="$bin_dir/orchestrator$exe_suffix"
+fake_codex="$repo_dir/scripts/tests/fake-codex"
+fake_gemini="$repo_dir/scripts/tests/fake-gemini"
+if [[ ! -x "$orchestrator_bin" ]]; then
+  echo "missing executable: $orchestrator_bin" >&2
+  echo "build first with ./scripts/tiffany-build --small" >&2
+  exit 1
+fi
+for fake in "$fake_codex" "$fake_gemini"; do
+  if [[ ! -x "$fake" ]]; then
+    echo "missing executable: $fake" >&2
+    exit 1
+  fi
+done
+
+tmp_root="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_root"
+}
+trap cleanup EXIT
+
+export HOME="$tmp_root/home"
+export TIFFANY_HOME="$tmp_root/tiffany"
+export TIFFANY_SQLITE_HOME="$tmp_root/tiffany-sqlite"
+export CODEX_HOME="$TIFFANY_HOME"
+export CODEX_SQLITE_HOME="$TIFFANY_SQLITE_HOME"
+export TIFFANY_FAKE_CODEX_LOG="$tmp_root/fake-codex.log"
+export TIFFANY_FAKE_GEMINI_LOG="$tmp_root/fake-gemini.log"
+mkdir -p "$HOME" "$TIFFANY_HOME" "$TIFFANY_SQLITE_HOME"
+
+workdir="$tmp_root/project"
+mkdir -p "$workdir"
+git -C "$workdir" init -q
+git -C "$workdir" config user.name "Tiffany Smoke"
+git -C "$workdir" config user.email "smoke@example.invalid"
+printf 'smoke\n' > "$workdir/README.md"
+git -C "$workdir" add README.md
+git -C "$workdir" commit -qm "initial"
+
+config="$tmp_root/config.yaml"
+cat > "$config" <<EOF
+providers:
+  fake-openai:
+    type: openai
+    api_key: fake-openai-key
+  fake-google:
+    type: google
+    api_key: fake-google-key
+runtimes:
+  codex:
+    type: subprocess
+    binary: $fake_codex
+  gemini:
+    type: subprocess
+    binary: $fake_gemini
+models:
+  - id: fake-codex
+    provider: fake-openai
+    name: fake-codex
+  - id: fake-gemini
+    provider: fake-google
+    name: fake-gemini
+roles:
+  worker-codex:
+    model: fake-codex
+    runtime: codex
+    agent_teams: false
+  worker-gemini:
+    model: fake-gemini
+    runtime: gemini
+    agent_teams: false
+behavior:
+  worktree_base: $tmp_root/worktrees
+  db_path: $tmp_root/state.db
+  session_log_dir: $tmp_root/sessions
+  enable_critic: false
+  enable_reviewer: false
+  max_replan: 0
+  mux: none
+EOF
+
+run_log() {
+  local label="$1"
+  shift
+  local log="$tmp_root/$label.log"
+  echo "checking $label..." >&2
+  if ! (cd "$workdir" && "$@" >"$log" 2>&1); then
+    cat "$log" >&2
+    exit 1
+  fi
+  printf '%s\n' "$log"
+}
+
+assert_contains() {
+  local file="$1"
+  local needle="$2"
+  if ! grep -F -- "$needle" "$file" >/dev/null; then
+    echo "expected $file to contain: $needle" >&2
+    echo "---- $file ----" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+}
+
+assert_not_contains() {
+  local file="$1"
+  local needle="$2"
+  if grep -F -- "$needle" "$file" >/dev/null; then
+    echo "expected $file not to contain: $needle" >&2
+    echo "---- $file ----" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+}
+
+run_expected_failure() {
+  local label="$1"
+  local role="$2"
+  local expected_stderr="$3"
+  shift 3
+  local log="$tmp_root/$label.log"
+  echo "checking $label..." >&2
+  if (cd "$workdir" && "$@" >"$log" 2>&1); then
+    echo "expected $label command to fail" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+  assert_contains "$log" "$role"
+  assert_contains "$log" "$expected_stderr"
+  assert_contains "$log" "worker   $role failed"
+  assert_contains "$log" "✗ error"
+  assert_contains "$log" "1 worker task(s) failed"
+  assert_not_contains "$log" "done - 0 worker run"
+  assert_not_contains "$log" "done     0 worker run(s) completed"
+}
+
+codex_first="$(run_log codex-first "$orchestrator_bin" --config "$config" events "Create a fake Codex smoke artifact" --format text --worker worker-codex)"
+assert_contains "$codex_first" "worker-codex"
+assert_contains "$codex_first" "Fake Codex worker completed the Tiffany multi-runtime smoke run"
+assert_contains "$codex_first" "done     1 worker run(s) completed"
+assert_not_contains "$codex_first" "done - 0 worker run"
+
+codex_second="$(run_log codex-second "$orchestrator_bin" --config "$config" events "Create a second fake Codex smoke artifact" --format text --worker worker-codex)"
+assert_contains "$codex_second" "worker-codex"
+assert_contains "$codex_second" "thread reused"
+assert_contains "$codex_second" "native fake-codex-native-session"
+assert_contains "$codex_second" "Fake Codex worker completed the Tiffany multi-runtime smoke run"
+
+gemini_first="$(run_log gemini-first "$orchestrator_bin" --config "$config" events "Create a fake Gemini smoke artifact" --format text --worker worker-gemini)"
+assert_contains "$gemini_first" "worker-gemini"
+assert_contains "$gemini_first" "Fake Gemini worker completed the Tiffany multi-runtime smoke run"
+assert_contains "$gemini_first" "done     1 worker run(s) completed"
+assert_not_contains "$gemini_first" "done - 0 worker run"
+
+gemini_second="$(run_log gemini-second "$orchestrator_bin" --config "$config" events "Create a second fake Gemini smoke artifact" --format text --worker worker-gemini)"
+assert_contains "$gemini_second" "worker-gemini"
+assert_contains "$gemini_second" "thread reused"
+assert_contains "$gemini_second" "native fake-gemini-native-session"
+assert_contains "$gemini_second" "Fake Gemini worker completed the Tiffany multi-runtime smoke run"
+
+codex_thread_log="$(run_log codex-thread "$orchestrator_bin" --config "$config" thread show worker-codex)"
+assert_contains "$codex_thread_log" "role: worker-codex"
+assert_contains "$codex_thread_log" "native session: fake-codex-native-session"
+assert_contains "$codex_thread_log" "native resume: "
+assert_contains "$codex_thread_log" "native handoff: "
+assert_contains "$codex_thread_log" "codex resume fake-codex-native-session"
+assert_contains "$codex_thread_log" "TUI resume: /continue open worker-codex"
+
+gemini_thread_log="$(run_log gemini-thread "$orchestrator_bin" --config "$config" thread show worker-gemini)"
+assert_contains "$gemini_thread_log" "role: worker-gemini"
+assert_contains "$gemini_thread_log" "native session: fake-gemini-native-session"
+assert_contains "$gemini_thread_log" "native resume: "
+assert_contains "$gemini_thread_log" "native handoff: "
+assert_contains "$gemini_thread_log" "gemini --resume fake-gemini-native-session"
+assert_contains "$gemini_thread_log" "TUI resume: /continue open worker-gemini"
+
+jobs_log="$(run_log jobs "$orchestrator_bin" --config "$config" jobs --limit 10)"
+assert_contains "$jobs_log" "Jobs"
+assert_contains "$jobs_log" "role worker-codex"
+assert_contains "$jobs_log" "role worker-gemini"
+assert_contains "$jobs_log" "session "
+assert_contains "$jobs_log" "native fake-codex-native-session"
+assert_contains "$jobs_log" "native fake-gemini-native-session"
+assert_contains "$jobs_log" "result Fake Codex worker completed the Tiffany multi-runtime smoke run"
+assert_contains "$jobs_log" "result Fake Gemini worker completed the Tiffany multi-runtime smoke run"
+assert_not_contains "$jobs_log" "{"
+assert_not_contains "$jobs_log" "\"result\""
+
+codex_history_log="$(run_log codex-native-history "$orchestrator_bin" --config "$config" sessions native-history --format text --role worker-codex)"
+assert_contains "$codex_history_log" "Native history"
+assert_contains "$codex_history_log" "filter: role=worker-codex"
+assert_contains "$codex_history_log" "worker-codex"
+assert_contains "$codex_history_log" "native: fake-codex-native-session"
+assert_contains "$codex_history_log" "Fake Codex worker completed the Tiffany multi-runtime smoke run"
+assert_contains "$codex_history_log" "tiffany-loop /continue open worker-codex"
+assert_not_contains "$codex_history_log" "\"result\""
+
+gemini_history_log="$(run_log gemini-native-history "$orchestrator_bin" --config "$config" sessions native-history --format text --role worker-gemini)"
+assert_contains "$gemini_history_log" "Native history"
+assert_contains "$gemini_history_log" "filter: role=worker-gemini"
+assert_contains "$gemini_history_log" "worker-gemini"
+assert_contains "$gemini_history_log" "native: fake-gemini-native-session"
+assert_contains "$gemini_history_log" "Fake Gemini worker completed the Tiffany multi-runtime smoke run"
+assert_contains "$gemini_history_log" "tiffany-loop /continue open worker-gemini"
+assert_not_contains "$gemini_history_log" "\"result\""
+
+codex_export="$tmp_root/worker-codex-thread.md"
+codex_export_log="$(run_log codex-thread-export "$orchestrator_bin" --config "$config" thread export worker-codex --out "$codex_export")"
+assert_contains "$codex_export_log" "Worker thread session exported"
+assert_contains "$codex_export_log" "role: worker-codex"
+assert_contains "$codex_export_log" "target: $codex_export"
+assert_contains "$codex_export" "Fake Codex worker completed the Tiffany multi-runtime smoke run"
+assert_contains "$codex_export" "native session: fake-codex-native-session"
+
+gemini_export="$tmp_root/worker-gemini-thread.md"
+gemini_export_log="$(run_log gemini-thread-export "$orchestrator_bin" --config "$config" thread export worker-gemini --out "$gemini_export")"
+assert_contains "$gemini_export_log" "Worker thread session exported"
+assert_contains "$gemini_export_log" "role: worker-gemini"
+assert_contains "$gemini_export_log" "target: $gemini_export"
+assert_contains "$gemini_export" "Fake Gemini worker completed the Tiffany multi-runtime smoke run"
+assert_contains "$gemini_export" "native session: fake-gemini-native-session"
+
+run_expected_failure \
+  codex-failure \
+  worker-codex \
+  "Fake Codex worker failed intentionally for Tiffany e2e" \
+  env TIFFANY_FAKE_CODEX_FAIL_WORKER=1 "$orchestrator_bin" --config "$config" events "Exercise fake Codex worker failure" --format text --worker worker-codex
+
+run_expected_failure \
+  gemini-failure \
+  worker-gemini \
+  "Fake Gemini worker failed intentionally for Tiffany e2e" \
+  env TIFFANY_FAKE_GEMINI_FAIL_WORKER=1 "$orchestrator_bin" --config "$config" events "Exercise fake Gemini worker failure" --format text --worker worker-gemini
+
+python3 - "$TIFFANY_FAKE_CODEX_LOG" "$TIFFANY_FAKE_GEMINI_LOG" <<'PY'
+import json
+import sys
+
+codex_path, gemini_path = sys.argv[1:3]
+
+def records(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle]
+
+codex = [
+    item
+    for item in records(codex_path)
+    if "Decompose into 1-5 sub-tasks" not in item.get("prompt", "")
+    and "Re-plan" not in item.get("prompt", "")
+    and "Review against the user's intent" not in item.get("prompt", "")
+]
+gemini = records(gemini_path)
+
+if len(codex) != 3:
+    raise SystemExit(f"expected 3 fake codex calls, saw {len(codex)}")
+if len(gemini) != 3:
+    raise SystemExit(f"expected 3 fake gemini calls, saw {len(gemini)}")
+
+first_codex, second_codex, failing_codex = [item["args"] for item in codex]
+if "resume" in first_codex:
+    raise SystemExit(f"first codex call unexpectedly used resume: {first_codex!r}")
+if not any(
+    second_codex[i : i + 2] == ["resume", "fake-codex-native-session"]
+    for i in range(len(second_codex) - 1)
+):
+    raise SystemExit(f"second codex call did not resume fake session: {second_codex!r}")
+if not any(
+    failing_codex[i : i + 2] == ["resume", "fake-codex-native-session"]
+    for i in range(len(failing_codex) - 1)
+):
+    raise SystemExit(f"failing codex call did not resume fake session: {failing_codex!r}")
+if "--cwd" in second_codex:
+    raise SystemExit(f"codex adapter regressed to --cwd: {second_codex!r}")
+if "--cd" not in second_codex:
+    raise SystemExit(f"codex adapter did not pass --cd: {second_codex!r}")
+
+first_gemini, second_gemini, failing_gemini = [item["args"] for item in gemini]
+if "--resume" in first_gemini:
+    raise SystemExit(f"first gemini call unexpectedly used --resume: {first_gemini!r}")
+if not any(
+    second_gemini[i : i + 2] == ["--resume", "fake-gemini-native-session"]
+    for i in range(len(second_gemini) - 1)
+):
+    raise SystemExit(f"second gemini call did not resume fake session: {second_gemini!r}")
+if not any(
+    failing_gemini[i : i + 2] == ["--resume", "fake-gemini-native-session"]
+    for i in range(len(failing_gemini) - 1)
+):
+    raise SystemExit(f"failing gemini call did not resume fake session: {failing_gemini!r}")
+PY
+
+echo "multi-runtime e2e passed: $orchestrator_bin"

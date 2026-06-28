@@ -231,6 +231,9 @@ fi
 step "homebrew tap helper"
 "$repo_dir/scripts/tiffany-check-homebrew-tap-helper"
 
+step "release target matrix"
+"$repo_dir/scripts/tiffany-release-targets" --check
+
 step "script helpers"
 "$repo_dir/scripts/tiffany-check-script-helpers"
 

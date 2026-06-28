@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+prebuilt_targets=(
+  "aarch64-apple-darwin|macOS Apple Silicon|tar.gz|Homebrew and GitHub Release archive"
+  "x86_64-apple-darwin|Intel Mac|tar.gz|Homebrew and GitHub Release archive"
+  "x86_64-unknown-linux-gnu|Linux x86_64|tar.gz|Homebrew and GitHub Release archive"
+  "aarch64-unknown-linux-gnu|Linux ARM64|tar.gz|Homebrew and GitHub Release archive"
+  "x86_64-pc-windows-msvc|Windows x86_64|zip|GitHub Release archive"
+)
+
+source_targets=(
+  "other targets|Other CPU/OS combinations|source install|cargo install"
+)
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/tiffany-release-targets [--check|--list|--markdown]
+
+Shows and verifies the public Tiffany Loop release target matrix.
+
+Modes:
+  --list      Human-readable target list. Default.
+  --markdown  Markdown table for docs/release notes.
+  --check     Verify workflow, Homebrew scripts, and docs agree on the
+              currently published binary target boundary.
+EOF
+}
+
+asset_script_pattern() {
+  local row="$1"
+  local target archive
+  target="$(target_field "$row" 1)"
+  archive="$(target_field "$row" 3)"
+  printf 'tiffany-loop-${tag}-%s.%s' "$target" "$archive"
+}
+
+asset_doc_name() {
+  local row="$1"
+  local target archive
+  target="$(target_field "$row" 1)"
+  archive="$(target_field "$row" 3)"
+  printf 'tiffany-loop-vX.Y.Z-%s.%s' "$target" "$archive"
+}
+
+target_field() {
+  local row="$1"
+  local index="$2"
+  cut -d'|' -f"$index" <<<"$row"
+}
+
+is_prebuilt_target() {
+  local needle="$1"
+  local row target
+  for row in "${prebuilt_targets[@]}"; do
+    target="$(target_field "$row" 1)"
+    if [[ "$target" == "$needle" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+list_targets() {
+  local row
+  echo "prebuilt release assets:"
+  for row in "${prebuilt_targets[@]}"; do
+    printf '  - %s (%s): %s, %s\n' \
+      "$(target_field "$row" 1)" \
+      "$(target_field "$row" 2)" \
+      "$(target_field "$row" 3)" \
+      "$(target_field "$row" 4)"
+  done
+
+  echo
+  echo "source-install targets:"
+  for row in "${source_targets[@]}"; do
+    printf '  - %s (%s): %s\n' \
+      "$(target_field "$row" 1)" \
+      "$(target_field "$row" 2)" \
+      "$(target_field "$row" 4)"
+  done
+}
+
+markdown_targets() {
+  local row target platform archive install
+  printf '| Target | Platform | Current install path | Release asset |\n'
+  printf '| --- | --- | --- | --- |\n'
+  for row in "${prebuilt_targets[@]}"; do
+    target="$(target_field "$row" 1)"
+    platform="$(target_field "$row" 2)"
+    archive="$(target_field "$row" 3)"
+    install="$(target_field "$row" 4)"
+    printf '| `%s` | %s | %s | `%s` |\n' \
+      "$target" "$platform" "$install" "$(asset_doc_name "$row")"
+  done
+  for row in "${source_targets[@]}"; do
+    target="$(target_field "$row" 1)"
+    platform="$(target_field "$row" 2)"
+    install="$(target_field "$row" 4)"
+    printf '| `%s` | %s | %s | not published yet |\n' \
+      "$target" "$platform" "$install"
+  done
+}
+
+assert_contains() {
+  local file="$1"
+  local needle="$2"
+  local label="$3"
+  if ! grep -F -- "$needle" "$file" >/dev/null; then
+    echo "release target check failed: $label" >&2
+    echo "missing in ${file#$repo_dir/}: $needle" >&2
+    exit 1
+  fi
+}
+
+check_release_workflow_targets() {
+  local workflow="$repo_dir/.github/workflows/release.yml"
+  local row target
+
+  for row in "${prebuilt_targets[@]}"; do
+    target="$(target_field "$row" 1)"
+    assert_contains "$workflow" "target: $target" "release workflow missing prebuilt target $target"
+  done
+
+  while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    if ! is_prebuilt_target "$target"; then
+      echo "release target check failed: release workflow publishes undocumented target $target" >&2
+      echo "Add it to scripts/tiffany-release-targets and update README/Homebrew/post-release checks." >&2
+      exit 1
+    fi
+  done < <(awk '/^[[:space:]]+target:[[:space:]]+/ {print $2}' "$workflow" | sort -u)
+}
+
+check_homebrew_scripts() {
+  local row target asset
+  for row in "${prebuilt_targets[@]}"; do
+    target="$(target_field "$row" 1)"
+    asset="$(asset_script_pattern "$row")"
+    assert_contains "$repo_dir/scripts/tiffany-post-release-check" "$asset" \
+      "post-release check must verify published asset $target"
+    if [[ "$target" != *"windows"* ]]; then
+      assert_contains "$repo_dir/scripts/tiffany-update-homebrew-tap" "$asset" \
+        "Homebrew tap updater must use published non-Windows asset $target"
+    fi
+  done
+  assert_contains "$repo_dir/packaging/homebrew/tiffany-loop.rb" "archive/refs/tags/vX.Y.Z.tar.gz" \
+    "checked-in formula template must keep the source-install fallback"
+}
+
+check_docs() {
+  assert_contains "$repo_dir/README.md" "Current release target status:" \
+    "README must include release target table"
+  assert_contains "$repo_dir/README.md" "Prebuilt release archives are published for macOS, Linux, and Windows" \
+    "README must state the prebuilt release boundary"
+  assert_contains "$repo_dir/README.zh-CN.md" "当前 release 目标状态：" \
+    "Chinese README must include release target table"
+  assert_contains "$repo_dir/README.zh-CN.md" "macOS、Linux 和 Windows 都会发布预编译 release 压缩包" \
+    "Chinese README must state the prebuilt release boundary"
+}
+
+check_targets() {
+  check_release_workflow_targets
+  check_homebrew_scripts
+  check_docs
+  echo "release target checks passed"
+}
+
+mode="list"
+case "${1:-}" in
+  ""|--list)
+    mode="list"
+    ;;
+  --markdown)
+    mode="markdown"
+    ;;
+  --check)
+    mode="check"
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+case "$mode" in
+  list)
+    list_targets
+    ;;
+  markdown)
+    markdown_targets
+    ;;
+  check)
+    check_targets
+    ;;
+esac

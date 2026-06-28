@@ -1,0 +1,826 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/tiffany-real-runtime-check [--check-installed|--run|--adapter-run|--self-test] [--runtime claude|codex|gemini|all]
+
+Opt-in smoke checks for real native worker CLIs.
+
+Default mode is --check-installed: report which CLIs are present, show model/auth
+preflight hints, inspect native transcript stores, and exit 0.
+Use --run, or set TIFFANY_REAL_RUNTIME_CHECK=1, to execute tiny non-mutating
+prompts against installed/logged-in native tools. Use --adapter-run to execute
+the same probes through `orchestrator events --worker ...` with a temporary
+config and isolated Tiffany state.
+
+Environment:
+  TIFFANY_REAL_RUNTIME_CHECK=1  Run real prompts without passing --run.
+  TIFFANY_REAL_RUNTIME_TIMEOUT  Per-command timeout, default: 120s.
+  TIFFANY_REAL_CLAUDE_BIN       Claude Code binary, default: claude.
+  TIFFANY_REAL_CODEX_BIN        Codex binary, default: codex.
+  TIFFANY_REAL_GEMINI_BIN       Gemini binary, default: gemini.
+  TIFFANY_REAL_CLAUDE_MODEL     Claude adapter model; default reads ~/.claude/settings.json ANTHROPIC_MODEL.
+  TIFFANY_REAL_CODEX_MODEL      Codex adapter model; default reads CODEX_HOME/config.toml model.
+  TIFFANY_REAL_RUNTIME_HOME     Home dir used to inspect native transcript stores.
+  TIFFANY_ORCHESTRATOR_BIN      Orchestrator binary for --adapter-run.
+
+Examples:
+  ./scripts/tiffany-real-runtime-check
+  TIFFANY_REAL_RUNTIME_CHECK=1 ./scripts/tiffany-real-runtime-check --runtime codex
+  ./scripts/tiffany-real-runtime-check --adapter-run --runtime codex
+  ./scripts/tiffany-real-runtime-check --run --runtime all
+EOF
+}
+
+mode="check"
+runtime="all"
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --check-installed|--check)
+      mode="check"
+      ;;
+    --run)
+      mode="run"
+      ;;
+    --adapter-run)
+      mode="adapter-run"
+      ;;
+    --self-test)
+      mode="self-test"
+      ;;
+    --runtime)
+      if [[ -z "${2:-}" ]]; then
+        usage >&2
+        exit 2
+      fi
+      runtime="$2"
+      shift
+      ;;
+    --runtime=*)
+      runtime="${1#--runtime=}"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ "${TIFFANY_REAL_RUNTIME_CHECK:-0}" == "1" && "$mode" == "check" ]]; then
+  mode="run"
+fi
+
+case "$runtime" in
+  all|claude|codex|gemini) ;;
+  *)
+    echo "unknown runtime: $runtime" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+timeout_seconds="${TIFFANY_REAL_RUNTIME_TIMEOUT:-120}"
+if ! [[ "$timeout_seconds" =~ ^[0-9]+$ ]] || [[ "$timeout_seconds" -lt 1 ]]; then
+  echo "TIFFANY_REAL_RUNTIME_TIMEOUT must be a positive integer" >&2
+  exit 2
+fi
+
+tmp_root="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_root"
+}
+trap cleanup EXIT
+
+need_runtime() {
+  local name="$1"
+  [[ "$runtime" == "all" || "$runtime" == "$name" ]]
+}
+
+resolve_binary() {
+  local env_name="$1"
+  local default_name="$2"
+  local configured="${!env_name:-}"
+  if [[ -n "$configured" ]]; then
+    if [[ -x "$configured" ]]; then
+      local dir base
+      dir="$(cd "$(dirname "$configured")" && pwd)"
+      base="$(basename "$configured")"
+      printf '%s/%s\n' "$dir" "$base"
+      return 0
+    fi
+    if command -v "$configured" >/dev/null 2>&1; then
+      command -v "$configured"
+      return 0
+    fi
+    return 1
+  fi
+  command -v "$default_name" 2>/dev/null
+}
+
+print_probe() {
+  local name="$1"
+  local binary="$2"
+  if [[ -n "$binary" ]]; then
+    echo "✓ $name: $binary"
+  else
+    echo "- $name: not installed; skipped"
+  fi
+}
+
+runtime_home() {
+  printf '%s\n' "${TIFFANY_REAL_RUNTIME_HOME:-${HOME:-}}"
+}
+
+codex_config_path() {
+  local codex_home="${CODEX_HOME:-}"
+  if [[ -n "$codex_home" ]]; then
+    printf '%s/config.toml\n' "$codex_home"
+    return
+  fi
+  local home
+  home="$(runtime_home)"
+  if [[ -n "$home" ]]; then
+    printf '%s/.codex/config.toml\n' "$home"
+  fi
+}
+
+codex_config_model() {
+  local config
+  config="$(codex_config_path)"
+  if [[ -z "$config" || ! -f "$config" ]]; then
+    return 1
+  fi
+  sed -nE 's/^[[:space:]]*model[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$config" | head -1
+}
+
+default_codex_model() {
+  if [[ -n "${TIFFANY_REAL_CODEX_MODEL:-}" ]]; then
+    printf '%s\n' "$TIFFANY_REAL_CODEX_MODEL"
+    return
+  fi
+  if model="$(codex_config_model)" && [[ -n "$model" ]]; then
+    printf '%s\n' "$model"
+    return
+  fi
+  printf '%s\n' "gpt-5.1"
+}
+
+claude_settings_path() {
+  local home
+  home="$(runtime_home)"
+  if [[ -n "$home" ]]; then
+    printf '%s/.claude/settings.json\n' "$home"
+  fi
+}
+
+claude_settings_model() {
+  local settings
+  settings="$(claude_settings_path)"
+  if [[ -z "$settings" || ! -f "$settings" ]]; then
+    return 1
+  fi
+  sed -nE 's/^[[:space:]]*"ANTHROPIC_MODEL"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$settings" | head -1
+}
+
+default_claude_model() {
+  if [[ -n "${TIFFANY_REAL_CLAUDE_MODEL:-}" ]]; then
+    printf '%s\n' "$TIFFANY_REAL_CLAUDE_MODEL"
+    return
+  fi
+  if model="$(claude_settings_model)" && [[ -n "$model" ]]; then
+    printf '%s\n' "$model"
+    return
+  fi
+  printf '%s\n' "sonnet"
+}
+
+count_matching_files() {
+  local root="$1"
+  local pattern="$2"
+  if [[ ! -d "$root" ]]; then
+    printf '0\n'
+    return
+  fi
+  find "$root" -type f -name "$pattern" 2>/dev/null | wc -l | tr -d '[:space:]'
+}
+
+print_transcript_probe() {
+  local name="$1"
+  local root="$2"
+  local pattern="$3"
+  local count
+  count="$(count_matching_files "$root" "$pattern")"
+  if [[ "$count" -gt 0 ]]; then
+    echo "✓ $name transcripts: $count file(s) under $root"
+  else
+    echo "- $name transcripts: none found at $root"
+  fi
+}
+
+print_selected_transcript_probes() {
+  local home
+  home="$(runtime_home)"
+  if [[ -z "$home" ]]; then
+    echo "- transcripts: HOME not set; native transcript stores cannot be inspected"
+    return
+  fi
+  if need_runtime claude; then
+    print_transcript_probe claude "$home/.claude/projects" "*.jsonl"
+  fi
+  if need_runtime codex; then
+    print_transcript_probe codex "$home/.codex/sessions" "*.jsonl"
+  fi
+  if need_runtime gemini; then
+    print_transcript_probe gemini "$home/.gemini/tmp" "session-*.json"
+  fi
+}
+
+path_state() {
+  local path="$1"
+  if [[ -e "$path" ]]; then
+    printf 'present: %s\n' "$path"
+  else
+    printf 'missing: %s\n' "$path"
+  fi
+}
+
+env_state() {
+  local name="$1"
+  if [[ -n "${!name:-}" ]]; then
+    printf 'set: %s\n' "$name"
+  else
+    printf 'unset: %s\n' "$name"
+  fi
+}
+
+model_source() {
+  local runtime_name="$1"
+  case "$runtime_name" in
+    claude)
+      if [[ -n "${TIFFANY_REAL_CLAUDE_MODEL:-}" ]]; then
+        printf 'env TIFFANY_REAL_CLAUDE_MODEL'
+      elif claude_settings_model >/dev/null 2>&1; then
+        printf '%s' "$(claude_settings_path)"
+      else
+        printf 'fallback default'
+      fi
+      ;;
+    codex)
+      if [[ -n "${TIFFANY_REAL_CODEX_MODEL:-}" ]]; then
+        printf 'env TIFFANY_REAL_CODEX_MODEL'
+      elif codex_config_model >/dev/null 2>&1; then
+        printf '%s' "$(codex_config_path)"
+      else
+        printf 'fallback default'
+      fi
+      ;;
+    gemini)
+      if [[ -n "${TIFFANY_REAL_GEMINI_MODEL:-}" ]]; then
+        printf 'env TIFFANY_REAL_GEMINI_MODEL'
+      else
+        printf 'fallback default'
+      fi
+      ;;
+  esac
+}
+
+print_selected_runtime_preflight() {
+  echo "runtime preflight:"
+  if need_runtime claude; then
+    echo "  claude model: $(default_claude_model) ($(model_source claude))"
+    if [[ -n "${ANTHROPIC_API_KEY:-}" || -n "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+      echo "  claude auth: env key set"
+    else
+      echo "  claude auth: $(env_state ANTHROPIC_API_KEY); native login/settings may still work"
+      echo "  claude settings: $(path_state "$(claude_settings_path)")"
+    fi
+  fi
+  if need_runtime codex; then
+    echo "  codex model: $(default_codex_model) ($(model_source codex))"
+    if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+      echo "  codex auth: env key set"
+    else
+      echo "  codex auth: $(env_state OPENAI_API_KEY); ChatGPT login may still work"
+      echo "  codex config: $(path_state "$(codex_config_path)")"
+      echo "  codex auth file: $(path_state "$(runtime_home)/.codex/auth.json")"
+    fi
+  fi
+  if need_runtime gemini; then
+    echo "  gemini model: ${TIFFANY_REAL_GEMINI_MODEL:-gemini-2.5-pro} ($(model_source gemini))"
+    if [[ -n "${GOOGLE_API_KEY:-}" || -n "${GEMINI_API_KEY:-}" ]]; then
+      echo "  gemini auth: env key set"
+    else
+      echo "  gemini auth: $(env_state GOOGLE_API_KEY), $(env_state GEMINI_API_KEY); native login may still work"
+      echo "  gemini home: $(path_state "$(runtime_home)/.gemini")"
+    fi
+  fi
+
+  local orchestrator_bin
+  orchestrator_bin="$(resolve_orchestrator_binary || true)"
+  if [[ -n "$orchestrator_bin" ]]; then
+    echo "  orchestrator: $orchestrator_bin"
+  else
+    echo "  orchestrator: not found; build first or set TIFFANY_ORCHESTRATOR_BIN"
+  fi
+  echo "next:"
+  echo "  direct native check:  TIFFANY_REAL_RUNTIME_CHECK=1 $0 --runtime $runtime"
+  echo "  adapter check:        $0 --adapter-run --runtime $runtime"
+}
+
+run_self_test() {
+  local home="$tmp_root/home"
+  mkdir -p \
+    "$home/.claude/projects/project-a" \
+    "$home/.codex/sessions/2026/06/27" \
+    "$home/.gemini/tmp/project-hash/chats"
+  printf '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}\n' \
+    >"$home/.claude/projects/project-a/claude-session.jsonl"
+  printf '{"type":"turn_complete","result":"ok"}\n' \
+    >"$home/.codex/sessions/2026/06/27/rollout-codex-session.jsonl"
+  printf '{"sessionId":"gemini-session","messages":[]}\n' \
+    >"$home/.gemini/tmp/project-hash/chats/session-gemini-session.json"
+
+  local script_path output
+  script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  output="$(TIFFANY_REAL_RUNTIME_HOME="$home" "$script_path" --check --runtime all)"
+
+  grep -Fq "✓ claude transcripts: 1 file(s)" <<<"$output"
+  grep -Fq "✓ codex transcripts: 1 file(s)" <<<"$output"
+  grep -Fq "✓ gemini transcripts: 1 file(s)" <<<"$output"
+  echo "real runtime check self-test passed"
+}
+
+run_with_timeout() {
+  local label="$1"
+  local log="$tmp_root/$label.log"
+  shift
+  echo "checking $label..." >&2
+
+  local status
+  set +e
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${timeout_seconds}s" "$@" >"$log" 2>&1
+    status=$?
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "${timeout_seconds}s" "$@" >"$log" 2>&1
+    status=$?
+  else
+    "$@" >"$log" 2>&1
+    status=$?
+  fi
+  set -e
+
+  if [[ "$status" -ne 0 ]]; then
+    echo "$label failed with exit status $status" >&2
+    if [[ -s "$log" ]]; then
+      echo "---- $label log ----" >&2
+      cat "$log" >&2
+      echo "---- end $label log ----" >&2
+      print_failure_hint "$label" "$log" >&2
+    else
+      echo "$label produced no output" >&2
+    fi
+    return "$status"
+  fi
+}
+
+print_failure_hint() {
+  local label="$1"
+  local log="$2"
+  if grep -Eiq "invalid[_ ]api[_ ]key|Incorrect API key|401 Unauthorized" "$log"; then
+    case "$label" in
+      *codex*|adapter-worker-codex)
+        echo "next: fix Codex/OpenAI auth. Check OPENAI_API_KEY and ~/.codex/config.toml, or run \`codex login\`."
+        ;;
+      *claude*|adapter-worker-cc)
+        echo "next: fix Claude auth. Check ANTHROPIC_API_KEY or run the native \`claude\` login/setup flow."
+        ;;
+      *gemini*|adapter-worker-gemini)
+        echo "next: fix Gemini auth. Check GOOGLE_API_KEY or run the native \`gemini\` login/setup flow."
+        ;;
+      *)
+        echo "next: fix the selected runtime API key or native CLI login, then rerun this check."
+        ;;
+    esac
+    return
+  fi
+  if grep -Eiq "login|not authenticated|authentication required|No auth" "$log"; then
+    echo "next: complete the native CLI login for this runtime, then rerun this check."
+    return
+  fi
+  if grep -Fq "unexpected argument '--cwd'" "$log"; then
+    echo "next: rebuild/reinstall tiffany-loop and orchestrator; current source uses Codex --cd, so this is likely an old binary."
+    return
+  fi
+  if grep -Eiq "No such file or directory|command not found|failed to start" "$log"; then
+    echo "next: install the native runtime binary or set TIFFANY_REAL_*_BIN / TIFFANY_ORCHESTRATOR_BIN to an executable path."
+    return
+  fi
+  if grep -Eiq "model.*not.*found|模型不存在|not found for model|unknown model|model is not supported|not supported when using Codex" "$log"; then
+    echo "next: set the runtime model env var, for example TIFFANY_REAL_CODEX_MODEL, TIFFANY_REAL_CLAUDE_MODEL, or TIFFANY_REAL_GEMINI_MODEL."
+    if [[ "$label" == *codex* ]]; then
+      echo "next: for Codex ChatGPT accounts, try TIFFANY_REAL_CODEX_MODEL=\$(sed -nE 's/^model *= *\"([^\"]+)\".*/\\1/p' ~/.codex/config.toml | head -1)."
+    fi
+    return
+  fi
+  echo "next: inspect the log above; this is a native runtime or adapter failure, not an install probe failure."
+}
+
+assert_log_has_text() {
+  local label="$1"
+  local log="$tmp_root/$label.log"
+  if [[ ! -s "$log" ]]; then
+    echo "$label produced no output" >&2
+    return 1
+  fi
+}
+
+assert_log_contains() {
+  local label="$1"
+  local needle="$2"
+  local log="$tmp_root/$label.log"
+  if ! grep -F -- "$needle" "$log" >/dev/null; then
+    echo "$label output did not contain expected text: $needle" >&2
+    echo "---- $label log ----" >&2
+    cat "$log" >&2
+    echo "---- end $label log ----" >&2
+    return 1
+  fi
+}
+
+assert_log_not_contains() {
+  local label="$1"
+  local needle="$2"
+  local log="$tmp_root/$label.log"
+  if grep -F -- "$needle" "$log" >/dev/null; then
+    echo "$label output unexpectedly contained text: $needle" >&2
+    echo "---- $label log ----" >&2
+    cat "$log" >&2
+    echo "---- end $label log ----" >&2
+    return 1
+  fi
+}
+
+run_claude() {
+  local binary="$1"
+  local prompt="Reply with exactly: Tiffany real Claude runtime OK"
+  run_with_timeout claude "$binary" \
+    --print \
+    --output-format stream-json \
+    --permission-mode bypassPermissions \
+    "$prompt"
+  assert_log_has_text claude
+}
+
+run_codex() {
+  local binary="$1"
+  local workdir="$tmp_root/codex-workdir"
+  mkdir -p "$workdir"
+  git -C "$workdir" init -q
+  local prompt="Reply with exactly: Tiffany real Codex runtime OK"
+  run_with_timeout codex "$binary" exec --json --cd "$workdir" "$prompt"
+  assert_log_has_text codex
+}
+
+run_gemini() {
+  local binary="$1"
+  local prompt="Reply with exactly: Tiffany real Gemini runtime OK"
+  run_with_timeout gemini "$binary" --prompt "$prompt"
+  assert_log_has_text gemini
+}
+
+resolve_orchestrator_binary() {
+  local configured="${TIFFANY_ORCHESTRATOR_BIN:-}"
+  if [[ -n "$configured" ]]; then
+    if [[ -x "$configured" ]]; then
+      local dir base
+      dir="$(cd "$(dirname "$configured")" && pwd)"
+      base="$(basename "$configured")"
+      printf '%s/%s\n' "$dir" "$base"
+      return 0
+    fi
+    if command -v "$configured" >/dev/null 2>&1; then
+      command -v "$configured"
+      return 0
+    fi
+    return 1
+  fi
+
+  local repo_dir
+  repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  for candidate in \
+    "$repo_dir/target/dev-small/orchestrator" \
+    "$repo_dir/target/debug/orchestrator" \
+    "$repo_dir/target/tiffany-dist/orchestrator"
+  do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  command -v orchestrator 2>/dev/null
+}
+
+write_adapter_config() {
+  local path="$1"
+  local claude_binary="$2"
+  local codex_binary="$3"
+  local gemini_binary="$4"
+  local claude_model
+  claude_model="$(default_claude_model)"
+  local codex_model
+  codex_model="$(default_codex_model)"
+  local gemini_model="${TIFFANY_REAL_GEMINI_MODEL:-gemini-2.5-pro}"
+  cat >"$path" <<EOF
+providers:
+  real-anthropic:
+    type: anthropic
+    api_key: \${ANTHROPIC_API_KEY}
+  real-openai:
+    type: openai
+    api_key: \${OPENAI_API_KEY}
+  real-google:
+    type: google
+    api_key: \${GOOGLE_API_KEY}
+runtimes:
+  claude-code:
+    type: subprocess
+    binary: $claude_binary
+    supports_agent_teams: true
+  codex:
+    type: subprocess
+    binary: $codex_binary
+  gemini:
+    type: subprocess
+    binary: $gemini_binary
+models:
+  - id: real-claude
+    provider: real-anthropic
+    name: $claude_model
+  - id: real-codex
+    provider: real-openai
+    name: $codex_model
+  - id: real-gemini
+    provider: real-google
+    name: $gemini_model
+roles:
+  worker-cc:
+    model: real-claude
+    runtime: claude-code
+    agent_teams: false
+  worker-codex:
+    model: real-codex
+    runtime: codex
+    agent_teams: false
+  worker-gemini:
+    model: real-gemini
+    runtime: gemini
+    agent_teams: false
+behavior:
+  worktree_base: $tmp_root/worktrees
+  db_path: $tmp_root/state.db
+  session_log_dir: $tmp_root/sessions
+  enable_critic: false
+  enable_reviewer: false
+  max_replan: 0
+  mux: none
+  cc_bypass_permissions: true
+EOF
+}
+
+init_adapter_workdir() {
+  local workdir="$1"
+  mkdir -p "$workdir"
+  git -C "$workdir" init -q
+  git -C "$workdir" config user.name "Tiffany Real Runtime Check"
+  git -C "$workdir" config user.email "runtime-check@example.invalid"
+  printf 'runtime-check\n' >"$workdir/README.md"
+  git -C "$workdir" add README.md
+  git -C "$workdir" commit -qm "initial"
+}
+
+run_adapter_worker() {
+  local orchestrator_bin="$1"
+  local config="$2"
+  local workdir="$3"
+  local role="$4"
+  local label="$5"
+  local prompt="$6"
+  local expected="$7"
+  run_with_timeout "adapter-$role-$label" \
+    bash -c 'cd "$1" && shift && "$@"' _ "$workdir" \
+      env TIFFANY_WORKER_SCOPE="real-runtime-check:$role" \
+        "$orchestrator_bin" --config "$config" events "$prompt" \
+          --format text \
+          --worker "$role" \
+          --tag single_worker \
+          --no-critic \
+          --no-reviewer
+  assert_log_has_text "adapter-$role-$label"
+  assert_log_contains "adapter-$role-$label" "$expected"
+}
+
+run_adapter_command() {
+  local label="$1"
+  local role="$2"
+  local orchestrator_bin="$3"
+  local config="$4"
+  local workdir="$5"
+  shift 5
+  run_with_timeout "$label" \
+    bash -c 'cd "$1" && shift && "$@"' _ "$workdir" \
+      env TIFFANY_WORKER_SCOPE="real-runtime-check:$role" \
+        "$orchestrator_bin" --config "$config" "$@"
+  assert_log_has_text "$label"
+}
+
+inspect_adapter_role() {
+  local orchestrator_bin="$1"
+  local config="$2"
+  local workdir="$3"
+  local role="$4"
+  local expected="$5"
+  run_adapter_command "thread-$role" "$role" "$orchestrator_bin" "$config" "$workdir" thread show "$role"
+  assert_log_contains "thread-$role" "role: $role"
+  assert_log_contains "thread-$role" "native session:"
+  assert_log_not_contains "thread-$role" "native session: none"
+  assert_log_contains "thread-$role" "native resume:"
+  assert_log_contains "thread-$role" "native handoff:"
+  assert_log_contains "thread-$role" "TUI resume: /continue open $role"
+  case "$role" in
+    worker-cc)
+      assert_log_contains "thread-$role" "claude"
+      assert_log_contains "thread-$role" "--resume"
+      ;;
+    worker-codex)
+      assert_log_contains "thread-$role" "codex"
+      assert_log_contains "thread-$role" " resume "
+      ;;
+    worker-gemini)
+      assert_log_contains "thread-$role" "gemini"
+      assert_log_contains "thread-$role" "--resume"
+      ;;
+  esac
+
+  run_adapter_command "jobs-$role" "$role" "$orchestrator_bin" "$config" "$workdir" jobs --limit 10
+  assert_log_contains "jobs-$role" "role $role"
+  assert_log_contains "jobs-$role" "session "
+  assert_log_contains "jobs-$role" "native "
+  assert_log_contains "jobs-$role" "result "
+  assert_log_contains "jobs-$role" "$expected"
+}
+
+if [[ "$mode" == "self-test" ]]; then
+  run_self_test
+  exit 0
+fi
+
+claude_bin=""
+codex_bin=""
+gemini_bin=""
+if need_runtime claude; then
+  claude_bin="$(resolve_binary TIFFANY_REAL_CLAUDE_BIN claude || true)"
+  print_probe claude "${claude_bin:-}"
+fi
+if need_runtime codex; then
+  codex_bin="$(resolve_binary TIFFANY_REAL_CODEX_BIN codex || true)"
+  print_probe codex "${codex_bin:-}"
+fi
+if need_runtime gemini; then
+  gemini_bin="$(resolve_binary TIFFANY_REAL_GEMINI_BIN gemini || true)"
+  print_probe gemini "${gemini_bin:-}"
+fi
+print_selected_transcript_probes
+print_selected_runtime_preflight
+
+if [[ "$mode" != "run" ]]; then
+  if [[ "$mode" == "adapter-run" ]]; then
+    :
+  else
+    echo "real runtime execution skipped; pass --run or set TIFFANY_REAL_RUNTIME_CHECK=1"
+    exit 0
+  fi
+fi
+
+if [[ "$mode" == "adapter-run" ]]; then
+  orchestrator_bin="$(resolve_orchestrator_binary || true)"
+  if [[ -z "$orchestrator_bin" ]]; then
+    echo "orchestrator binary not found; build first or set TIFFANY_ORCHESTRATOR_BIN" >&2
+    exit 1
+  fi
+  echo "✓ orchestrator: $orchestrator_bin"
+
+  config="$tmp_root/config.yaml"
+  workdir="$tmp_root/project"
+  init_adapter_workdir "$workdir"
+  write_adapter_config \
+    "$config" \
+    "${claude_bin:-claude}" \
+    "${codex_bin:-codex}" \
+    "${gemini_bin:-gemini}"
+
+  ran=0
+  if need_runtime claude && [[ -n "$claude_bin" ]]; then
+    expected="Tiffany adapter Claude runtime OK"
+    run_adapter_worker \
+      "$orchestrator_bin" \
+      "$config" \
+      "$workdir" \
+      worker-cc \
+      first \
+      "Reply with exactly: $expected" \
+      "$expected"
+    run_adapter_worker \
+      "$orchestrator_bin" \
+      "$config" \
+      "$workdir" \
+      worker-cc \
+      second \
+      "Reply with exactly: $expected" \
+      "$expected"
+    inspect_adapter_role "$orchestrator_bin" "$config" "$workdir" worker-cc "$expected"
+    ran=1
+  fi
+  if need_runtime codex && [[ -n "$codex_bin" ]]; then
+    expected="Tiffany adapter Codex runtime OK"
+    run_adapter_worker \
+      "$orchestrator_bin" \
+      "$config" \
+      "$workdir" \
+      worker-codex \
+      first \
+      "Reply with exactly: $expected" \
+      "$expected"
+    run_adapter_worker \
+      "$orchestrator_bin" \
+      "$config" \
+      "$workdir" \
+      worker-codex \
+      second \
+      "Reply with exactly: $expected" \
+      "$expected"
+    inspect_adapter_role "$orchestrator_bin" "$config" "$workdir" worker-codex "$expected"
+    ran=1
+  fi
+  if need_runtime gemini && [[ -n "$gemini_bin" ]]; then
+    expected="Tiffany adapter Gemini runtime OK"
+    run_adapter_worker \
+      "$orchestrator_bin" \
+      "$config" \
+      "$workdir" \
+      worker-gemini \
+      first \
+      "Reply with exactly: $expected" \
+      "$expected"
+    run_adapter_worker \
+      "$orchestrator_bin" \
+      "$config" \
+      "$workdir" \
+      worker-gemini \
+      second \
+      "Reply with exactly: $expected" \
+      "$expected"
+    inspect_adapter_role "$orchestrator_bin" "$config" "$workdir" worker-gemini "$expected"
+    ran=1
+  fi
+
+  if [[ "$ran" == "0" ]]; then
+    echo "no selected native runtime binaries found; nothing to run" >&2
+    exit 1
+  fi
+
+  echo "real adapter runtime check passed"
+  exit 0
+fi
+
+if [[ "$mode" != "run" ]]; then
+  echo "real runtime execution skipped; pass --run or set TIFFANY_REAL_RUNTIME_CHECK=1"
+  exit 0
+fi
+
+ran=0
+if [[ -n "$claude_bin" ]]; then
+  run_claude "$claude_bin"
+  ran=1
+fi
+if [[ -n "$codex_bin" ]]; then
+  run_codex "$codex_bin"
+  ran=1
+fi
+if [[ -n "$gemini_bin" ]]; then
+  run_gemini "$gemini_bin"
+  ran=1
+fi
+
+if [[ "$ran" == "0" ]]; then
+  echo "no selected native runtime binaries found; nothing to run" >&2
+  exit 1
+fi
+
+echo "real runtime check passed"

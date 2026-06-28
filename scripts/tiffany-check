@@ -72,6 +72,25 @@ echo "checking shared event formatter..."
 "$cargo_bin" fmt --manifest-path "$repo_dir/crates/tiffany-event-format/Cargo.toml" -- --check
 "$cargo_bin" test --manifest-path "$repo_dir/crates/tiffany-event-format/Cargo.toml" >/dev/null
 
+echo "checking smoke helper scripts..."
+bash -n "$repo_dir/scripts/tiffany-e2e-fake-runtime"
+bash -n "$repo_dir/scripts/tiffany-e2e-multi-runtime"
+bash -n "$repo_dir/scripts/tiffany-real-runtime-check"
+bash -n "$repo_dir/scripts/tiffany-check-legacy-tui-shims"
+"$repo_dir/scripts/tiffany-check-legacy-tui-shims" >/dev/null
+"$repo_dir/scripts/tiffany-real-runtime-check" --self-test >/dev/null
+python3 - \
+  "$repo_dir/scripts/tests/fake-claude-code" \
+  "$repo_dir/scripts/tests/fake-codex" \
+  "$repo_dir/scripts/tests/fake-gemini" <<'PY'
+import pathlib
+import sys
+
+for name in sys.argv[1:]:
+    path = pathlib.Path(name)
+    compile(path.read_text(encoding="utf-8"), str(path), "exec")
+PY
+
 echo "checking tiffany-loop CLI help..."
 "$repo_dir/scripts/tiffany-dev" --help >/dev/null 2>&1
 if [[ "$mode" == "smoke" ]]; then
@@ -88,6 +107,19 @@ echo "checking orchestrator bridge..."
 
 echo "checking orchestrator event stream..."
 "$binary_dir/orchestrator" events --help >/dev/null 2>&1
+
+echo "checking fake runtime orchestration e2e..."
+"$repo_dir/scripts/tiffany-e2e-fake-runtime" --bin-dir "$binary_dir"
+
+echo "checking multi-runtime worker e2e..."
+"$repo_dir/scripts/tiffany-e2e-multi-runtime" --bin-dir "$binary_dir"
+
+echo "checking real-runtime adapter harness..."
+TIFFANY_ORCHESTRATOR_BIN="$binary_dir/orchestrator" \
+TIFFANY_REAL_CLAUDE_BIN="$repo_dir/scripts/tests/fake-claude-code" \
+TIFFANY_REAL_CODEX_BIN="$repo_dir/scripts/tests/fake-codex" \
+TIFFANY_REAL_GEMINI_BIN="$repo_dir/scripts/tests/fake-gemini" \
+  "$repo_dir/scripts/tiffany-real-runtime-check" --adapter-run --runtime all >/dev/null
 
 "$repo_dir/scripts/tiffany-check-examples"
 

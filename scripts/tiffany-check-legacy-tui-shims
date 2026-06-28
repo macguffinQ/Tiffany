@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_dir"
+
+allowed_ref_paths_regex='^src/tui/(mod\.rs|terminal\.rs|codex_[^/]+\.rs)$'
+fail=0
+
+section() {
+  printf '\n== %s ==\n' "$1"
+}
+
+section "legacy TUI shim files"
+shim_files="$(git ls-files 'src/tui/codex_*.rs')"
+if [[ -z "$shim_files" ]]; then
+  echo "none"
+else
+  printf '%s\n' "$shim_files"
+fi
+
+section "legacy TUI shim boundary"
+refs="$(
+  {
+    git grep -nE '((super::)+codex_[A-Za-z0-9_]+|crate::tui::codex_[A-Za-z0-9_]+)' -- src || true
+    git grep -nE '(^|[[:space:]])(pub\([^)]*\)[[:space:]]+)?mod[[:space:]]+codex_[A-Za-z0-9_]+' -- src/tui || true
+  }
+)"
+
+violations="$(
+  printf '%s\n' "$refs" |
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      path="${line%%:*}"
+      if [[ ! "$path" =~ $allowed_ref_paths_regex ]]; then
+        printf '%s\n' "$line"
+      fi
+    done
+)"
+
+if [[ -n "$violations" ]]; then
+  echo "$violations"
+  fail=1
+else
+  echo "ok"
+fi
+
+section "legacy TUI route"
+if ! git grep -n 'ORCHESTRATOR_LEGACY_TUI' -- src/main.rs src/cli.rs src/tui >/dev/null; then
+  echo "missing ORCHESTRATOR_LEGACY_TUI fallback marker"
+  fail=1
+else
+  echo "ok"
+fi
+
+section "native TUI route"
+if ! git grep -n 'tiffany-ui/' -- README.md README.zh-CN.md >/dev/null; then
+  echo "README files should document tiffany-ui as the native TUI route"
+  fail=1
+else
+  echo "ok"
+fi
+
+section "result"
+if [[ "$fail" -ne 0 ]]; then
+  echo "legacy TUI shim check failed"
+  exit 1
+fi
+
+echo "legacy TUI shim check passed"

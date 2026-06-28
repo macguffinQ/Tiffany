@@ -111,6 +111,31 @@ else
   echo "ok"
 fi
 
+section "legacy codex shim notices"
+missing_codex_shim_notices="$(
+  for path in src/tui/codex_*.rs; do
+    [[ -f "${path}" ]] || continue
+    if ! grep -Eq 'OpenAI Codex CLI|Upstream Codex|upstream UI source implementation|Adapted from OpenAI Codex CLI|Codex-style' "${path}"; then
+      printf '%s: missing Codex/upstream provenance notice\n' "${path}"
+      continue
+    fi
+    if ! grep -Eq 'lightweight terminal runner|legacy|compatibility|local non-fullscreen runner|tiffany-loop TUI module tree' "${path}"; then
+      printf '%s: missing local legacy/shim boundary notice\n' "${path}"
+    fi
+  done
+)"
+if [[ -n "${missing_codex_shim_notices}" ]]; then
+  echo "${missing_codex_shim_notices}"
+  fail=1
+else
+  echo "ok"
+fi
+
+section "legacy codex shim boundary"
+if ! "$ROOT/scripts/tiffany-check-legacy-tui-shims"; then
+  fail=1
+fi
+
 section "stale release examples"
 stale_release_examples="$(
   git grep -nE 'v0\.[0-9]+\.[0-9]+' -- \

@@ -76,6 +76,10 @@ fi
 
 echo "tap name helper checks passed"
 
+bash -n "$repo_dir/scripts/tiffany-check-legacy-tui-shims"
+"$repo_dir/scripts/tiffany-check-legacy-tui-shims" >/dev/null
+echo "legacy TUI shim helper checks passed"
+
 tiffany_dev_help="$("$repo_dir/scripts/tiffany-dev" --help)"
 for expected in \
   '/provider     configure provider credentials and endpoints' \
@@ -212,6 +216,57 @@ if [[ "$stale_builds" != "2" ]]; then
 fi
 
 echo "tiffany-dev source stamp checks passed"
+
+clean_targets_repo="$tmp_root/clean-targets-repo"
+mkdir -p \
+  "$clean_targets_repo/scripts" \
+  "$clean_targets_repo/target/debug/deps" \
+  "$clean_targets_repo/target/debug/incremental" \
+  "$clean_targets_repo/tiffany-ui/codex-rs/target/debug/deps" \
+  "$clean_targets_repo/tiffany-ui/codex-rs/target/debug/incremental"
+cp "$repo_dir/scripts/tiffany-clean-targets" "$clean_targets_repo/scripts/tiffany-clean-targets"
+chmod +x "$clean_targets_repo/scripts/tiffany-clean-targets"
+printf '%s\n' keep >"$clean_targets_repo/target/debug/deps/shared.keep"
+printf '%s\n' cache >"$clean_targets_repo/target/debug/incremental/cache.bin"
+printf '%s\n' keep >"$clean_targets_repo/tiffany-ui/codex-rs/target/debug/deps/legacy.keep"
+printf '%s\n' cache >"$clean_targets_repo/tiffany-ui/codex-rs/target/debug/incremental/cache.bin"
+
+dry_run_output="$("$clean_targets_repo/scripts/tiffany-clean-targets" --dry-run --trim)"
+if ! grep -F -- "would remove shared debug incremental cache" <<<"$dry_run_output" >/dev/null; then
+  echo "expected dry-run trim to preview shared incremental cleanup" >&2
+  echo "$dry_run_output" >&2
+  exit 1
+fi
+if [[ ! -e "$clean_targets_repo/target/debug/incremental/cache.bin" ]]; then
+  echo "dry-run trim must not delete shared incremental cache" >&2
+  exit 1
+fi
+
+"$clean_targets_repo/scripts/tiffany-clean-targets" --trim >/dev/null
+if [[ -e "$clean_targets_repo/target/debug/incremental" ]]; then
+  echo "expected trim to remove shared incremental cache" >&2
+  exit 1
+fi
+if [[ ! -e "$clean_targets_repo/target/debug/deps/shared.keep" ]]; then
+  echo "trim must keep compiled shared deps" >&2
+  exit 1
+fi
+if [[ ! -e "$clean_targets_repo/tiffany-ui/codex-rs/target/debug/deps/legacy.keep" ]]; then
+  echo "trim must keep compiled legacy deps" >&2
+  exit 1
+fi
+
+"$clean_targets_repo/scripts/tiffany-clean-targets" >/dev/null
+if [[ -e "$clean_targets_repo/tiffany-ui/codex-rs/target" ]]; then
+  echo "default clean-targets mode should remove only the legacy fork-local target" >&2
+  exit 1
+fi
+if [[ ! -e "$clean_targets_repo/target/debug/deps/shared.keep" ]]; then
+  echo "default clean-targets mode must keep shared target artifacts" >&2
+  exit 1
+fi
+
+echo "tiffany-clean-targets safety checks passed"
 
 release_workflow="$repo_dir/.github/workflows/release.yml"
 if ! grep -F -- './scripts/tiffany-post-release-check --tag ${GITHUB_REF_NAME} --tap-dir ../homebrew-tap --skip-install' "$release_workflow" >/dev/null; then

@@ -54,6 +54,22 @@ jobs:
             target: aarch64-apple-darwin
             archive: tar.gz
             native: true
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            native: true
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            native: true
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+            native: true
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            native: true
 
     steps:
       - name: Checkout
@@ -140,7 +156,7 @@ jobs:
 
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             for binary in orchestrator.exe tiffany-loop.exe tiffany.exe; do
-              if [[ ! -x "${binary_dir}/${binary}" ]]; then
+              if [[ ! -f "${binary_dir}/${binary}" ]]; then
                 echo "::error::missing release binary ${binary_dir}/${binary}"
                 ls -la "${binary_dir}" || true
                 exit 1
