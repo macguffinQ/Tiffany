@@ -18,6 +18,10 @@ use tiffany_bridge::ConfigSummary as TiffanyConfigSummary;
 use tiffany_bridge::ContextPromptTurn as TiffanyContextPromptTurn;
 #[cfg(test)]
 use tiffany_bridge::ContinueRequest;
+use tiffany_bridge::NativeHistoryCommand;
+use tiffany_bridge::NativeHistoryEventView;
+use tiffany_bridge::NativeHistoryFilter;
+use tiffany_bridge::NativeHistoryOptions;
 use tiffany_bridge::NativeSessionCommand as TiffanyBridgeNativeSessionCommand;
 use tiffany_bridge::NativeSessionRuntime as TiffanyNativeTranscriptRuntime;
 use tiffany_bridge::PendingVisibleOutput as TiffanyBridgePendingVisibleOutput;
@@ -28,6 +32,7 @@ use tiffany_bridge::continue_request;
 use tiffany_bridge::continue_target_role;
 use tiffany_bridge::doctor_command_args;
 use tiffany_bridge::jobs_command_args;
+use tiffany_bridge::native_history_kind_matches;
 use tiffany_bridge::provider_command_args;
 use tiffany_bridge::roles_command_args;
 use tiffany_bridge::thread_command_args;
@@ -2473,14 +2478,6 @@ pub(crate) fn spawn_native_history_import(
 }
 
 #[derive(Clone, Debug)]
-struct NativeHistoryOptions {
-    turn_limit: usize,
-    event_limit_per_turn: usize,
-    full_event_content: bool,
-    filter: Option<NativeHistoryFilter>,
-}
-
-#[derive(Clone, Debug)]
 struct NativeHistoryLoadedConversation {
     source: NativeHistorySource,
     conversation: TiffanyNativeChatConversation,
@@ -2508,338 +2505,6 @@ impl NativeHistorySource {
             Self::LocalJson => "local-json",
         }
     }
-}
-
-#[derive(Clone, Debug)]
-enum NativeHistoryCommand {
-    Approvals {
-        turn_limit: usize,
-    },
-    Show(NativeHistoryOptions),
-    Export {
-        out: Option<PathBuf>,
-        filter: Option<NativeHistoryFilter>,
-    },
-    Graph {
-        mermaid: bool,
-        out: Option<PathBuf>,
-        export: bool,
-    },
-    Compact {
-        turn_limit: usize,
-        filter: Option<NativeHistoryFilter>,
-    },
-    Sync,
-    Status,
-    Search {
-        pattern: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum NativeHistoryFilter {
-    Role(String),
-    Thread(String),
-    NativeSession(String),
-    Kind(String),
-}
-
-impl NativeHistoryFilter {
-    fn display(&self) -> String {
-        match self {
-            Self::Role(role) => format!("role {role}"),
-            Self::Thread(thread) => format!("thread {thread}"),
-            Self::NativeSession(native) => format!("native {native}"),
-            Self::Kind(kind) => format!("kind {kind}"),
-        }
-    }
-
-    fn matches(&self, event: &TiffanyNativeChatEvent) -> bool {
-        match self {
-            Self::Role(role) => {
-                event.worker_role.as_deref() == Some(role.as_str())
-                    || event.agent.as_deref() == Some(role.as_str())
-                    || event.role == *role
-            }
-            Self::Thread(thread) => event
-                .worker_thread_id
-                .as_deref()
-                .is_some_and(|id| id == thread || id.starts_with(thread)),
-            Self::NativeSession(native) => event
-                .native_session_id
-                .as_deref()
-                .is_some_and(|id| id == native || id.starts_with(native)),
-            Self::Kind(kind) => event
-                .kind
-                .as_deref()
-                .is_some_and(|event_kind| native_history_kind_matches(event_kind, kind)),
-        }
-    }
-}
-
-fn native_history_kind_matches(event_kind: &str, filter: &str) -> bool {
-    event_kind.eq_ignore_ascii_case(filter) || event_kind.starts_with(filter) || {
-        let event_kind = event_format::normalize_event_kind(event_kind);
-        let filter = event_format::normalize_event_kind(filter);
-        let event_visible = event_kind
-            .as_deref()
-            .and_then(event_format::visible_agent_output_kind_for_event_kind);
-        let filter_visible = filter
-            .as_deref()
-            .and_then(event_format::visible_agent_output_kind_for_event_kind);
-        matches!(
-            (
-                event_kind.as_deref(),
-                filter.as_deref(),
-                event_visible,
-                filter_visible
-            ),
-            (Some(event_kind), Some(filter), _, _)
-                if event_kind.eq_ignore_ascii_case(filter) || event_kind.starts_with(filter)
-        ) || matches!(
-            (event_visible, filter_visible),
-            (Some(event_visible), Some(filter_visible)) if event_visible == filter_visible
-        )
-    }
-}
-
-impl NativeHistoryCommand {
-    fn parse(args: &str) -> Result<Self, String> {
-        let parts = args.split_whitespace().collect::<Vec<_>>();
-        match parts.as_slice() {
-            ["approvals"] | ["approval"] => Ok(Self::Approvals { turn_limit: 20 }),
-            ["approvals" | "approval", "--turns" | "-n", value] => {
-                let parsed = value
-                    .parse::<usize>()
-                    .map_err(|_| "approvals --turns needs a number".to_string())?;
-                if parsed == 0 {
-                    return Err("approvals --turns must be greater than zero".to_string());
-                }
-                Ok(Self::Approvals {
-                    turn_limit: parsed.min(50),
-                })
-            }
-            ["approvals" | "approval", ..] => Err("Usage: /approvals [--turns <n>]".to_string()),
-            [] | ["last"] | ["summary"] => Ok(Self::Show(NativeHistoryOptions {
-                turn_limit: 5,
-                event_limit_per_turn: 6,
-                full_event_content: false,
-                filter: None,
-            })),
-            ["full"] | ["all"] => Ok(Self::Show(NativeHistoryOptions {
-                turn_limit: 10,
-                event_limit_per_turn: usize::MAX,
-                full_event_content: true,
-                filter: None,
-            })),
-            [count] if count.parse::<usize>().is_ok() => {
-                let count = count.parse::<usize>().unwrap_or_default();
-                if count == 0 {
-                    return Err("history count must be greater than zero".to_string());
-                }
-                Ok(Self::Show(NativeHistoryOptions {
-                    turn_limit: count.min(50),
-                    event_limit_per_turn: 10,
-                    full_event_content: false,
-                    filter: None,
-                }))
-            }
-            ["role", role] => Ok(Self::Show(NativeHistoryOptions {
-                turn_limit: 20,
-                event_limit_per_turn: usize::MAX,
-                full_event_content: true,
-                filter: Some(NativeHistoryFilter::Role(role.to_string())),
-            })),
-            ["role", ..] => Err("history role needs <role>".to_string()),
-            ["thread", thread] => Ok(Self::Show(NativeHistoryOptions {
-                turn_limit: 20,
-                event_limit_per_turn: usize::MAX,
-                full_event_content: true,
-                filter: Some(NativeHistoryFilter::Thread(thread.to_string())),
-            })),
-            ["thread", ..] => Err("history thread needs <id>".to_string()),
-            ["native" | "session", native] => Ok(Self::Show(NativeHistoryOptions {
-                turn_limit: 20,
-                event_limit_per_turn: usize::MAX,
-                full_event_content: true,
-                filter: Some(NativeHistoryFilter::NativeSession(native.to_string())),
-            })),
-            ["native" | "session", ..] => Err("history native needs <session-id>".to_string()),
-            ["kind", kind] => Ok(Self::Show(NativeHistoryOptions {
-                turn_limit: 20,
-                event_limit_per_turn: usize::MAX,
-                full_event_content: true,
-                filter: Some(NativeHistoryFilter::Kind(kind.to_string())),
-            })),
-            ["kind", ..] => Err("history kind needs <event-kind>".to_string()),
-            ["export", rest @ ..] => parse_native_history_export_command(rest),
-            ["compact" | "story" | "summary", rest @ ..] => {
-                parse_native_history_compact_command(rest)
-            }
-            ["sync" | "import" | "import-native"] => Ok(Self::Sync),
-            ["sync" | "import" | "import-native", ..] => {
-                Err("history sync does not accept extra arguments".to_string())
-            }
-            ["status" | "db" | "sources"] => Ok(Self::Status),
-            ["status" | "db" | "sources", ..] => {
-                Err("history status does not accept extra arguments".to_string())
-            }
-            ["graph" | "flow"] => Ok(Self::Graph {
-                mermaid: false,
-                out: None,
-                export: false,
-            }),
-            ["mermaid" | "diagram"] => Ok(Self::Graph {
-                mermaid: true,
-                out: None,
-                export: false,
-            }),
-            ["export-graph", rest @ ..] | ["save-graph", rest @ ..] => {
-                parse_native_history_graph_command(rest)
-            }
-            ["search" | "grep" | "find", pattern @ ..] => {
-                let pattern = pattern.join(" ").trim().to_string();
-                if pattern.is_empty() {
-                    return Err("history search needs text".to_string());
-                }
-                Ok(Self::Search { pattern })
-            }
-            [unknown, ..] => Err(format!("unknown /history option '{unknown}'")),
-        }
-    }
-}
-
-fn parse_native_history_compact_command(parts: &[&str]) -> Result<NativeHistoryCommand, String> {
-    let mut turn_limit = 12;
-    let mut filter = None;
-    let mut i = 0;
-    while i < parts.len() {
-        match parts[i] {
-            "--turns" | "-n" => {
-                let Some(value) = parts.get(i + 1) else {
-                    return Err("history compact --turns needs a number".to_string());
-                };
-                let parsed = value
-                    .parse::<usize>()
-                    .map_err(|_| "history compact --turns needs a number".to_string())?;
-                if parsed == 0 {
-                    return Err("history compact --turns must be greater than zero".to_string());
-                }
-                turn_limit = parsed.min(50);
-                i += 2;
-            }
-            "role" => {
-                let Some(role) = parts.get(i + 1) else {
-                    return Err("history compact role needs <role>".to_string());
-                };
-                filter = Some(NativeHistoryFilter::Role((*role).to_string()));
-                i += 2;
-            }
-            "thread" => {
-                let Some(thread) = parts.get(i + 1) else {
-                    return Err("history compact thread needs <id>".to_string());
-                };
-                filter = Some(NativeHistoryFilter::Thread((*thread).to_string()));
-                i += 2;
-            }
-            "native" | "session" => {
-                let Some(native) = parts.get(i + 1) else {
-                    return Err("history compact native needs <session-id>".to_string());
-                };
-                filter = Some(NativeHistoryFilter::NativeSession((*native).to_string()));
-                i += 2;
-            }
-            "kind" => {
-                let Some(kind) = parts.get(i + 1) else {
-                    return Err("history compact kind needs <event-kind>".to_string());
-                };
-                filter = Some(NativeHistoryFilter::Kind((*kind).to_string()));
-                i += 2;
-            }
-            value => return Err(format!("unknown /history compact option '{value}'")),
-        }
-    }
-    Ok(NativeHistoryCommand::Compact { turn_limit, filter })
-}
-
-fn parse_native_history_export_command(parts: &[&str]) -> Result<NativeHistoryCommand, String> {
-    let mut out = None;
-    let mut filter = None;
-    let mut i = 0;
-    while i < parts.len() {
-        match parts[i] {
-            "--out" | "-o" => {
-                let Some(path) = parts.get(i + 1) else {
-                    return Err("history export --out needs a file path".to_string());
-                };
-                out = Some(PathBuf::from(path));
-                i += 2;
-            }
-            "role" => {
-                let Some(role) = parts.get(i + 1) else {
-                    return Err("history export role needs <role>".to_string());
-                };
-                filter = Some(NativeHistoryFilter::Role((*role).to_string()));
-                i += 2;
-            }
-            "thread" => {
-                let Some(thread) = parts.get(i + 1) else {
-                    return Err("history export thread needs <id>".to_string());
-                };
-                filter = Some(NativeHistoryFilter::Thread((*thread).to_string()));
-                i += 2;
-            }
-            "native" | "session" => {
-                let Some(native) = parts.get(i + 1) else {
-                    return Err("history export native needs <session-id>".to_string());
-                };
-                filter = Some(NativeHistoryFilter::NativeSession((*native).to_string()));
-                i += 2;
-            }
-            "kind" => {
-                let Some(kind) = parts.get(i + 1) else {
-                    return Err("history export kind needs <event-kind>".to_string());
-                };
-                filter = Some(NativeHistoryFilter::Kind((*kind).to_string()));
-                i += 2;
-            }
-            value => {
-                return Err(format!("unknown /history export option '{value}'"));
-            }
-        }
-    }
-    Ok(NativeHistoryCommand::Export { out, filter })
-}
-
-fn parse_native_history_graph_command(parts: &[&str]) -> Result<NativeHistoryCommand, String> {
-    let mut out = None;
-    let mut mermaid = true;
-    let mut i = 0;
-    while i < parts.len() {
-        match parts[i] {
-            "--out" | "-o" => {
-                let Some(path) = parts.get(i + 1) else {
-                    return Err("history export-graph --out needs a file path".to_string());
-                };
-                out = Some(PathBuf::from(path));
-                i += 2;
-            }
-            "--text" | "text" => {
-                mermaid = false;
-                i += 1;
-            }
-            "--mermaid" | "mermaid" => {
-                mermaid = true;
-                i += 1;
-            }
-            value => return Err(format!("unknown /history export-graph option '{value}'")),
-        }
-    }
-    Ok(NativeHistoryCommand::Graph {
-        mermaid,
-        out,
-        export: true,
-    })
 }
 
 fn native_history_graph_lines(
@@ -3253,7 +2918,9 @@ fn native_history_approval_requests<'a>(
     let start = conversation.turns.len().saturating_sub(turn_limit);
     for (turn_idx, turn) in conversation.turns.iter().enumerate().skip(start) {
         for event in &turn.events {
-            if NativeHistoryFilter::Kind("approval".to_string()).matches(event) {
+            if NativeHistoryFilter::Kind("approval".to_string())
+                .matches_event(native_history_event_view(event))
+            {
                 approvals.push(NativeApprovalRequest {
                     turn_number: turn_idx + 1,
                     user_prompt: &turn.user_prompt,
@@ -3387,7 +3054,7 @@ fn filtered_native_history_turns<'a>(
                 Some(filter) => turn
                     .events
                     .iter()
-                    .filter(|event| filter.matches(event))
+                    .filter(|event| filter.matches_event(native_history_event_view(event)))
                     .collect::<Vec<_>>(),
                 None => turn.events.iter().collect::<Vec<_>>(),
             };
@@ -3402,6 +3069,17 @@ fn filtered_native_history_turns<'a>(
             })
         })
         .collect()
+}
+
+fn native_history_event_view(event: &TiffanyNativeChatEvent) -> NativeHistoryEventView<'_> {
+    NativeHistoryEventView {
+        role: &event.role,
+        agent: event.agent.as_deref(),
+        worker_role: event.worker_role.as_deref(),
+        worker_thread_id: event.worker_thread_id.as_deref(),
+        native_session_id: event.native_session_id.as_deref(),
+        kind: event.kind.as_deref(),
+    }
 }
 
 struct NativeHistoryTurnView<'a> {

@@ -59,6 +59,11 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   A new `tiffany-bridge/src/command_args.rs` owns pure `/roles`, `/provider`,
   `/doctor`, `/thread`, `/jobs`, and `/continue` argument mapping. `codex-tui`
   imports the bridge API and keeps command spawning/rendering local.
+- **F5+ native-history command/filter slice ✅ implemented locally and verified.**
+  A new `tiffany-bridge/src/native_history.rs` owns pure `/history` command
+  parsing, native-history filter display, event-view matching, and event-kind
+  alias matching. `codex-tui` keeps local JSON/session-store loading and
+  Ratatui/Markdown rendering.
 - **F8 ✅ implemented locally and verified.** Full `codex-tui --lib` now passes
   serially after stabilizing no-active-turn app-server paths, no-turn side-thread
   discard behavior, large-stack test wrappers, Tiffany snapshot drift, and
@@ -255,7 +260,7 @@ beyond the scaffold until F2 lands.
   one module per task, build green each time, until the god-file is empty and
   deleted. Completed slices: config summary, native session paths, visible
   output formatting/dedupe, contextual prompt assembly, command argument
-  parsing.
+  parsing, native-history command/filter parsing.
 - F6: prune vendored `codex-rs` crates that Tiffany does not use (per the
   pruning goal in the Upstream Fork Strategy), guided by `UPSTREAM.md`.
 - F7 ✅ done locally: the Codex TUI is behind the default `tui` feature and

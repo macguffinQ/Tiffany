@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 mod command_args;
 mod context_prompt;
+mod native_history;
 mod native_session;
 mod visible_output;
 
@@ -11,6 +12,10 @@ pub use command_args::{
     jobs_command_args, provider_command_args, roles_command_args, thread_command_args,
 };
 pub use context_prompt::{ContextPromptTurn, contextual_prompt};
+pub use native_history::{
+    NativeHistoryCommand, NativeHistoryEventView, NativeHistoryFilter, NativeHistoryOptions,
+    native_history_kind_matches,
+};
 pub use native_session::{
     NativeSessionCommand, NativeSessionPath, NativeSessionRuntime, claude_session_jsonl_path,
     codex_session_jsonl_path, find_codex_rollout_path_by_id, find_gemini_chat_path_by_id,
