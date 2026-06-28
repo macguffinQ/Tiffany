@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_dir/scripts/lib/tiffany-cargo.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/tiffany-codex-tui-lib-test [cargo-test-args...]
+
+Runs the full codex-tui library test suite serially. This is intentionally
+separate from the fast targeted TUI tests because the app-server-heavy tests are
+slow and historically flaky when run in parallel.
+
+Environment:
+  TIFFANY_CARGO_TARGET_DIR  shared Cargo target dir, default: ./target
+  TIFFANY_FORK_CARGO        override cargo command for the vendored codex-rs fork
+EOF
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
+cargo_bin="$(tiffany_resolve_cargo)"
+tiffany_fork_cargo_bin="${TIFFANY_FORK_CARGO:-}"
+if [[ -z "$tiffany_fork_cargo_bin" ]]; then
+  if "$cargo_bin" +1.95.0 --version >/dev/null 2>&1; then
+    tiffany_fork_cargo_bin="$cargo_bin +1.95.0"
+  else
+    tiffany_fork_cargo_bin="$cargo_bin"
+  fi
+fi
+
+target_dir="${TIFFANY_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_dir/target}}"
+case "$target_dir" in
+  /*) ;;
+  *) target_dir="$repo_dir/$target_dir" ;;
+esac
+export CARGO_TARGET_DIR="$target_dir"
+
+echo "running full codex-tui lib tests serially..."
+(
+  cd "$repo_dir/tiffany-ui/codex-rs"
+  # shellcheck disable=SC2086
+  $tiffany_fork_cargo_bin test -p codex-tui --lib --quiet "$@" -- --test-threads=1
+)
+
+echo "codex-tui lib tests passed"

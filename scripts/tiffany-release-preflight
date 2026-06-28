@@ -12,7 +12,8 @@ Runs the release preflight checks from this checkout.
 
 Modes:
   --quick  Format, clippy, tests, Tiffany UI targeted tests, examples, locked build, formula syntax, and open-source audit.
-  --full   Quick checks plus Tiffany dist packaging checks for release tags.
+           When --tag is present, also runs the serial full codex-tui lib gate.
+  --full   Quick checks plus the serial full codex-tui lib gate and Tiffany dist packaging checks for release tags.
 
 Options:
   --tag    Verify the tag version matches the root Cargo.toml package version.
@@ -254,6 +255,11 @@ step "tiffany update action targeted tests"
 
 step "tiffany runtime update guard targeted tests"
 (cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui tiffany_runtime_marker_disables_upstream_update_checks)
+
+if [[ "$mode" == "full" || -n "$release_tag" || "${TIFFANY_PREFLIGHT_CODEX_TUI_LIB:-0}" == "1" ]]; then
+  step "tiffany codex-tui serial lib tests"
+  "$repo_dir/scripts/tiffany-codex-tui-lib-test"
+fi
 
 if [[ "$mode" == "full" ]]; then
   step "tiffany dist preflight"

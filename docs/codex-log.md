@@ -224,3 +224,27 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - The final full gate is verified in serial mode. Parallel full-test behavior can be a separate hardening task because app-server-heavy tests are still expensive and were historically flaky when run concurrently.
 - Next:
   - Continue F5+ with the next small pure bridge slice, or add an explicit CI script for the serial `codex-tui --lib` gate before release preflight starts depending on it.
+
+## F8 follow-up — codex-tui serial gate scripted locally — 2026-06-28
+
+- Commits:
+  - this commit: `Add codex tui serial lib gate`
+- Build/tests:
+  - `./scripts/tiffany-codex-tui-lib-test --help` — green.
+  - `./scripts/tiffany-check-script-helpers` — green.
+  - `./scripts/tiffany-codex-tui-lib-test` — green, 3149 passed, 0 failed, 1 ignored, 360.43s.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+  - No `.snap.new` files remain.
+- Decisions:
+  - Added `scripts/tiffany-codex-tui-lib-test` as the reusable serial full `codex-tui --lib` gate.
+  - Wired the gate into `scripts/tiffany-release-preflight` for `--full`, any `--tag` check, or explicit `TIFFANY_PREFLIGHT_CODEX_TUI_LIB=1`.
+  - Kept ordinary untagged `--quick` preflight shorter; the slow gate runs when release confidence matters.
+  - Added script syntax coverage to `scripts/tiffany-check-script-helpers`.
+  - Documented the script and preflight behavior in README, README.zh-CN, `docs/engineering-plan.md`, and `docs/execution-plan.md`.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Resume F5+ with the next small pure bridge slice from `tui/src/tiffany_orchestrator.rs`.

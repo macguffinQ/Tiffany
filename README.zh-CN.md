@@ -121,6 +121,7 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
 - `./scripts/tiffany-install-smoke --smoke|--dist`：在临时 HOME 中验证 `orchestrator`、`tiffany-loop` 和 `tiffany` 兼容别名，不触碰真实用户配置。
 - `./scripts/tiffany-slim-smoke`：构建 runtime-only no-TUI binary，并验证没有 `codex-tui` 时 `orchestrator` / `tiffany-loop status` 仍可用。
+- `./scripts/tiffany-codex-tui-lib-test`：串行运行完整 `codex-tui --lib` 测试；这个检查较慢，`tiffany-release-preflight` 会在 `--full` 或带 tag 的发布检查中运行它。
 - `./scripts/tiffany-e2e-fake-runtime [--bin-dir DIR]`：无网络 e2e，用 fake Claude Code CLI 跑 planner/critic/worker/reviewer，并验证 session/thread/history 持久化。
 - `./scripts/tiffany-e2e-multi-runtime [--bin-dir DIR]`：无网络 e2e，用 fake Codex 和 Gemini worker 跑真实 adapter，并验证同角色 native session 复用。
 - `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]`：可选真实 CLI 检查。默认模式不消耗额度，会报告本机 binary、model/auth 预检线索、原生 transcript store、orchestrator binary 和可复制下一步命令；`--run` 直接发送很小的原生 prompt，`--adapter-run` 通过临时 Tiffany 状态执行 `orchestrator events --worker ...` 检查 adapter 路径。两种运行模式都可能消耗模型额度。
@@ -388,6 +389,7 @@ behavior:
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/install/bridge/example 验证 |
 | `./scripts/tiffany-install-smoke --smoke|--dist` | 在隔离临时 HOME 中验证安装后的命令行为 |
 | `./scripts/tiffany-slim-smoke` | 验证 runtime-only no-TUI multi-call binary |
+| `./scripts/tiffany-codex-tui-lib-test` | 串行运行完整 `codex-tui --lib` 测试 |
 | `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |
 | `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]` | 可选真实 native CLI/Tiffany adapter 检查；默认是不消耗额度的 binary/model/auth/history/next command 预检 |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | 执行汇总后的本地发布前检查：format、clippy、测试、示例、审计；full 模式再跑 dist 检查 |
@@ -610,6 +612,7 @@ cargo build --release
 ./scripts/tiffany-build --fast-release --locked
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-install-smoke --smoke
+./scripts/tiffany-codex-tui-lib-test
 ./scripts/tiffany-release-preflight --quick
 ./scripts/tiffany-release-preflight --full --tag vX.Y.Z     # 打 tag 前
 # 同日连续 tag 默认会被阻止；只在紧急修复时覆盖：

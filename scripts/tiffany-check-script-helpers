@@ -78,6 +78,7 @@ echo "tap name helper checks passed"
 
 bash -n "$repo_dir/scripts/tiffany-check-legacy-tui-shims"
 bash -n "$repo_dir/scripts/tiffany-slim-smoke"
+bash -n "$repo_dir/scripts/tiffany-codex-tui-lib-test"
 "$repo_dir/scripts/tiffany-check-legacy-tui-shims" >/dev/null
 echo "legacy TUI shim helper checks passed"
 

@@ -255,8 +255,8 @@ beyond the scaffold until F2 lands.
   pruning goal in the Upstream Fork Strategy), guided by `UPSTREAM.md`.
 - F7 ✅ done locally: the Codex TUI is behind the default `tui` feature and
   `./scripts/tiffany-slim-smoke --quiet` verifies the runtime-only no-TUI binary.
-- F8: investigate the hanging/flaky full `cargo test -p codex-tui --lib` run
-  (snapshot drift / app-test hang, unrelated to F4) before it bites CI. Not
-  blocking; targeted fast-gate tests pass.
+- F8 ✅ done locally: the full `cargo test -p codex-tui --lib` gate passes
+  serially, and `./scripts/tiffany-codex-tui-lib-test` makes that slow gate
+  reusable from full/tagged release preflight.
 - Then M1 (provider/role polish), M2 (waterfall de-dup), M3 (real-runtime
   handoff — now a required gate), M4 (queue/jobs UI), M6 (pipeline efficacy).

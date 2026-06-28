@@ -379,6 +379,7 @@ git diff --check
 Pre-release checks:
 
 ```bash
+./scripts/tiffany-codex-tui-lib-test
 ./scripts/tiffany-e2e-fake-runtime
 ./scripts/tiffany-e2e-multi-runtime
 ./scripts/open-source-audit
