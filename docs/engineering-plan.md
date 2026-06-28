@@ -391,7 +391,7 @@ State section above and must be re-confirmed by running the Validation Gates
 before any release tag.
 
 - M0 Stabilize Shell — partial. Single multi-call binary not yet implemented;
-  `tiffany-ui/UPSTREAM.md` does not exist.
+  `tiffany-ui/UPSTREAM.md` exists, but the exact upstream commit is still TODO.
 - M1 Provider/Role Setup — partial. `/role` and `/provider` flows need operator
   polish; `/doctor` one-line fixes incomplete.
 - M2 Execution Display — partial. Worker waterfall de-duplication and JSON
@@ -406,8 +406,9 @@ before any release tag.
 
 Cross-cutting foundation gaps owned by no single milestone:
 
-- Upstream fork strategy is undocumented: `tiffany-ui/UPSTREAM.md`, frozen
-  commit, and owned-file list do not exist.
+- Upstream fork strategy is partially documented: `tiffany-ui/UPSTREAM.md`
+  exists with a freeze date and owned-file list, but the exact upstream commit
+  still needs to be matched against upstream Codex.
 - `tiffany_orchestrator.rs` (roughly 18k lines) must be decomposed into the
   `tiffany-bridge` crate before it grows further and before any upstream sync.
 
