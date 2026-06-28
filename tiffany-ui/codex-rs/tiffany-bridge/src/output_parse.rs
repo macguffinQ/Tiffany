@@ -764,6 +764,86 @@ pub fn job_state_summary(job: &JobSummary) -> String {
     }
 }
 
+pub fn job_repair_hint(job: &JobSummary) -> Option<String> {
+    let error = job.error.as_deref().and_then(nonempty_trimmed)?;
+    let error_lower = error.to_ascii_lowercase();
+    let role_command = job
+        .role
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .map(|role| format!("/role {role}"))
+        .unwrap_or_else(|| "/roles".to_string());
+
+    if contains_any(
+        &error_lower,
+        &[
+            "model not found",
+            "model does not exist",
+            "invalid model",
+            "model unavailable",
+            "unknown model",
+        ],
+    ) || error.contains("模型不存在")
+    {
+        return Some(format!(
+            "check model binding with {role_command}, then run /doctor"
+        ));
+    }
+
+    if contains_any(
+        &error_lower,
+        &[
+            "api key",
+            "apikey",
+            "unauthorized",
+            "forbidden",
+            "authentication",
+            "permission denied",
+            "invalid key",
+        ],
+    ) {
+        return Some("check provider auth with /provider, then run /doctor".to_string());
+    }
+
+    if contains_any(
+        &error_lower,
+        &[
+            "endpoint",
+            "base url",
+            "base_url",
+            "connection refused",
+            "dns",
+            "network timeout",
+            "timeout",
+        ],
+    ) {
+        return Some(
+            "check provider endpoint/network with /provider, then run /doctor".to_string(),
+        );
+    }
+
+    if contains_any(
+        &error_lower,
+        &[
+            "runtime",
+            "binary",
+            "executable",
+            "command not found",
+            "no such file or directory",
+        ],
+    ) {
+        return Some("check runtime binary with /doctor, then review /roles".to_string());
+    }
+
+    if contains_any(&error_lower, &["rate limit", "429", "quota"]) {
+        return Some(format!(
+            "provider is rate limited; retry later or switch model with {role_command}"
+        ));
+    }
+
+    None
+}
+
 pub fn job_actions(job: &JobSummary) -> Vec<String> {
     let role = job.role.as_deref().and_then(nonempty_trimmed);
     let show_job = format!("/jobs show {}", job.id);
@@ -920,6 +1000,10 @@ fn tui_command_from_jobs_next_action(next: &str) -> Option<String> {
         return Some(format!("/history session {id}"));
     }
     None
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
 }
 
 fn push_unique_action(actions: &mut Vec<String>, action: String) {
@@ -1178,6 +1262,55 @@ mod tests {
             !failed_actions
                 .iter()
                 .any(|action| action.contains("orchestrator jobs retry"))
+        );
+    }
+
+    #[test]
+    fn job_repair_hints_cover_common_provider_model_runtime_failures() {
+        let job = |error: &str, role: Option<&str>| JobSummary {
+            id: "abcd1234".to_string(),
+            status: "failed".to_string(),
+            prompt: "prompt".to_string(),
+            flow: Some("single-worker".to_string()),
+            role: role.map(str::to_string),
+            task: None,
+            timing: None,
+            session: None,
+            thread: None,
+            native: None,
+            history: None,
+            next: None,
+            result: None,
+            error: Some(error.to_string()),
+        };
+
+        assert_eq!(
+            job_repair_hint(&job(
+                "[1211][模型不存在] invalid model",
+                Some("worker-codex")
+            ))
+            .as_deref(),
+            Some("check model binding with /role worker-codex, then run /doctor")
+        );
+        assert_eq!(
+            job_repair_hint(&job("401 unauthorized: invalid API key", None)).as_deref(),
+            Some("check provider auth with /provider, then run /doctor")
+        );
+        assert_eq!(
+            job_repair_hint(&job("network timeout while calling endpoint", None)).as_deref(),
+            Some("check provider endpoint/network with /provider, then run /doctor")
+        );
+        assert_eq!(
+            job_repair_hint(&job("runtime binary command not found", Some("worker-cc"))).as_deref(),
+            Some("check runtime binary with /doctor, then review /roles")
+        );
+        assert_eq!(
+            job_repair_hint(&job("429 rate limit exceeded", Some("worker-gemini"))).as_deref(),
+            Some("provider is rate limited; retry later or switch model with /role worker-gemini")
+        );
+        assert_eq!(
+            job_repair_hint(&job("worker returned a bad answer", Some("worker-cc"))),
+            None
         );
     }
 }

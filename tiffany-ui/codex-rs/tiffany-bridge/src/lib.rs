@@ -44,7 +44,7 @@ pub use native_transcript::{
 };
 pub use output_parse::{
     JobSummary, JobsRetryHandoff, NativeCliHandoff, ProviderSummary, RoleOptionSummary,
-    RoleProfileRow, RoleSummary, ThreadSummary, job_actions, job_state_summary,
+    RoleProfileRow, RoleSummary, ThreadSummary, job_actions, job_repair_hint, job_state_summary,
     parse_job_summaries, parse_jobs_header_counts, parse_jobs_retry_handoff,
     parse_native_cli_handoff, parse_prefixed_field, parse_provider_summaries,
     parse_recovered_jobs_failed_count, parse_recovered_jobs_ids, parse_role_option_summaries,

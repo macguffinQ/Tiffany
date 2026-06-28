@@ -900,3 +900,25 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M4 by improving `/jobs` failed-job repair hints, or switch back to M2 waterfall grouping/raw-debug separation.
+
+## M4 failed job repair hints added — 2026-06-29
+
+- Commits:
+  - this commit: `Add jobs repair hints`
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge job_repair --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_summary_lines --lib --quiet` — green, 4 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_ --lib --quiet` — green, 13 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Added a pure `tiffany-bridge` repair-hint classifier for common failed-job error families: model missing/invalid, provider auth, endpoint/network, runtime binary, and provider rate limit.
+  - Normal `/jobs` cards now render a `fix` line below the humanized error when a concrete repair path is known.
+  - Model errors such as `[1211][模型不存在] invalid model` now point to `/role <role>` plus `/doctor` instead of only showing retry.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M2 waterfall grouping/raw-debug separation, or keep tightening M1 `/doctor` one-line fixes.

@@ -41,6 +41,7 @@ use tiffany_bridge::continue_request;
 use tiffany_bridge::continue_target_role;
 use tiffany_bridge::doctor_command_args;
 use tiffany_bridge::job_actions;
+use tiffany_bridge::job_repair_hint;
 use tiffany_bridge::job_state_summary;
 use tiffany_bridge::jobs_command_args;
 use tiffany_bridge::native_conversation_id;
@@ -4815,6 +4816,9 @@ fn job_summary_card_lines(job: &JobSummary) -> Vec<Line<'static>> {
     }
     if let Some(error) = job.error.as_deref().and_then(nonempty_trimmed) {
         lines.push(session_card_detail_line("error", error));
+    }
+    if let Some(hint) = job_repair_hint(job) {
+        lines.push(session_card_detail_line("fix", &hint));
     }
     lines.push(session_card_actions_line(&job_actions(job)));
     lines
@@ -10011,6 +10015,7 @@ mod tests {
         assert!(text.contains("✗ worker-codex"));
         assert!(text.contains("state  needs attention; retry with /jobs retry abcd1234"));
         assert!(text.contains("error  model unavailable"));
+        assert!(text.contains("fix  check model binding with /role worker-codex"));
     }
 
     #[test]
@@ -10708,6 +10713,7 @@ mod tests {
         assert!(text.contains("state  needs attention; retry with /jobs retry abcd1234"));
         assert!(text.contains("timing  created 5m ago · updated 1m ago · duration 2m"));
         assert!(text.contains("error  [1211][模型不存在] invalid model"));
+        assert!(text.contains("fix  check model binding with /role worker-codex"));
         assert!(text.contains("/jobs retry abcd1234"));
         assert!(text.contains("actions /continue open worker-cc"));
         assert!(text.contains("/thread export worker-cc"));
