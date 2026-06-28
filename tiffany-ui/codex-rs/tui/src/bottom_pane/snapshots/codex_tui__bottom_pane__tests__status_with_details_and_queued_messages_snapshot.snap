@@ -6,8 +6,8 @@ expression: "render_snapshot(&pane, area)"
   └ First detail line
     Second detail line
 
-• Queued follow-up inputs
-  ↳ Queued follow-up question
+• Queued follow-up inputs: 1 item(s)
+  1. Queued follow-up question
     ⌥ + ↑ edit last queued message
 
 › Ask tiffany-loop to do anything

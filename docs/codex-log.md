@@ -834,3 +834,26 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M2 on remaining worker waterfall noise, especially grouping long tool runs and raw/debug separation.
+
+## M4 queued follow-up preview numbered — 2026-06-29
+
+- Commits:
+  - this commit: `Number queued follow-up preview items`
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `INSTA_UPDATE=always /Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui pending_input_preview --lib --quiet` — green, 14 passed; snapshots updated.
+  - From `tiffany-ui/codex-rs`: `INSTA_UPDATE=always /Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui queued_messages --lib --quiet` — green, 9 passed; snapshots updated.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui pending_input_preview --lib --quiet` — green, 14 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui queued_messages --lib --quiet` — green, 9 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Native bottom-pane queued follow-up preview now shows item counts and numbers each queued message, making execution order explicit.
+  - Tiffany queued batch mode now reads as `Queued batch: N item(s), runs together after current orchestration`.
+  - Pending steers keep the existing arrow display; only ordinary queued user messages became numbered.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M4 by tightening queue run/pause/clear affordances, or return to M2 worker waterfall noise if queue behavior is stable enough for now.

@@ -141,23 +141,31 @@ impl PendingInputPreview {
                 lines.push(Line::from(""));
             }
             let header = if self.queued_batch_mode {
-                "Queued batch: runs together after current orchestration"
+                format!(
+                    "Queued batch: {} item(s), runs together after current orchestration",
+                    self.queued_messages.len()
+                )
             } else {
-                "Queued follow-up inputs"
+                format!(
+                    "Queued follow-up inputs: {} item(s)",
+                    self.queued_messages.len()
+                )
             };
             Self::push_section_header(&mut lines, width, header.into());
 
-            for message in &self.queued_messages {
+            for (idx, message) in self.queued_messages.iter().enumerate() {
+                let prefix = format!("  {}. ", idx + 1);
+                let continuation = " ".repeat(prefix.chars().count());
                 let wrapped = adaptive_wrap_lines(
                     message.lines().map(|line| Line::from(line.dim().italic())),
                     RtOptions::new(width as usize)
-                        .initial_indent(Line::from("  ↳ ".dim()))
-                        .subsequent_indent(Line::from("    ")),
+                        .initial_indent(Line::from(prefix.dim()))
+                        .subsequent_indent(Line::from(continuation.clone())),
                 );
                 Self::push_truncated_preview_lines(
                     &mut lines,
                     wrapped,
-                    Line::from("    …".dim().italic()),
+                    Line::from(format!("{continuation}…").dim().italic()),
                 );
             }
         }
@@ -256,15 +264,17 @@ mod tests {
         queue.set_queued_batch_mode(true);
         queue.queued_messages.push("first follow-up".to_string());
         queue.queued_messages.push("second follow-up".to_string());
-        let width = 62;
+        let width = 88;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         queue.render(Rect::new(0, 0, width, height), &mut buf);
 
         let rendered = format!("{buf:?}");
-        assert!(rendered.contains("Queued batch: runs together after current orchestration"));
-        assert!(rendered.contains("first follow-up"));
-        assert!(rendered.contains("second follow-up"));
+        assert!(
+            rendered.contains("Queued batch: 2 item(s), runs together after current orchestration")
+        );
+        assert!(rendered.contains("1. first follow-up"));
+        assert!(rendered.contains("2. second follow-up"));
         assert!(rendered.contains("edit last queued item before batch runs"));
     }
 
