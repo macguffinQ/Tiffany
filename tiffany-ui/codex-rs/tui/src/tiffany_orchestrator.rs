@@ -98,6 +98,8 @@ const TIFFANY_SOFT: Color = Color::Rgb(76, 210, 204);
 const CONTROL_SUMMARY_MAX_CHARS: usize = 240_000;
 const FULL_MESSAGE_STREAM_MAX_CHARS: usize = usize::MAX;
 const FAILURE_DETAIL_MAX_LINES: usize = 96;
+const TASK_DETAIL_MAX_LINES: usize = 6;
+const TASK_DETAIL_MAX_LINE_CHARS: usize = 160;
 const FAILURE_DETAIL_HEAD_LINES: usize = 24;
 const MEMORY_FILE: &str = "tiffany-orchestrator/memory.json";
 const MEMORY_SCHEMA_VERSION: u32 = 1;
@@ -6808,7 +6810,8 @@ fn event_detail_lines(event: &TiffanyProgressEvent) -> Vec<Line<'static>> {
             .filter(|value| !value.is_empty())
         {
             let detail = visible_task_detail(prompt);
-            lines.extend(labeled_detail_block(detail.label, &detail.text));
+            let text = compact_visible_task_detail(&detail.text);
+            lines.extend(labeled_detail_block(detail.label, &text));
         }
     }
     if let Some(line) = event_failure_hint_line(event) {
@@ -6858,6 +6861,48 @@ fn visible_task_detail(prompt: &str) -> VisibleTaskDetail {
         label: "task",
         text: trimmed.to_string(),
     }
+}
+
+fn compact_visible_task_detail(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut shortened = false;
+    let total_lines = lines.len();
+    let shown_lines = total_lines.min(TASK_DETAIL_MAX_LINES);
+    let mut out = Vec::with_capacity(shown_lines + 1);
+    for line in lines.iter().take(shown_lines) {
+        out.push(truncate_task_detail_line(line, &mut shortened));
+    }
+    if total_lines > shown_lines {
+        shortened = true;
+        out.push(format!(
+            "… {} more line(s); /process full shows complete worker prompt",
+            total_lines - shown_lines
+        ));
+    }
+
+    if shortened {
+        out.join("\n")
+    } else {
+        text.trim().to_string()
+    }
+}
+
+fn truncate_task_detail_line(line: &str, shortened: &mut bool) -> String {
+    let line = line.trim_end();
+    if line.chars().count() <= TASK_DETAIL_MAX_LINE_CHARS {
+        return line.to_string();
+    }
+    *shortened = true;
+    format!(
+        "{}…",
+        line.chars()
+            .take(TASK_DETAIL_MAX_LINE_CHARS)
+            .collect::<String>()
+    )
 }
 
 fn reviewer_lifecycle_title(event: &TiffanyProgressEvent) -> String {
@@ -13027,6 +13072,79 @@ mod tests {
         assert!(!text.contains("Previous turns"));
         assert!(!text.contains("assistant result"));
         assert!(!text.contains("Do not inspect repository state"));
+    }
+
+    #[test]
+    fn worker_started_task_compacts_long_injected_prompt() {
+        let task_prompt = "Answer the user's message directly in the same language.\n\
+            This is a conversational or explanatory request, not a request to alter the project.\n\n\
+            User message:\n\
+            You are continuing a multi-turn tiffany-loop orchestrator conversation.\n\
+            Use the previous turns to resolve follow-ups, pronouns, and references.\n\
+            The current user request below is the highest priority.\n\n\
+            Previous turns:\n\
+            user:\n\
+            你好\n\n\
+            assistant result:\n\
+            你好！有什么我可以帮你的吗？\n\n\
+            ---\n\
+            Current user request:\n\
+            第一行\n\
+            第二行\n\
+            第三行\n\
+            第四行\n\
+            第五行\n\
+            第六行\n\
+            第七行\n\
+            第八行";
+        let event = TiffanyProgressEvent {
+            role: "worker".to_string(),
+            status: "running".to_string(),
+            message: "worker-cc started".to_string(),
+            task_id: Some("12345678-0000-0000-0000-000000000000".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            runtime: Some("claude-code".to_string()),
+            cc_agent: None,
+            model: Some("claude-sonnet-4-6".to_string()),
+            provider: Some("anthropic".to_string()),
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
+            recovery: None,
+            event_kind: None,
+            task_prompt: Some(task_prompt.to_string()),
+            content: None,
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+            reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
+        };
+
+        let details = event_detail_lines(&event);
+        let text = details.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("user  第一行"));
+        assert!(text.contains("  │ 第六行"));
+        assert!(text.contains("… 2 more line(s); /process full shows complete worker prompt"));
+        assert!(!text.contains("第七行"));
+        assert!(!text.contains("Previous turns"));
+        assert!(!text.contains("assistant result"));
+        assert!(!text.contains("conversational or explanatory request"));
+    }
+
+    #[test]
+    fn worker_started_task_truncates_single_long_line() {
+        let detail = compact_visible_task_detail(&format!("{}END", "a".repeat(240)));
+
+        assert!(detail.ends_with('…'));
+        assert!(!detail.contains("END"));
+        assert!(detail.chars().count() <= TASK_DETAIL_MAX_LINE_CHARS + 1);
     }
 
     #[test]

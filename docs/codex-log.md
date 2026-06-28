@@ -814,3 +814,23 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M3 by running or hardening `--adapter-run` per runtime where local auth/quota permits, then return to M2 waterfall cleanup for remaining real-output noise.
+
+## M2 worker start prompt compacted — 2026-06-29
+
+- Commits:
+  - this commit: `Compact worker start prompt details`
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_started_task --lib --quiet` — green, 4 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Worker start rows now keep normal view compact by shortening long task prompts to six lines and truncating very long single lines.
+  - Injected multi-turn wrapper text still resolves to the current user request before compaction, so normal waterfall no longer expands previous-turn boilerplate on worker start.
+  - Full worker prompt remains in the event stream and can be inspected through `/process full`.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M2 on remaining worker waterfall noise, especially grouping long tool runs and raw/debug separation.
