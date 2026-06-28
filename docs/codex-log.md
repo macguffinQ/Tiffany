@@ -295,3 +295,32 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - Real provider calls currently hit `429 rate_limit`; retest end-to-end once provider quota recovers.
 - Next:
   - Resume F5+ command-argument parser extraction into `tiffany-bridge`.
+
+## F5+ — command-argument parsing extraction completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Extract command args into tiffany bridge`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge command_args --quiet` — green, 9 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 24 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui thread_command_args --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_command_args --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui continue_target_role --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui doctor_command_args --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui roles_args --lib --quiet` — green, 3 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui roles_command_args --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Added `tiffany-bridge/src/command_args.rs` for pure `/roles`, `/provider`, `/doctor`, `/thread`, `/jobs`, and `/continue` argument mapping.
+  - `codex-tui` now imports bridge parsing functions and keeps only command spawning, subprocess output handling, and Ratatui rendering.
+  - Moved parser coverage into bridge and kept TUI-side parser tests passing as adapter coverage.
+  - `tiffany_orchestrator.rs` is now 17,424 lines.
+  - No push and no release.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue F5+ with another pure helper slice, likely native-history display shaping or command-output summary helpers.

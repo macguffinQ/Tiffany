@@ -55,6 +55,10 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   worker output kind selection, dedupe scope/key calculation, and compact plan
   summary shaping. `codex-tui` now adapts `TiffanyProgressEvent` into the bridge
   view and keeps Ratatui rendering local.
+- **F5+ command-argument parsing slice ✅ implemented locally and verified.**
+  A new `tiffany-bridge/src/command_args.rs` owns pure `/roles`, `/provider`,
+  `/doctor`, `/thread`, `/jobs`, and `/continue` argument mapping. `codex-tui`
+  imports the bridge API and keeps command spawning/rendering local.
 - **F8 ✅ implemented locally and verified.** Full `codex-tui --lib` now passes
   serially after stabilizing no-active-turn app-server paths, no-turn side-thread
   discard behavior, large-stack test wrappers, Tiffany snapshot drift, and
@@ -250,7 +254,8 @@ beyond the scaffold until F2 lands.
 - F5+: continue `tiffany_orchestrator.rs` extraction into `tiffany-bridge`,
   one module per task, build green each time, until the god-file is empty and
   deleted. Completed slices: config summary, native session paths, visible
-  output formatting/dedupe, contextual prompt assembly.
+  output formatting/dedupe, contextual prompt assembly, command argument
+  parsing.
 - F6: prune vendored `codex-rs` crates that Tiffany does not use (per the
   pruning goal in the Upstream Fork Strategy), guided by `UPSTREAM.md`.
 - F7 ✅ done locally: the Codex TUI is behind the default `tui` feature and
