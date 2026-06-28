@@ -71,6 +71,9 @@ pub(super) fn handle_slash_command_with_runtime(
             input.last_result_output = None;
             input.last_context_messages = 0;
             input.last_context_chars = 0;
+            input.queued_prompts.clear();
+            input.queued_job_ids.clear();
+            input.active_job_ids.clear();
             if active_run {
                 refresh_live_trace(input, false);
             }
@@ -141,6 +144,9 @@ pub(super) fn handle_slash_command_with_runtime(
         "doctor" | "diagnose" | "checkup" => {
             push_system(input, format_doctor_command(runtime));
         }
+        "provider" | "providers" => {
+            push_system(input, handle_provider_command(config, &args));
+        }
         "model" | "models" => {
             push_system(input, format_model_command(config, &args));
         }
@@ -166,6 +172,10 @@ pub(super) fn handle_slash_command_with_runtime(
         "sessions" | "history" => {
             let limit = parse_count(args.first().copied(), 10, 1, 50);
             push_system(input, format_sessions(store, limit));
+        }
+        "jobs" | "job" => {
+            let limit = parse_count(args.first().copied(), 12, 1, 50);
+            push_system(input, format_tui_jobs(store, limit));
         }
         "thread" | "threads" | "worker-thread" | "worker-threads" => {
             push_system(input, handle_thread_command(store, config, input, &args));
@@ -294,7 +304,7 @@ pub(super) fn handle_slash_command_with_runtime(
             }
         }
         "queue" => {
-            let msg = handle_queue_command(input, &args);
+            let msg = handle_queue_command(store, input, &args);
             push_system(input, msg);
             if matches!(
                 args.first().copied(),
@@ -517,92 +527,36 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
             description: "diagnose config and runtime setup",
         },
         SlashCommandDef {
+            name: "provider",
+            description: "show provider/model/role wiring",
+        },
+        SlashCommandDef {
             name: "roles",
             description: "show/select/save role routing",
-        },
-        SlashCommandDef {
-            name: "workflow",
-            description: "show selected flow and role wiring",
-        },
-        SlashCommandDef {
-            name: "agent",
-            description: "route future worker tasks",
-        },
-        SlashCommandDef {
-            name: "cc-agent",
-            description: "choose Claude Code subagent",
-        },
-        SlashCommandDef {
-            name: "trace",
-            description: "control live trace",
-        },
-        SlashCommandDef {
-            name: "context",
-            description: "control remembered context",
-        },
-        SlashCommandDef {
-            name: "process",
-            description: "show captured run process",
         },
         SlashCommandDef {
             name: "queue",
             description: "manage queued messages",
         },
         SlashCommandDef {
-            name: "result",
-            description: "show final result",
-        },
-        SlashCommandDef {
-            name: "model",
-            description: "show model assignments",
-        },
-        SlashCommandDef {
-            name: "usage",
-            description: "show token/cost usage",
-        },
-        SlashCommandDef {
-            name: "sessions",
-            description: "list recent sessions",
+            name: "jobs",
+            description: "show persisted run queue/jobs",
         },
         SlashCommandDef {
             name: "thread",
             description: "show worker thread/native CLI sessions",
         },
         SlashCommandDef {
-            name: "session",
-            description: "show one session summary",
+            name: "history",
+            description: "list recent sessions",
         },
         SlashCommandDef {
             name: "diff",
             description: "show current git changes",
         },
         SlashCommandDef {
-            name: "tests",
-            description: "show or run test helpers",
-        },
-        SlashCommandDef {
             name: "continue",
-            description: "open native worker CLI inline",
-        },
-        SlashCommandDef {
-            name: "graph",
-            description: "summarize conversation as graph",
-        },
-        SlashCommandDef {
-            name: "acp",
-            description: "show ACP setup hints",
-        },
-        SlashCommandDef {
-            name: "export",
-            description: "export process or transcript",
-        },
-        SlashCommandDef {
-            name: "grep",
-            description: "search session logs",
-        },
-        SlashCommandDef {
-            name: "retry",
-            description: "rerun the last task prompt",
+            description: "save legacy CLI handoff package",
         },
         SlashCommandDef {
             name: "cancel",
@@ -623,10 +577,6 @@ fn slash_command_catalog() -> &'static [SlashCommandDef] {
         SlashCommandDef {
             name: "copy",
             description: "copy result or export transcript",
-        },
-        SlashCommandDef {
-            name: "save",
-            description: "save transcript to file",
         },
         SlashCommandDef {
             name: "pwd",
@@ -701,6 +651,16 @@ fn argument_candidates(
                 ("50", "show 50 sessions"),
             ],
         ),
+        "jobs" | "job" => choice_candidates(
+            ctx,
+            0,
+            &[
+                ("5", "show 5 jobs"),
+                ("12", "show 12 jobs"),
+                ("20", "show 20 jobs"),
+                ("50", "show 50 jobs"),
+            ],
+        ),
         "thread" | "threads" | "worker-thread" | "worker-threads" if ctx.current_index == 0 => {
             worker_thread_candidates(store, config, ctx)
         }
@@ -708,16 +668,52 @@ fn argument_candidates(
             if ctx.current_index == 1
                 && matches!(
                     ctx.args.first().map(String::as_str),
-                    Some("clear" | "reset" | "fresh")
+                    Some("clear" | "reset" | "fresh" | "export")
                 ) =>
         {
             worker_thread_role_candidates(store, config, ctx)
+        }
+        "thread" | "threads" | "worker-thread" | "worker-threads"
+            if ctx.current_index == 2 && ctx.args.first().map(String::as_str) == Some("export") =>
+        {
+            choice_candidates(
+                ctx,
+                2,
+                &[
+                    ("markdown", "export last Tiffany worker session as Markdown"),
+                    ("html", "export last Tiffany worker session as HTML"),
+                    ("clipboard", "copy last Tiffany worker session Markdown"),
+                ],
+            )
         }
         "doctor" | "diagnose" | "checkup" => choice_candidates(
             ctx,
             0,
             &[("run", "diagnose config, runtimes, keys, and tools")],
         ),
+        "provider" | "providers" if ctx.current_index == 0 => {
+            let mut candidates = choice_candidates(
+                ctx,
+                0,
+                &[
+                    ("show", "show provider registry"),
+                    ("setup", "open guided provider setup outside this TUI"),
+                    ("edit", "show edit command for one provider"),
+                    ("delete", "show delete command for one provider"),
+                ],
+            );
+            candidates.extend(provider_candidates(config, ctx));
+            candidates
+        }
+        "provider" | "providers"
+            if ctx.current_index == 1
+                && matches!(
+                    ctx.args.first().map(String::as_str),
+                    Some("show" | "status" | "edit" | "setup" | "delete" | "remove" | "rm")
+                ) =>
+        {
+            provider_candidates(config, ctx)
+        }
         "resume" if ctx.current_index == 0 => choice_candidates(
             ctx,
             0,
@@ -857,23 +853,10 @@ fn argument_candidates(
             &[
                 ("claude", "create Claude handoff package"),
                 ("codex", "create Codex handoff package"),
-                ("open", "save and open target CLI"),
                 ("copy", "copy last handoff package"),
                 ("status", "show last handoff path"),
             ],
         ),
-        "handoff" | "continue"
-            if ctx.current_index == 1 && ctx.args.first().map(String::as_str) == Some("open") =>
-        {
-            choice_candidates(
-                ctx,
-                1,
-                &[
-                    ("claude", "open Claude with handoff"),
-                    ("codex", "open Codex with handoff"),
-                ],
-            )
-        }
         "graph" | "flow" if ctx.current_index == 0 => choice_candidates(
             ctx,
             0,
@@ -1110,6 +1093,7 @@ fn worker_thread_candidates(
                 ("clear", "clear a stuck native CLI session for one role"),
                 ("reset", "alias for clear"),
                 ("fresh", "alias for clear"),
+                ("export", "export last Tiffany worker session for handoff"),
             ],
         );
         candidates.extend(worker_thread_role_candidates(store, config, ctx));
@@ -1395,46 +1379,25 @@ fn help_text() -> String {
      /status                       Show current terminal chat/run status\n\
      /doctor                       Diagnose config, runtimes, API keys, and tools\n\
      /roles [show|route|use|snippet|save] Show/select/save role routing\n\
-     /workflow                     Show selected flow and role wiring\n\
-     /model [role]                 Show model assignments\n\
-     /agent [role|clear]           Route future worker tasks\n\
-     /cc-agent [name|clear]        Use a Claude Code subagent for Claude workers\n\
-     /usage [today|week|month|all] Show token/cost usage\n\
-     /sessions [n]                 List recent sessions with tree/log shortcuts\n\
+     /role <role>                  Show or edit one role\n\
      /thread [role]                Show worker thread/native CLI session state\n\
      /thread clear <role>          Clear a stuck native CLI session for a role\n\
-     /session [id|prefix|last]     Show one session summary\n\
-     /session tree [id|prefix|last] Show parent/child session tree\n\
-     /session flow [id|prefix|last] [n] Show orchestration event waterfall\n\
-     /trace [on|off|full|compact] Control live trace in the chat\n\
-     /context [compact|full|off|clear] Control remembered conversation context\n\
-     /process [summary|full|n]     Show captured run process\n\
+     /thread export <role> [target] Export last worker session for native handoff\n\
+     /history [n]                  List recent sessions\n\
+     /jobs [n]                     Show persisted queued/running/completed jobs\n\
+     /continue claude|codex|gemini Save a legacy handoff package for that CLI\n\
+     /queue [show|clear|remove n|promote n|pause|resume|edit n text] Manage queued messages\n\
      /diff [summary|stat|full]      Show current git changes\n\
-     /tests [suggest|quick|run|status] Show or run test helpers\n\
-     /continue claude|codex|gemini  Save handoff and open that CLI inline\n\
-     /graph [compact|full|mermaid|save] Compress conversation into a flow graph\n\
-     /acp [status|claude|codex]     Show ACP server/client setup hints\n\
-     /process filter <text>        Filter captured process events\n\
-     /process clear-filter         Clear process event filter\n\
-     /process save                 Save captured process\n\
-     /export process [target]      Export process or transcript\n\
-     /export session [id] [target] Export session as Markdown/HTML or clipboard\n\
-     /grep <text>                  Search session logs\n\
-     /queue [clear|remove n|promote n|pause|resume|edit n text] Manage queued messages\n\
-     /retry                        Re-run the last task prompt\n\
      /cancel                       Abort the active task\n\
      /clear                        Clear the chat transcript\n\
      /compact [n]                  Keep only the last n messages\n\
      /o                            Fold or expand future process detail\n\
      /copy                         Copy last final result when available\n\
-     /copy result                  Copy last final result\n\
-     /copy transcript [target]     Export transcript\n\
-     /result [text]                Show last final result\n\
-     /save                         Save transcript to a file\n\
      /pwd                          Show current working directory\n\
      /logdir                       Show session log directory\n\
      /quit                         Exit terminal chat\n\
      \n\
+     Legacy diagnostics still work if typed directly: /process, /session, /export, /grep, /usage, /tests, /graph, /acp\n\
      Copy/paste: handled by your terminal/OS; drag-select visible text and use system shortcuts\n\
      Cancel/exit: Ctrl+C keeps the terminal convention, especially on macOS\n\
      Scroll: use your terminal's native scrollback; the app does not capture mouse wheel input\n\
@@ -2435,14 +2398,218 @@ fn format_doctor_command(runtime: &TuiRuntimeConfig) -> String {
     crate::doctor::run(config_path).render_text()
 }
 
-fn handle_queue_command(input: &mut InputState, args: &[&str]) -> String {
+fn handle_provider_command(config: &Config, args: &[&str]) -> String {
+    match args.first().copied().unwrap_or("show") {
+        "show" | "list" | "status" => match args.get(1).copied() {
+            Some(provider) => format_provider_detail(config, provider),
+            None => format_provider_registry(config),
+        },
+        "edit" | "setup" => {
+            let provider = args.get(1).copied().unwrap_or("<provider>");
+            format!(
+                "Provider setup\n  provider: {provider}\n\nOpen the guided selector outside this terminal chat:\n  tiffany-loop config provider\n\nDirect commands:\n  tiffany-loop config provider setup {provider} --env <ENV_VAR>\n  tiffany-loop config provider endpoint {provider} <base-url>\n\nThen bind roles with:\n  /roles save <role> --provider {provider} --model-name <api-model> --runtime <runtime>\n\nVerify:\n  /provider {provider}\n  /doctor"
+            )
+        }
+        "delete" | "remove" | "rm" => {
+            let provider = args.get(1).copied().unwrap_or("<provider>");
+            format!(
+                "Provider delete\n  provider: {provider}\n\nRun outside this terminal chat:\n  tiffany-loop config provider delete {provider}\n\nNote: deleting a provider leaves models and roles in place. Re-run /provider and /roles after deletion to fix dangling bindings."
+            )
+        }
+        provider => format_provider_detail(config, provider),
+    }
+}
+
+fn format_provider_registry(config: &Config) -> String {
+    let mut providers = config.providers.iter().collect::<Vec<_>>();
+    providers.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut out = format!(
+        "Provider registry\n  configured: {}  models: {}  roles: {}\n\nProviders:",
+        providers.len(),
+        config.models.len(),
+        config.roles.len()
+    );
+    if providers.is_empty() {
+        out.push_str("\n  none configured");
+    } else {
+        for (provider, cfg) in providers {
+            out.push('\n');
+            out.push_str("  ");
+            out.push_str(&format_provider_line(config, provider, cfg));
+        }
+    }
+
+    let missing = missing_model_provider_names(config);
+    if !missing.is_empty() {
+        out.push_str("\n\nMissing providers referenced by models:");
+        for provider in missing {
+            out.push_str(&format!("\n  ⚠ {provider}"));
+        }
+    }
+
+    out.push_str(
+        "\n\nActions: /provider <name>, tiffany-loop config provider, /roles save <role> --provider <provider> --model-name <api-model> --runtime <runtime>",
+    );
+    out.push_str(
+        "\nHealth: provider auth + model binding + role runtime must all be ready; verify with /doctor.",
+    );
+    out
+}
+
+fn format_provider_detail(config: &Config, provider: &str) -> String {
+    let Some(provider_cfg) = config.providers.get(provider) else {
+        return format!(
+            "Unknown provider: {provider}\nAvailable providers: {}\n\nCreate one with:\n  tiffany-loop config provider\nThen bind a role:\n  /roles save <role> --provider {provider} --model-name <api-model> --runtime <runtime>",
+            available_provider_names(config)
+        );
+    };
+    let auth = provider_auth_label(provider_cfg);
+    let endpoint = provider_cfg
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("provider default");
+    let models = provider_model_ids(config, provider);
+    let roles = provider_role_names(config, provider);
+    let mut out = format!(
+        "Provider {provider}\n  type: {}\n  auth: {}\n  endpoint: {}\n  models: {}\n  roles: {}\n\nModel bindings:",
+        provider_cfg.kind,
+        auth,
+        endpoint,
+        format_name_list(&models),
+        format_name_list(&roles)
+    );
+    if models.is_empty() {
+        out.push_str("\n  none");
+    } else {
+        for model in config
+            .models
+            .iter()
+            .filter(|model| model.provider == provider)
+        {
+            out.push_str(&format!("\n  {} -> {}", model.id, model.name));
+        }
+    }
+    out.push_str("\n\nActions: tiffany-loop config provider, /roles save <role> --provider ");
+    out.push_str(provider);
+    out.push_str(" --model-name <api-model> --runtime <runtime>, /doctor");
+    out
+}
+
+fn format_provider_line(
+    config: &Config,
+    provider: &str,
+    cfg: &crate::config::ProviderConfig,
+) -> String {
+    let health_icon = if provider_auth_ready(cfg) {
+        "✓"
+    } else {
+        "⚠"
+    };
+    let endpoint = cfg
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| truncate_chars(value, 34))
+        .unwrap_or_else(|| "default".into());
+    format!(
+        "{} {:<16} {:<10} auth={} endpoint={} models={} roles={}",
+        health_icon,
+        provider,
+        cfg.kind,
+        provider_auth_label(cfg),
+        endpoint,
+        compact_name_list(&provider_model_ids(config, provider), 3),
+        compact_name_list(&provider_role_names(config, provider), 3)
+    )
+}
+
+fn provider_auth_ready(cfg: &crate::config::ProviderConfig) -> bool {
+    !provider_requires_key(&cfg.kind)
+        || cfg
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+}
+
+fn provider_auth_label(cfg: &crate::config::ProviderConfig) -> &'static str {
+    if !provider_requires_key(&cfg.kind) {
+        "not-required"
+    } else if provider_auth_ready(cfg) {
+        "set"
+    } else {
+        "missing"
+    }
+}
+
+fn provider_model_ids(config: &Config, provider: &str) -> Vec<String> {
+    let mut models = config
+        .models
+        .iter()
+        .filter(|model| model.provider == provider)
+        .map(|model| model.id.clone())
+        .collect::<Vec<_>>();
+    models.sort();
+    models
+}
+
+fn provider_role_names(config: &Config, provider: &str) -> Vec<String> {
+    let model_ids = provider_model_ids(config, provider);
+    let mut roles = config
+        .roles
+        .iter()
+        .filter(|(_, role)| model_ids.iter().any(|model| model == &role.model))
+        .map(|(role, _)| role.clone())
+        .collect::<Vec<_>>();
+    roles.sort();
+    roles
+}
+
+fn missing_model_provider_names(config: &Config) -> Vec<String> {
+    let mut providers = config
+        .models
+        .iter()
+        .filter(|model| !config.providers.contains_key(&model.provider))
+        .map(|model| model.provider.clone())
+        .collect::<Vec<_>>();
+    providers.sort();
+    providers.dedup();
+    providers
+}
+
+fn format_name_list(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".into()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn compact_name_list(values: &[String], limit: usize) -> String {
+    if values.is_empty() {
+        return "none".into();
+    }
+    let mut shown = values.iter().take(limit).cloned().collect::<Vec<_>>();
+    if values.len() > limit {
+        shown.push(format!("+{}", values.len() - limit));
+    }
+    shown.join(",")
+}
+
+fn handle_queue_command(store: &SessionStore, input: &mut InputState, args: &[&str]) -> String {
+    reconcile_queue_job_ids(input);
     match args.first().copied() {
         None | Some("show" | "list" | "status") => format_queue_show(input),
-        Some("clear") => clear_queue(input),
-        Some("remove" | "rm" | "delete") => remove_queued_prompt(input, args.get(1).copied()),
-        Some("promote" | "up" | "next") => promote_queued_prompt(input, args.get(1).copied()),
+        Some("clear") => clear_queue(store, input),
+        Some("remove" | "rm" | "delete") => {
+            remove_queued_prompt(store, input, args.get(1).copied())
+        }
+        Some("promote" | "up" | "next") => promote_queued_prompt(store, input, args.get(1).copied()),
         Some("edit" | "set") => {
-            edit_queued_prompt(input, args.get(1).copied(), args.get(2..).unwrap_or(&[]))
+            edit_queued_prompt(store, input, args.get(1).copied(), args.get(2..).unwrap_or(&[]))
         }
         Some("pause" | "hold") => pause_queue(input),
         Some("resume" | "unpause") => resume_queue(input),
@@ -2454,22 +2621,37 @@ fn handle_queue_command(input: &mut InputState, args: &[&str]) -> String {
     }
 }
 
-fn clear_queue(input: &mut InputState) -> String {
+fn reconcile_queue_job_ids(input: &mut InputState) {
+    input.queued_job_ids.truncate(input.queued_prompts.len());
+}
+
+fn clear_queue(store: &SessionStore, input: &mut InputState) -> String {
     let count = input.queued_prompts.len();
     if count == 0 {
         return "Queue is already empty.".into();
     }
 
     input.queued_prompts.clear();
+    for job_id in std::mem::take(&mut input.queued_job_ids) {
+        let _ = store.set_tui_job_status(job_id, "removed", None, Some("removed from queue"));
+    }
     format!("Cleared {} queued message(s).", count)
 }
 
-fn remove_queued_prompt(input: &mut InputState, raw_index: Option<&str>) -> String {
+fn remove_queued_prompt(
+    store: &SessionStore,
+    input: &mut InputState,
+    raw_index: Option<&str>,
+) -> String {
     let index = match parse_queue_index(raw_index, input.queued_prompts.len(), "remove") {
         Ok(index) => index,
         Err(msg) => return msg,
     };
     let prompt = input.queued_prompts.remove(index);
+    if index < input.queued_job_ids.len() {
+        let job_id = input.queued_job_ids.remove(index);
+        let _ = store.set_tui_job_status(job_id, "removed", None, Some("removed from queue"));
+    }
     format!(
         "Removed queued message {}: {}\n{} pending.",
         index + 1,
@@ -2478,7 +2660,11 @@ fn remove_queued_prompt(input: &mut InputState, raw_index: Option<&str>) -> Stri
     )
 }
 
-fn promote_queued_prompt(input: &mut InputState, raw_index: Option<&str>) -> String {
+fn promote_queued_prompt(
+    store: &SessionStore,
+    input: &mut InputState,
+    raw_index: Option<&str>,
+) -> String {
     let index = match parse_queue_index(raw_index, input.queued_prompts.len(), "promote") {
         Ok(index) => index,
         Err(msg) => return msg,
@@ -2492,6 +2678,11 @@ fn promote_queued_prompt(input: &mut InputState, raw_index: Option<&str>) -> Str
 
     let prompt = input.queued_prompts.remove(index);
     input.queued_prompts.insert(0, prompt.clone());
+    if index < input.queued_job_ids.len() {
+        let job_id = input.queued_job_ids.remove(index);
+        input.queued_job_ids.insert(0, job_id);
+        let _ = store.set_tui_job_status(job_id, "queued", None, None);
+    }
     format!(
         "Promoted queued message {} to next: {}\n{} pending.",
         index + 1,
@@ -2501,6 +2692,7 @@ fn promote_queued_prompt(input: &mut InputState, raw_index: Option<&str>) -> Str
 }
 
 fn edit_queued_prompt(
+    store: &SessionStore,
     input: &mut InputState,
     raw_index: Option<&str>,
     raw_text: &[&str],
@@ -2515,6 +2707,9 @@ fn edit_queued_prompt(
     }
 
     input.queued_prompts[index] = text.clone();
+    if let Some(job_id) = input.queued_job_ids.get(index).copied() {
+        let _ = store.update_tui_job_prompt(job_id, &text);
+    }
     format!(
         "Edited queued message {}: {}",
         index + 1,
@@ -3203,11 +3398,11 @@ fn format_acp_command(config: &Config, input: &InputState, args: &[&str]) -> Str
         ),
         "command" | "cmd" => command,
         "claude" | "claude-code" => format!(
-            "Claude ACP setup hint\n  server command: {}\n  transport: stdio\n\nAdd this server command in the Claude client surface that supports ACP, then start a session from that client. Inside orchestrator TUI, /handoff open claude remains the lightweight inline handoff path.",
+            "Claude ACP setup hint\n  server command: {}\n  transport: stdio\n\nAdd this server command in the Claude client surface that supports ACP, then start a session from that client. For local handoff from the legacy terminal TUI, use /continue claude.",
             command
         ),
         "codex" => format!(
-            "Codex ACP setup hint\n  server command: {}\n  transport: stdio\n\nUse this command from a Codex client surface that supports ACP. For local inline continuation without ACP, use /continue codex or /handoff open codex.",
+            "Codex ACP setup hint\n  server command: {}\n  transport: stdio\n\nUse this command from a Codex client surface that supports ACP. For local handoff from the legacy terminal TUI, use /continue codex.",
             command
         ),
         other => format!("Unknown ACP option: {}\nUsage: /acp [status|command|claude|codex]", other),
@@ -3425,6 +3620,17 @@ pub(super) fn format_sessions(store: &SessionStore, limit: usize) -> String {
     }
 }
 
+pub(super) fn format_tui_jobs(store: &SessionStore, limit: usize) -> String {
+    match crate::tui_jobs::format_tui_jobs(
+        store,
+        limit,
+        crate::tui_jobs::TuiJobsSurface::TerminalTui,
+    ) {
+        Ok(output) => output,
+        Err(e) => format!("Could not list jobs: {:#}", e),
+    }
+}
+
 fn handle_thread_command(
     store: &SessionStore,
     config: &Config,
@@ -3435,6 +3641,13 @@ fn handle_thread_command(
         ["clear" | "reset" | "fresh", role, ..] => clear_worker_thread_native_session(store, config, role),
         ["clear" | "reset" | "fresh"] => {
             "Usage: /thread clear <role>\nThis clears only the native worker CLI session id; Tiffany keeps the worker thread and prior Tiffany session history.".into()
+        }
+        ["export", role, target, ..] => {
+            export_worker_thread_session_command(store, config, role, Some(target))
+        }
+        ["export", role] => export_worker_thread_session_command(store, config, role, None),
+        ["export"] => {
+            "Usage: /thread export <role> [markdown|html|clipboard]\nExports the role's last Tiffany worker session for native CLI handoff.".into()
         }
         [selector, ..] => format_worker_threads(store, config, input, Some(selector)),
         [] => format_worker_threads(store, config, input, None),
@@ -3489,7 +3702,7 @@ pub(super) fn format_worker_threads(
         }
     }
     out.push_str(
-        "\n\nDetails: /thread <role>  Resume: /continue claude|codex|gemini  Fresh start: /thread clear <role>",
+        "\n\nDetails: /thread <role>  Export: /thread export <role>  Native TUI: /continue open <role>  Legacy handoff: /continue claude|codex|gemini  Fresh start: /thread clear <role>",
     );
     out
 }
@@ -3544,10 +3757,11 @@ fn format_worker_thread_summary(config: &Config, thread: &WorkerThread) -> Strin
         .map(short_uuid)
         .unwrap_or_else(|| "none".into());
     format!(
-        "  ● {:<18} {} · {} · thread {} · native {} · last {}",
+        "  ● {:<18} {} · {} · scope {} · thread {} · native {} · last {}",
         thread.role,
         thread.runtime,
         worker_thread_model_label(config, thread),
+        short_worker_thread_scope(&thread.scope),
         short_uuid(&thread.id),
         native,
         last
@@ -3578,23 +3792,35 @@ fn format_worker_thread_detail(config: &Config, thread: &WorkerThread) -> String
         .as_ref()
         .map(uuid::Uuid::to_string)
         .unwrap_or_else(|| "none".into());
+    let status = worker_thread_status_hint(thread);
+    let resume = native_thread_resume_command(config, thread);
+    let handoff = native_thread_handoff_command(config, thread);
+    let native_tui_resume = native_tui_continue_command(thread);
+    let legacy_handoff = legacy_handoff_continue_command(thread);
     format!(
-        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n  Tiffany thread: {}\n  native session: {}\n  native resume: {}\n  TUI resume: {}\n  last Tiffany session: {}\n  worktree: {}\n  created: {}\n  updated: {}\n\nStatus: {}\nAction: /thread clear {} resets only the native CLI session id for a fresh next run.",
+        "Worker thread {}\nSession card\n  role: {}\n  scope: {}\n  status: {}\n  reuse: same role in the same project keeps Tiffany thread, native session, and worktree\n\nBinding\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n\nNative session\n  Tiffany thread: {}\n  native session: {}\n  last Tiffany session: {}\n  worktree: {}\n\nCommands\n  native resume: {}\n  native handoff: {}\n  TUI resume: {}\n  legacy handoff: {}\n\nTimestamps\n  created: {}\n  updated: {}\n\nStatus: {}\nAction: {} opens the native CLI from the Codex-fork Tiffany TUI.\nAction: {} saves a handoff package in the legacy terminal TUI.\nAction: /thread export {} writes the last Tiffany session for manual handoff.\nAction: /thread clear {} resets only the native CLI session id for a fresh next run.",
         short_uuid(&thread.id),
         thread.role,
+        thread.scope,
+        status,
         thread.runtime,
         thread.agent,
         worker_thread_model_label(config, thread),
         thread.provider.as_deref().unwrap_or("none"),
         thread.id,
         native_session,
-        native_thread_resume_command(thread),
-        tui_continue_command(thread),
         last_session,
         worktree,
+        resume,
+        handoff,
+        native_tui_resume,
+        legacy_handoff,
         thread.created_at.to_rfc3339(),
         thread.updated_at.to_rfc3339(),
-        worker_thread_status_hint(thread),
+        status,
+        native_tui_resume,
+        legacy_handoff,
+        thread.role,
         thread.role
     )
 }
@@ -3627,7 +3853,7 @@ fn worker_thread_model_label(config: &Config, thread: &WorkerThread) -> String {
         .unwrap_or_else(|| thread.model.clone())
 }
 
-fn native_thread_resume_command(thread: &WorkerThread) -> String {
+fn native_thread_resume_command(config: &Config, thread: &WorkerThread) -> String {
     let Some(native_session_id) = thread
         .native_session_id
         .as_deref()
@@ -3636,19 +3862,120 @@ fn native_thread_resume_command(thread: &WorkerThread) -> String {
     else {
         return "none".into();
     };
-    if thread.agent == "claude-code" || thread.runtime == "claude-code" {
-        return format!("claude --resume {native_session_id}");
+    let Some(runtime) = native_thread_runtime(thread) else {
+        return "none".into();
+    };
+    let binary = shell_quote_arg(&native_thread_binary(config, thread, runtime));
+    let native_session_id = shell_quote_arg(native_session_id);
+    match runtime {
+        crate::roles::cli_subprocess::RoleCliRuntime::ClaudeCode => {
+            format!("{binary} --resume {native_session_id}")
+        }
+        crate::roles::cli_subprocess::RoleCliRuntime::Codex => {
+            format!("{binary} exec resume {native_session_id}")
+        }
+        crate::roles::cli_subprocess::RoleCliRuntime::Gemini => {
+            format!("{binary} --resume {native_session_id}")
+        }
     }
-    if thread.agent == "codex" || thread.runtime == "codex" {
-        return format!("codex exec resume {native_session_id}");
-    }
-    if thread.agent == "gemini" || thread.runtime == "gemini" {
-        return format!("gemini --resume {native_session_id}");
-    }
-    "none".into()
 }
 
-fn tui_continue_command(thread: &WorkerThread) -> String {
+fn native_thread_handoff_command(config: &Config, thread: &WorkerThread) -> String {
+    let cwd = thread
+        .worktree_path
+        .as_deref()
+        .map(shell_quote_path)
+        .unwrap_or_else(|| ".".to_string());
+    let command = native_thread_interactive_resume_command(config, thread);
+    if command == "none" {
+        return "none".to_string();
+    }
+    format!("cd {cwd} && {command}")
+}
+
+fn native_thread_interactive_resume_command(config: &Config, thread: &WorkerThread) -> String {
+    let Some(native_session_id) = thread
+        .native_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return "none".to_string();
+    };
+    let Some(runtime) = native_thread_runtime(thread) else {
+        return "none".to_string();
+    };
+    let binary = shell_quote_arg(&native_thread_binary(config, thread, runtime));
+    let native_session_id = shell_quote_arg(native_session_id);
+    match runtime {
+        crate::roles::cli_subprocess::RoleCliRuntime::ClaudeCode => {
+            format!("{binary} --resume {native_session_id}")
+        }
+        crate::roles::cli_subprocess::RoleCliRuntime::Codex => {
+            format!("{binary} resume {native_session_id}")
+        }
+        crate::roles::cli_subprocess::RoleCliRuntime::Gemini => {
+            format!("{binary} --resume {native_session_id}")
+        }
+    }
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    shell_quote_arg(&path.display().to_string())
+}
+
+fn native_thread_runtime(
+    thread: &WorkerThread,
+) -> Option<crate::roles::cli_subprocess::RoleCliRuntime> {
+    crate::roles::cli_subprocess::RoleCliRuntime::from_runtime_id(&thread.runtime)
+        .or_else(|| crate::roles::cli_subprocess::RoleCliRuntime::from_runtime_id(&thread.agent))
+}
+
+fn native_thread_binary(
+    config: &Config,
+    thread: &WorkerThread,
+    runtime: crate::roles::cli_subprocess::RoleCliRuntime,
+) -> String {
+    config
+        .runtimes
+        .get(&thread.runtime)
+        .and_then(|runtime| runtime.binary.as_deref())
+        .or_else(|| {
+            config
+                .runtimes
+                .get(&thread.agent)
+                .and_then(|runtime| runtime.binary.as_deref())
+        })
+        .map(str::trim)
+        .filter(|binary| !binary.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| native_thread_default_binary(runtime).to_string())
+}
+
+fn native_thread_default_binary(
+    runtime: crate::roles::cli_subprocess::RoleCliRuntime,
+) -> &'static str {
+    match runtime {
+        crate::roles::cli_subprocess::RoleCliRuntime::ClaudeCode => "claude",
+        crate::roles::cli_subprocess::RoleCliRuntime::Codex => "codex",
+        crate::roles::cli_subprocess::RoleCliRuntime::Gemini => "gemini",
+    }
+}
+
+fn shell_quote_arg(value: &str) -> String {
+    if value.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | '=' | '+')
+    }) {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn native_tui_continue_command(thread: &WorkerThread) -> String {
+    format!("/continue open {}", thread.role)
+}
+
+fn legacy_handoff_continue_command(thread: &WorkerThread) -> String {
     if thread.agent == "claude-code" || thread.runtime == "claude-code" {
         "/continue claude".into()
     } else if thread.agent == "codex" || thread.runtime == "codex" {
@@ -3723,12 +4050,116 @@ fn clear_worker_thread_native_session(
     }
 }
 
+fn export_worker_thread_session_command(
+    store: &SessionStore,
+    config: &Config,
+    selector: &str,
+    target: Option<&str>,
+) -> String {
+    let target = match parse_session_export_target(target.unwrap_or("markdown")) {
+        Ok(target) => target,
+        Err(err) => return err,
+    };
+    let threads = match store.list_worker_threads() {
+        Ok(threads) => threads,
+        Err(err) => return format!("Could not list worker threads: {err:#}"),
+    };
+    let Some(thread) = find_worker_thread(&threads, selector) else {
+        return format!(
+            "Worker thread not found: {}\nAvailable worker roles: {}",
+            selector,
+            available_worker_thread_roles(config, &threads)
+        );
+    };
+    let Some(session_id) = thread.last_session_id else {
+        return format!(
+            "Worker thread {}\n  role: {}\n  status: no captured Tiffany session yet\n\nNext: run a task with this role, then retry /thread export {}.",
+            short_uuid(&thread.id),
+            thread.role,
+            thread.role
+        );
+    };
+    let session = match store.get_many(&[session_id]) {
+        Ok(mut sessions) => match sessions.pop() {
+            Some(session) => session,
+            None => {
+                return format!(
+                    "Worker thread {}\n  role: {}\n  last Tiffany session not found: {}",
+                    short_uuid(&thread.id),
+                    thread.role,
+                    session_id
+                );
+            }
+        },
+        Err(err) => return format!("Could not load worker thread session: {err:#}"),
+    };
+
+    match target {
+        SessionExportCommandTarget::MarkdownFile => {
+            match crate::session_export::export_session_to_file(
+                store,
+                &session,
+                crate::session_export::SessionExportFormat::Markdown,
+            ) {
+                Ok(export) => format!(
+                    "Worker thread session exported\n  role: {}\n  Tiffany thread: {}\n  session: {}\n  target: {}\n\nAction: open the export for full selectable history, or paste it into the native worker to continue manually.",
+                    thread.role,
+                    thread.id,
+                    crate::session_export::short_session_id(&export.session),
+                    export.path.display()
+                ),
+                Err(err) => format!("Worker thread session export failed: {err:#}"),
+            }
+        }
+        SessionExportCommandTarget::HtmlFile => {
+            match crate::session_export::export_session_to_file(
+                store,
+                &session,
+                crate::session_export::SessionExportFormat::Html,
+            ) {
+                Ok(export) => format!(
+                    "Worker thread session exported\n  role: {}\n  Tiffany thread: {}\n  session: {}\n  target: {}\n\nAction: open the export for full selectable history, or paste it into the native worker to continue manually.",
+                    thread.role,
+                    thread.id,
+                    crate::session_export::short_session_id(&export.session),
+                    export.path.display()
+                ),
+                Err(err) => format!("Worker thread session export failed: {err:#}"),
+            }
+        }
+        SessionExportCommandTarget::Clipboard => {
+            match crate::session_export::render_session_markdown(store, &session) {
+                Ok(body) => match copy_to_clipboard(&body) {
+                    Ok(()) => format!(
+                        "Worker thread session exported\n  role: {}\n  Tiffany thread: {}\n  session: {}\n  target: clipboard\n  bytes: {}\n\nAction: paste into Claude Code, Codex, Gemini, or another review tool to continue manually.",
+                        thread.role,
+                        thread.id,
+                        crate::session_export::short_session_id(&session),
+                        body.len()
+                    ),
+                    Err(err) => format!("Worker thread clipboard export failed: {err}"),
+                },
+                Err(err) => format!("Worker thread session export failed: {err:#}"),
+            }
+        }
+    }
+}
+
 fn short_uuid(id: &uuid::Uuid) -> String {
     id.to_string().chars().take(8).collect()
 }
 
 fn short_text_id(value: &str) -> String {
     truncate_chars(value, 16)
+}
+
+fn short_worker_thread_scope(scope: &str) -> String {
+    scope
+        .strip_prefix("cwd:")
+        .and_then(|path| std::path::Path::new(path).file_name())
+        .and_then(|name| name.to_str())
+        .map(|name| format!("cwd:{name}"))
+        .unwrap_or_else(|| scope.to_string())
 }
 
 const IMPORT_CHAT_EVENT_LIMIT: usize = 80;
@@ -4255,7 +4686,7 @@ fn format_last_result(input: &InputState, mode: Option<&str>) -> String {
             format!("Final result (plain text):\n\n{}", result)
         }
         Some(other) => format!(
-            "Unknown result mode: {}\nUse /result for plain text.",
+            "Unknown result mode: {}\nUse /copy to copy the final answer.",
             other
         ),
     }
@@ -4368,6 +4799,34 @@ mod tests {
 
         assert!(slash_argument_context("/session", "/session".len()).is_none());
         assert!(slash_argument_context("hello", "hello".len()).is_none());
+    }
+
+    #[test]
+    fn slash_popup_catalog_only_exposes_primary_tiffany_commands() {
+        let commands = slash_command_candidates("")
+            .into_iter()
+            .map(|candidate| candidate.value)
+            .collect::<Vec<_>>();
+
+        for visible in [
+            "help", "status", "doctor", "roles", "queue", "thread", "history", "diff", "continue",
+            "cancel", "clear", "compact", "o", "copy", "pwd", "logdir", "quit",
+        ] {
+            assert!(
+                commands.iter().any(|command| command == visible),
+                "expected /{visible} in visible command catalog: {commands:?}"
+            );
+        }
+
+        for legacy in [
+            "workflow", "agent", "cc-agent", "trace", "context", "process", "result", "model",
+            "usage", "sessions", "tests", "graph", "acp", "export", "grep", "retry", "save",
+        ] {
+            assert!(
+                !commands.iter().any(|command| command == legacy),
+                "expected legacy /{legacy} to stay hidden from default catalog: {commands:?}"
+            );
+        }
     }
 
     #[test]
@@ -4593,19 +5052,44 @@ mod tests {
             )
             .unwrap();
         let session_id = uuid::Uuid::new_v4();
+        let worktree = tmp.path().join("worker cc");
         store
-            .update_worker_thread_after_session(thread.id, Some("native-abc"), session_id, None)
+            .update_worker_thread_after_session(
+                thread.id,
+                Some("native abc"),
+                session_id,
+                Some(&worktree),
+            )
             .unwrap();
 
         let list = format_worker_threads(&store, &cfg, &input, None);
         assert!(list.contains("Worker threads"));
         assert!(list.contains("worker-cc"));
-        assert!(list.contains("native native-abc"));
+        assert!(list.contains("native native abc"));
+        assert!(list.contains("Native TUI: /continue open <role>"));
+        assert!(list.contains("Legacy handoff: /continue claude|codex|gemini"));
 
         let detail = format_worker_threads(&store, &cfg, &input, Some("worker-cc"));
-        assert!(detail.contains("native session: native-abc"));
-        assert!(detail.contains("native resume: claude --resume native-abc"));
-        assert!(detail.contains("/continue claude"));
+        assert!(detail.contains("Session card"));
+        assert!(detail.contains("reuse: same role in the same project keeps Tiffany thread"));
+        assert!(detail.contains("scope: "));
+        assert!(detail.contains("Binding"));
+        assert!(detail.contains("Native session"));
+        assert!(detail.contains("Commands"));
+        assert!(detail.contains("native session: native abc"));
+        assert!(detail.contains("native resume: claude --resume 'native abc'"));
+        assert!(detail.contains(&format!(
+            "native handoff: cd '{}' && claude --resume 'native abc'",
+            worktree.display()
+        )));
+        assert!(detail.contains("TUI resume: /continue open worker-cc"));
+        assert!(detail.contains("legacy handoff: /continue claude"));
+        assert!(detail.contains(
+            "Action: /continue open worker-cc opens the native CLI from the Codex-fork Tiffany TUI."
+        ));
+        assert!(detail.contains(
+            "Action: /continue claude saves a handoff package in the legacy terminal TUI."
+        ));
         assert!(detail.contains(&session_id.to_string()));
     }
 
@@ -4643,7 +5127,7 @@ mod tests {
                 thread.id,
                 Some("latest"),
                 uuid::Uuid::new_v4(),
-                None,
+                Some(tmp.path()),
             )
             .unwrap();
 
@@ -4651,8 +5135,36 @@ mod tests {
 
         assert!(detail.contains("native session: latest"));
         assert!(detail.contains("native resume: gemini --resume latest"));
-        assert!(detail.contains("/continue gemini"));
+        assert!(detail.contains(&format!(
+            "native handoff: cd {} && gemini --resume latest",
+            tmp.path().display()
+        )));
+        assert!(detail.contains("TUI resume: /continue open worker-gemini"));
+        assert!(detail.contains("legacy handoff: /continue gemini"));
         assert!(detail.contains("ready for Gemini native resume"));
+    }
+
+    #[test]
+    fn thread_command_handoff_targets_native_interactive_cli() {
+        let thread = WorkerThread {
+            id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap(),
+            scope: "cwd:/tmp/tiffany-worker".to_string(),
+            role: "worker-codex".to_string(),
+            runtime: "codex".to_string(),
+            agent: "codex".to_string(),
+            model: "gpt-4o".to_string(),
+            provider: Some("openai".to_string()),
+            worktree_path: Some(std::path::PathBuf::from("/tmp/tiffany-worker")),
+            native_session_id: Some("codex-native-session".to_string()),
+            last_session_id: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        assert_eq!(
+            native_thread_handoff_command(&test_config(), &thread),
+            "cd /tmp/tiffany-worker && codex resume codex-native-session"
+        );
     }
 
     #[test]
@@ -4697,6 +5209,81 @@ mod tests {
         assert!(msg.contains("cleared native session: native-abc"));
         assert!(updated.native_session_id.is_none());
         assert_eq!(updated.last_session_id, Some(session_id));
+    }
+
+    #[test]
+    fn thread_export_command_writes_last_worker_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let cfg = test_config();
+        let input = InputState::default();
+        let mut session = Session::new(uuid::Uuid::new_v4(), "claude-code", Role::Worker);
+        session.ended_at = Some(chrono::Utc::now());
+        store.finalize(&session).unwrap();
+        store
+            .append(&Event {
+                session_id: session.id,
+                task_id: session.task_id,
+                ts: chrono::Utc::now(),
+                kind: "assistant".into(),
+                payload: serde_json::json!({"text": "handoff ready"}),
+            })
+            .unwrap();
+        let thread = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        store
+            .update_worker_thread_after_session(
+                thread.id,
+                Some("native-abc"),
+                session.id,
+                Some(tmp.path()),
+            )
+            .unwrap();
+
+        let msg = handle_thread_command(&store, &cfg, &input, &["export", "worker-cc"]);
+
+        assert!(msg.contains("Worker thread session exported"));
+        assert!(msg.contains("role: worker-cc"));
+        assert!(msg.contains("target:"));
+        let path = msg
+            .lines()
+            .find(|line| line.trim_start().starts_with("target: "))
+            .and_then(|line| line.trim().strip_prefix("target: "))
+            .expect("target path");
+        let body = std::fs::read_to_string(path).unwrap();
+        assert!(body.contains("# Tiffany session"));
+        assert!(body.contains("handoff ready"));
+    }
+
+    #[test]
+    fn thread_export_command_reports_missing_worker_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let cfg = test_config();
+        let input = InputState::default();
+        store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+
+        let msg = handle_thread_command(&store, &cfg, &input, &["export", "worker-cc"]);
+
+        assert!(msg.contains("no captured Tiffany session yet"));
+        assert!(msg.contains("/thread export worker-cc"));
     }
 
     #[test]
@@ -4781,6 +5368,22 @@ mod tests {
         input.cursor = input.buffer.len();
         assert!(complete_slash_argument(&store, &cfg, &mut input));
         assert_eq!(input.buffer, "/queue edit ");
+
+        input.buffer = "/continue ".into();
+        input.cursor = input.buffer.len();
+        let candidates = slash_argument_candidates(&store, &cfg, &input);
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.label == "claude"));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.label == "codex"));
+        assert!(!candidates.iter().any(|candidate| candidate.label == "open"));
+
+        input.buffer = "/thread e".into();
+        input.cursor = input.buffer.len();
+        assert!(complete_slash_argument(&store, &cfg, &mut input));
+        assert_eq!(input.buffer, "/thread export ");
 
         input.buffer = "/diff st".into();
         input.cursor = input.buffer.len();
@@ -4902,6 +5505,16 @@ behavior:
         input.cursor = input.buffer.len();
         assert!(complete_slash_argument(&store, &cfg, &mut input));
         assert_eq!(input.buffer, "/thread clear worker-cc ");
+
+        input.buffer = "/thread export worker-c".into();
+        input.cursor = input.buffer.len();
+        assert!(complete_slash_argument(&store, &cfg, &mut input));
+        assert_eq!(input.buffer, "/thread export worker-cc ");
+
+        input.buffer = "/thread export worker-cc h".into();
+        input.cursor = input.buffer.len();
+        assert!(complete_slash_argument(&store, &cfg, &mut input));
+        assert_eq!(input.buffer, "/thread export worker-cc html ");
     }
 
     #[test]
@@ -5114,6 +5727,81 @@ behavior:
 
         handle_slash_command("/roles use worker-cc", &store, &cfg, &mut input);
         assert_eq!(input.agent_hint.as_deref(), Some("worker-cc"));
+    }
+
+    #[test]
+    fn provider_command_shows_provider_model_role_wiring() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap(),
+        );
+        let mut cfg = test_config();
+        cfg.providers.insert(
+            "anthropic".into(),
+            crate::config::ProviderConfig {
+                kind: "anthropic".into(),
+                api_key: Some("${ANTHROPIC_API_KEY}".into()),
+                base_url: None,
+            },
+        );
+        cfg.providers.insert(
+            "openai".into(),
+            crate::config::ProviderConfig {
+                kind: "openai".into(),
+                api_key: None,
+                base_url: Some("https://api.openai.com/v1".into()),
+            },
+        );
+        let cfg = Arc::new(cfg);
+        let mut input = InputState::default();
+
+        handle_slash_command("/provider", &store, &cfg, &mut input);
+        let registry = input.transcript.last().expect("provider registry");
+        assert!(registry.content.contains("Provider registry"));
+        assert!(registry.content.contains("anthropic"));
+        assert!(registry.content.contains("auth=set"));
+        assert!(registry.content.contains("openai"));
+        assert!(registry.content.contains("auth=missing"));
+        assert!(registry.content.contains("models=gpt4o"));
+        assert!(registry.content.contains("roles=worker-codex"));
+        assert!(registry.content.contains("tiffany-loop config provider"));
+        assert!(!registry.content.contains('{'));
+
+        handle_slash_command("/provider openai", &store, &cfg, &mut input);
+        let detail = input.transcript.last().expect("provider detail");
+        assert!(detail.content.contains("Provider openai"));
+        assert!(detail.content.contains("auth: missing"));
+        assert!(detail.content.contains("gpt4o -> gpt-4o"));
+        assert!(detail.content.contains("roles: worker-codex"));
+    }
+
+    #[test]
+    fn provider_slash_completion_lists_configured_providers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let mut cfg = test_config();
+        cfg.providers.insert(
+            "openai".into(),
+            crate::config::ProviderConfig {
+                kind: "openai".into(),
+                api_key: None,
+                base_url: Some("https://api.openai.com/v1".into()),
+            },
+        );
+        let mut input = InputState {
+            buffer: "/provider o".into(),
+            ..InputState::default()
+        };
+        input.cursor = input.buffer.len();
+
+        let candidates = slash_argument_candidates(&store, &cfg, &input);
+
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.label == "openai"));
+        assert!(complete_slash_argument(&store, &cfg, &mut input));
+        assert_eq!(input.buffer, "/provider openai ");
     }
 
     #[test]
@@ -5698,10 +6386,24 @@ behavior:
         let cfg = Arc::new(test_config());
         let mut input = InputState::default();
         input.queued_prompts = vec!["first".into(), "second".into(), "third".into()];
+        let first = store
+            .create_tui_job("first", "queued", Some("single"), Some("worker-cc"))
+            .unwrap();
+        let second = store
+            .create_tui_job("second", "queued", Some("single"), Some("worker-cc"))
+            .unwrap();
+        let third = store
+            .create_tui_job("third", "queued", Some("single"), Some("worker-cc"))
+            .unwrap();
+        input.queued_job_ids = vec![first.id, second.id, third.id];
 
         handle_slash_command("/queue promote 3", &store, &cfg, &mut input);
 
         assert_eq!(input.queued_prompts, vec!["third", "first", "second"]);
+        assert_eq!(input.queued_job_ids, vec![third.id, first.id, second.id]);
+        let third_job = store.get_tui_job(third.id).unwrap().expect("promoted job");
+        assert_eq!(third_job.status, "queued");
+        assert!(third_job.updated_at >= third.updated_at);
         assert!(input
             .transcript
             .last()
@@ -5788,6 +6490,51 @@ behavior:
             .expect("queue response")
             .content
             .contains("Cleared 2 queued message(s)"));
+    }
+
+    #[test]
+    fn jobs_command_shows_persisted_queue_without_json_noise() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap(),
+        );
+        let cfg = Arc::new(test_config());
+        let mut input = InputState::default();
+        let queued = store
+            .create_tui_job(
+                "queued follow-up",
+                "queued",
+                Some("direct-answer"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+        store
+            .set_tui_job_status(queued.id, "failed", None, Some("network timeout"))
+            .unwrap();
+        let done = store
+            .create_tui_job(
+                "completed follow-up",
+                "running",
+                Some("single-worker"),
+                Some("worker-codex"),
+            )
+            .unwrap();
+        store
+            .set_tui_job_status(done.id, "done", Some("final answer text"), None)
+            .unwrap();
+
+        handle_slash_command("/jobs", &store, &cfg, &mut input);
+
+        let msg = input.transcript.last().expect("jobs response");
+        assert!(msg.content.contains("Jobs"));
+        assert!(msg.content.contains("✗"));
+        assert!(msg.content.contains("failed"));
+        assert!(msg.content.contains("queued follow-up"));
+        assert!(msg.content.contains("role worker-cc"));
+        assert!(msg.content.contains("error network timeout"));
+        assert!(msg.content.contains("completed follow-up"));
+        assert!(msg.content.contains("result final answer text"));
+        assert!(!msg.content.contains('{'));
     }
 
     #[test]

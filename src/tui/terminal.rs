@@ -19,7 +19,7 @@ use super::commands::{handle_slash_command_with_runtime, save_handoff_package, S
 #[cfg(test)]
 use super::commands::{slash_argument_candidates, SlashArgCandidate};
 use super::persist::{last_tui_session_path, load_last_tui_session, save_tui_session};
-use super::run_state::{handle_run_event, RunController};
+use super::run_state::RunController;
 use super::state::{ChatMsg, InputState, TuiRuntimeConfig};
 use crate::config::Config;
 use crate::core::session_store::SessionStore;
@@ -126,6 +126,7 @@ async fn run_inner(
 
     print_intro(mode_notice);
     let mut render_state = TerminalRenderState::with_codex_surface()?;
+    restore_terminal_state_on_start(&store, &mut input, &mut render_state);
     render_input_area(&store, &config, &input, false, &mut render_state)?;
     loop {
         tokio::select! {
@@ -288,6 +289,7 @@ fn handle_terminal_key(
                 let before = input.transcript.len();
                 let action =
                     handle_slash_command_with_runtime("/cancel", store, config, runtime, input);
+                controller.finish_active_jobs(input, "cancelled", Some("cancelled by user"));
                 write_messages_from(render_state, input, before);
                 return Ok(matches!(action, SlashAction::Exit));
             }
@@ -620,7 +622,7 @@ fn print_intro(mode_notice: Option<&str>) {
         "{DIM}tiffany-loop-style scrollback renderer: native selection/copy/paste, IME-friendly input. /help for commands.{RESET}"
     );
     term_line!(
-        "{DIM}Process detail: /o toggles folded/expanded gray agent output. Results: /copy result or /result.{RESET}"
+        "{DIM}Process detail: /o toggles folded/expanded gray agent output. Results: /copy copies the final answer.{RESET}"
     );
     term_line!();
 }
@@ -652,6 +654,9 @@ fn handle_terminal_command(
             input.context_summary_upto = 0;
             input.last_context_messages = 0;
             input.last_context_chars = 0;
+            input.queued_prompts.clear();
+            input.queued_job_ids.clear();
+            input.active_job_ids.clear();
             write_system(
                 render_state,
                 "Transcript memory cleared. Terminal scrollback is controlled by your terminal."
@@ -1140,8 +1145,12 @@ fn handle_terminal_progress(
     active_assistant_idx: &mut Option<usize>,
     render_state: &mut TerminalRenderState,
 ) -> bool {
+    let completion = terminal_job_completion(&event);
     write_progress(render_state, &event, input);
-    let terminal_event = handle_run_event(event, input);
+    let terminal_event = controller.handle_run_event(event, input);
+    if let Some((status, error)) = completion {
+        controller.finish_active_jobs(input, status, error.as_deref());
+    }
     if terminal_event {
         finish_terminal_run(
             input,
@@ -1152,6 +1161,17 @@ fn handle_terminal_progress(
         );
     }
     terminal_event
+}
+
+fn terminal_job_completion(event: &RunProgress) -> Option<(&'static str, Option<String>)> {
+    match event {
+        RunProgress::Done { .. } => Some(("done", None)),
+        RunProgress::Failed(message) if message == "cancelled by user" => {
+            Some(("cancelled", Some(message.clone())))
+        }
+        RunProgress::Failed(message) => Some(("failed", Some(message.clone()))),
+        _ => None,
+    }
 }
 
 fn finish_terminal_run(
@@ -1194,15 +1214,17 @@ fn resume_last_terminal_session(
     render_state: &mut TerminalRenderState,
 ) {
     match load_last_tui_session(store) {
-        Ok(restored) => {
+        Ok(mut restored) => {
+            let interrupted = sanitize_restored_terminal_state(store, &mut restored);
             *input = restored;
             write_system(
                 render_state,
                 format!(
-                    "Resumed last terminal chat session from {}.",
+                    "Resumed last terminal chat session from {}.{}",
                     last_tui_session_path(store)
                         .map(|path| path.display().to_string())
-                        .unwrap_or_else(|_| "last session file".into())
+                        .unwrap_or_else(|_| "last session file".into()),
+                    interrupted_resume_suffix(interrupted)
                 ),
             );
             write_messages_from(render_state, input, 0);
@@ -1213,6 +1235,80 @@ fn resume_last_terminal_session(
                 format!("Could not resume last terminal chat session: {}", e),
             );
         }
+    }
+}
+
+fn restore_terminal_state_on_start(
+    store: &SessionStore,
+    input: &mut InputState,
+    render_state: &mut TerminalRenderState,
+) {
+    let Ok(mut restored) = load_last_tui_session(store) else {
+        return;
+    };
+    if restored.transcript.is_empty()
+        && restored.queued_prompts.is_empty()
+        && restored.input_history.is_empty()
+    {
+        return;
+    }
+    let interrupted = sanitize_restored_terminal_state(store, &mut restored);
+    restored.current_stage = "restored".into();
+    restored.current_stage_detail = if restored.queued_prompts.is_empty() {
+        "last terminal chat loaded".into()
+    } else {
+        format!(
+            "{} queued message(s) restored",
+            restored.queued_prompts.len()
+        )
+    };
+    *input = restored;
+    write_system(
+        render_state,
+        format!(
+            "Restored terminal chat state from {}.\n  messages: {}\n  queue: {} pending\n  context: {}{}\n\nUse /clear for a fresh chat or /queue run to start the restored queue.",
+            last_tui_session_path(store)
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| "last session file".into()),
+            input.transcript.len(),
+            input.queued_prompts.len(),
+            input.context_mode.as_str(),
+            interrupted_restore_suffix(interrupted)
+        ),
+    );
+}
+
+fn sanitize_restored_terminal_state(store: &SessionStore, input: &mut InputState) -> usize {
+    input.queued_job_ids.truncate(input.queued_prompts.len());
+    let stale_active = std::mem::take(&mut input.active_job_ids);
+    let interrupted = stale_active.len();
+    for job_id in stale_active {
+        let _ = store.set_tui_job_status(
+            job_id,
+            "failed",
+            None,
+            Some("interrupted before terminal restart"),
+        );
+    }
+    input.run_rx = None;
+    input.run_handle = None;
+    input.cancel_flag = None;
+    interrupted
+}
+
+fn interrupted_resume_suffix(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!(" Marked {count} interrupted job(s) as failed.")
+    }
+}
+
+fn interrupted_restore_suffix(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!("\n  interrupted jobs: {count} marked failed")
     }
 }
 
@@ -1322,6 +1418,7 @@ fn terminal_help() -> String {
      /help                         Show this help\n\
      /status                       Show current run/config status\n\
      /doctor                       Diagnose config, runtimes, API keys, and tools\n\
+     /provider [name]              Show provider/model/role wiring\n\
      /roles [show|route|use|snippet|save] Show/select/save role routing\n\
      /workflow                     Show selected flow and role wiring\n\
      /agent [role|clear]           Route future worker tasks\n\
@@ -1336,13 +1433,13 @@ fn terminal_help() -> String {
      /process [summary|full|n]     Show captured run process\n\
      /diff [summary|stat|full]     Show current git changes\n\
      /tests [suggest|quick|run|status] Show or run test helpers\n\
-     /continue claude|codex|gemini Save handoff and open that CLI inline\n\
+     /continue claude|codex|gemini Save a legacy handoff package for that CLI\n\
      /graph [compact|full|mermaid|save] Compress conversation into a flow graph\n\
      /acp [status|claude|codex]    Show ACP server/client setup hints\n\
-     /result [text]                Show last final result\n\
      /copy                         Copy last final result when available\n\
      /copy result                  Copy last final result\n\
      /copy transcript [target]     Export transcript\n\
+     /result [text]                Show last final result (legacy alias)\n\
      /save                         Save transcript to a file\n\
      /queue [clear|remove n|promote n|edit n text|pause|resume|run] Manage queued messages\n\
      /retry                        Re-run the last task prompt\n\
@@ -1369,7 +1466,9 @@ mod tests {
         assert!(help.contains("Copy/paste/scrolling"));
         assert!(help.contains("Queued messages merge into the next batch"));
         assert!(help.contains("/o folds/expands future details"));
-        assert!(help.contains("/result [text]"));
+        assert!(
+            help.contains("/result [text]                Show last final result (legacy alias)")
+        );
         assert!(!help.contains("/resume last"));
         assert!(!help.contains("/editor"));
         assert!(help.contains("Up/Down recalls previous prompts"));
@@ -1380,6 +1479,52 @@ mod tests {
     fn terminal_line_text_uses_raw_mode_safe_newline() {
         assert_eq!(terminal_line_text("ok"), "ok\r\n");
         assert_eq!(terminal_line_text(""), "\r\n");
+    }
+
+    #[test]
+    fn restored_terminal_state_marks_stale_active_jobs_failed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let active = store
+            .create_tui_job(
+                "interrupted run",
+                "running",
+                Some("single"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+        let queued = store
+            .create_tui_job(
+                "queued followup",
+                "queued",
+                Some("single"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+        let extra = uuid::Uuid::new_v4();
+        let mut input = InputState {
+            queued_prompts: vec!["queued followup".into()],
+            queued_job_ids: vec![queued.id, extra],
+            active_job_ids: vec![active.id],
+            ..InputState::default()
+        };
+
+        let interrupted = sanitize_restored_terminal_state(&store, &mut input);
+
+        assert_eq!(interrupted, 1);
+        assert_eq!(input.queued_job_ids, vec![queued.id]);
+        assert!(input.active_job_ids.is_empty());
+        assert!(input.run_rx.is_none());
+        assert!(input.run_handle.is_none());
+        let active = store.get_tui_job(active.id).unwrap().expect("active job");
+        assert_eq!(active.status, "failed");
+        assert_eq!(
+            active.error.as_deref(),
+            Some("interrupted before terminal restart")
+        );
+        let queued = store.get_tui_job(queued.id).unwrap().expect("queued job");
+        assert_eq!(queued.status, "queued");
     }
 
     #[test]
@@ -1732,7 +1877,7 @@ mod tests {
         };
 
         let line = progress_line(&first, 0, &input).expect("visible worker output");
-        assert_eq!(line.0, "↳");
+        assert_eq!(line.0, "◆");
         assert!(line.2.contains("claude-code"));
         assert!(line.2.contains("useful summary"));
 
@@ -1790,7 +1935,7 @@ mod tests {
         )
         .expect("final capture marker");
         assert!(line.2.contains("final response captured"));
-        assert!(line.2.contains("/result"));
+        assert!(line.2.contains("/copy"));
         assert!(!line.2.contains("Implemented it in several paragraphs."));
         assert!(!line.2.contains('{'));
     }
@@ -1915,8 +2060,10 @@ mod tests {
         assert!(command_candidates
             .iter()
             .any(|candidate| candidate.label == "/queue"));
+        assert!(command_candidates
+            .iter()
+            .any(|candidate| candidate.label == "/jobs"));
         assert!(command_joined.contains("/roles"));
-        assert!(command_joined.contains("/trace"));
         assert!(!command_joined.contains('{'));
     }
 
@@ -1939,7 +2086,9 @@ mod tests {
         assert!(joined.contains("commands"));
         assert!(joined.contains("›"));
         assert!(joined.contains("/roles"));
-        assert!(joined.contains("/trace"));
+        assert!(slash_argument_candidates(&store, &cfg, &input)
+            .iter()
+            .any(|candidate| candidate.label == "/jobs"));
 
         let queue_idx = slash_argument_candidates(&store, &cfg, &input)
             .iter()

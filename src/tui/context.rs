@@ -286,7 +286,9 @@ fn context_entry(msg: &ChatMsg, per_message_limit: usize) -> Option<ContextEntry
         "user" if msg.status == "complete" || msg.status == "queued_batch" => {
             cleaned_entry("user", &msg.content, per_message_limit)
         }
-        "assistant" if msg.status == "complete" || msg.status == "error" => {
+        "assistant"
+            if msg.status == "complete" || msg.status == "warning" || msg.status == "error" =>
+        {
             let content = assistant_context_content(&msg.content);
             cleaned_entry("assistant", &content, per_message_limit)
         }
@@ -417,28 +419,26 @@ mod tests {
     }
 
     #[test]
-    fn contextual_prompt_includes_hidden_last_result_for_followups() {
+    fn contextual_prompt_includes_visible_last_result_for_followups() {
         let mut input = InputState {
             last_result_output: Some("implemented queue fixes".into()),
             ..InputState::default()
         };
         input.transcript.push(msg("user", "complete", "fix queue"));
-        input.transcript.push(msg(
-            "assistant",
-            "complete",
-            "✓ done\n\nResult captured. Use /result to show it or /copy result to copy.\nDetails: /process 200",
-        ));
+        input
+            .transcript
+            .push(msg("assistant", "complete", "implemented queue fixes"));
 
         let built = build_contextual_prompt(&mut input, "continue polishing");
 
         assert!(built.prompt.contains("user:\nfix queue"));
-        assert!(built.prompt.contains("assistant:\nLast run result:"));
+        assert!(built.prompt.contains("assistant:\nimplemented queue fixes"));
         assert!(built.prompt.contains("implemented queue fixes"));
-        assert!(!built.prompt.contains("Result captured. Use /result"));
+        assert!(!built.prompt.contains("Result captured. Use /copy"));
     }
 
     #[test]
-    fn contextual_prompt_excludes_review_unavailable_completion_notice() {
+    fn contextual_prompt_includes_review_unavailable_worker_result_without_notice() {
         let mut input = InputState {
             last_result_output: Some("implemented orchestration flow".into()),
             ..InputState::default()
@@ -449,16 +449,18 @@ mod tests {
         input.transcript.push(msg(
             "assistant",
             "warning",
-            "✓ done · review unavailable\n\nResult captured. Use /result to show it or /copy result to copy.\nDetails: /process 200\nReviewer control check was unavailable; worker output was kept.",
+            "implemented orchestration flow",
         ));
 
         let built = build_contextual_prompt(&mut input, "继续");
 
         assert!(built.prompt.contains("user:\n优化编排流程"));
-        assert!(built.prompt.contains("assistant:\nLast run result:"));
+        assert!(built
+            .prompt
+            .contains("assistant:\nimplemented orchestration flow"));
         assert!(built.prompt.contains("implemented orchestration flow"));
         assert!(!built.prompt.contains("review unavailable"));
-        assert!(!built.prompt.contains("Result captured. Use /result"));
+        assert!(!built.prompt.contains("Result captured. Use /copy"));
     }
 
     #[test]
@@ -485,11 +487,9 @@ mod tests {
             ..InputState::default()
         };
         input.transcript.push(msg("user", "complete", "fix queue"));
-        input.transcript.push(msg(
-            "assistant",
-            "complete",
-            "✓ done\n\nResult captured. Use /result to show it or /copy result to copy.\nDetails: /process 200",
-        ));
+        input
+            .transcript
+            .push(msg("assistant", "complete", "implemented queue fixes"));
         input.context_cutoff = input.transcript.len();
 
         let built = build_contextual_prompt(&mut input, "continue polishing");

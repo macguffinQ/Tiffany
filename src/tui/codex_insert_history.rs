@@ -4,6 +4,8 @@
 // OpenAI Codex CLI is licensed under Apache-2.0. This local version keeps the
 // Codex scroll-region insertion strategy while replacing Codex-internal
 // hyperlink/wrapping helpers with small project-local equivalents.
+// This remains a legacy compatibility shim; new native TUI work lives under
+// tiffany-ui/codex-rs/.
 #![allow(dead_code)]
 
 //! Inserts finalized history rows into terminal scrollback.

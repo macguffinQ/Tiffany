@@ -5,6 +5,8 @@
 // same event-stream direction for tiffany-loop lightweight, non-fullscreen runner:
 // terminal input and draw notifications enter one async event path, and the
 // crossterm stream can be dropped while handing stdin to external programs.
+// This remains a legacy compatibility shim; new native TUI work lives under
+// tiffany-ui/codex-rs/.
 
 use crossterm::event::Event;
 use crossterm::event::EventStream;

@@ -51,8 +51,12 @@ pub(super) struct InputState {
     pub(super) process_filter: Option<String>,
     /// Best final text captured from worker output for the active run.
     pub(super) run_final_output: Option<String>,
+    /// Live answer text already rendered into the in-flight assistant bubble.
+    pub(super) run_live_answer_output: Option<String>,
     /// Last readable worker output, used as a fallback final result.
     pub(super) run_last_worker_output: Option<String>,
+    /// Last readable worker error, shown when no worker result completes.
+    pub(super) run_last_worker_error: Option<String>,
     /// Last completed run result, used by /result and /copy result.
     pub(super) last_result_output: Option<String>,
     /// Last generated handoff package, used by /handoff status.
@@ -81,6 +85,10 @@ pub(super) struct InputState {
     pub(super) run_chat_output_keys: Vec<String>,
     /// Follow-up prompts submitted while another run is active.
     pub(super) queued_prompts: Vec<String>,
+    /// Persistent job ids for queued prompts, kept in lockstep with queued_prompts.
+    pub(super) queued_job_ids: Vec<uuid::Uuid>,
+    /// Persistent job ids for the active run. A queued batch can contain many prompts.
+    pub(super) active_job_ids: Vec<uuid::Uuid>,
     /// Whether queued prompts should wait after the current run finishes.
     pub(super) queue_paused: bool,
     /// Whether transcript messages are rendered as folded one-line summaries.

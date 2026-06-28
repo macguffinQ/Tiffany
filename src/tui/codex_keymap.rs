@@ -4,6 +4,8 @@
 // the parent widget decide process-level actions such as interrupt or quit.
 // This module follows that boundary: it mutates only composer state and returns
 // explicit high-level actions for the terminal runner to execute.
+// This remains a legacy compatibility shim; new native TUI work lives under
+// tiffany-ui/codex-rs/.
 
 use super::codex_composer::{
     accept_visible_slash_completion, complete_selected_slash_completion, delete_char_at_cursor,

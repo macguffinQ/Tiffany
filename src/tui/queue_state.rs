@@ -2,11 +2,13 @@
 
 use super::state::InputState;
 use super::util::truncate_chars;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct QueueItemPreview {
     pub(super) index: usize,
     pub(super) text: String,
+    pub(super) job_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,10 +21,24 @@ pub(super) struct QueueSnapshot {
 
 impl QueueSnapshot {
     pub(super) fn from_input(input: &InputState, preview_limit: usize) -> Self {
-        Self::new(&input.queued_prompts, input.queue_paused, preview_limit)
+        Self::new_with_jobs(
+            &input.queued_prompts,
+            &input.queued_job_ids,
+            input.queue_paused,
+            preview_limit,
+        )
     }
 
     pub(super) fn new(prompts: &[String], paused: bool, preview_limit: usize) -> Self {
+        Self::new_with_jobs(prompts, &[], paused, preview_limit)
+    }
+
+    pub(super) fn new_with_jobs(
+        prompts: &[String],
+        job_ids: &[Uuid],
+        paused: bool,
+        preview_limit: usize,
+    ) -> Self {
         let count = prompts.len();
         let preview = prompts
             .iter()
@@ -31,6 +47,7 @@ impl QueueSnapshot {
             .map(|(idx, prompt)| QueueItemPreview {
                 index: idx + 1,
                 text: prompt.clone(),
+                job_id: job_ids.get(idx).copied(),
             })
             .collect::<Vec<_>>();
         Self {
@@ -76,6 +93,10 @@ impl QueueSnapshot {
             format!("{} pending ({})", self.count, self.state_label())
         }
     }
+}
+
+fn short_job_id(job_id: Uuid) -> String {
+    job_id.to_string().chars().take(8).collect()
 }
 
 pub(super) fn can_start_queued_batch(input: &InputState) -> bool {
@@ -128,9 +149,14 @@ pub(super) fn format_queue_show(input: &InputState) -> String {
     );
     for item in &snapshot.preview {
         out.push('\n');
+        let job = item
+            .job_id
+            .map(|job_id| format!("job {} · ", short_job_id(job_id)))
+            .unwrap_or_default();
         out.push_str(&format!(
-            "  ↳ {}. {}",
+            "  ↳ {}. {}{}",
             item.index,
+            job,
             truncate_chars(&item.text, 180)
         ));
     }
@@ -144,6 +170,7 @@ pub(super) fn format_queue_show(input: &InputState) -> String {
     out.push_str(
         "\nManage: /queue edit <n> <text>, /queue promote <n>, /queue remove <n>, /queue pause, /queue clear.",
     );
+    out.push_str("\nJobs: /jobs shows persisted status, session, native id, and result.");
     out
 }
 
@@ -171,6 +198,38 @@ mod tests {
         assert_eq!(paused.status_label(), "paused");
         assert_eq!(paused.batch_label(), "paused");
         assert_eq!(paused.pending_label(), "2 pending (paused)");
+    }
+
+    #[test]
+    fn snapshot_carries_job_ids_for_queue_preview() {
+        let prompts = vec!["first".to_string(), "second".to_string()];
+        let jobs = vec![
+            Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+            Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap(),
+        ];
+
+        let snapshot = QueueSnapshot::new_with_jobs(&prompts, &jobs, false, 2);
+
+        assert_eq!(snapshot.preview[0].job_id, Some(jobs[0]));
+        assert_eq!(snapshot.preview[1].job_id, Some(jobs[1]));
+    }
+
+    #[test]
+    fn queue_show_links_items_to_persisted_jobs() {
+        let input = InputState {
+            queued_prompts: vec!["write tests".to_string(), "update docs".to_string()],
+            queued_job_ids: vec![
+                Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+                Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap(),
+            ],
+            ..InputState::default()
+        };
+
+        let rendered = format_queue_show(&input);
+
+        assert!(rendered.contains("1. job 11111111 · write tests"));
+        assert!(rendered.contains("2. job 22222222 · update docs"));
+        assert!(rendered.contains("/jobs shows persisted status"));
     }
 
     #[test]

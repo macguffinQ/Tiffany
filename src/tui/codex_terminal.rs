@@ -3,6 +3,8 @@
 //
 // OpenAI Codex CLI is licensed under Apache-2.0. This file also keeps the
 // Ratatui-derived MIT notice from the upstream source below.
+// This remains a legacy compatibility shim; new native TUI work lives under
+// tiffany-ui/codex-rs/.
 //
 // This is derived from `ratatui::Terminal`, which is licensed under the following terms:
 //

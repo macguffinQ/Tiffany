@@ -23,8 +23,8 @@ use std::time::Instant;
 use unicode_width::UnicodeWidthChar;
 
 const FINAL_RESULT_WRAP_WIDTH: usize = 100;
-const FINAL_OUTPUT_MAX_CHARS: usize = 240_000;
-const RUN_CHAT_OUTPUT_MAX_CHARS: usize = FINAL_OUTPUT_MAX_CHARS;
+const FINAL_OUTPUT_MAX_CHARS: usize = usize::MAX;
+const RUN_CHAT_OUTPUT_MAX_CHARS: usize = 240_000;
 
 pub(super) struct RunController {
     orch: Arc<Orchestrator>,
@@ -45,13 +45,60 @@ impl RunController {
             return;
         }
 
+        let job_ids = std::mem::take(&mut input.queued_job_ids);
         let prompt = drain_queued_prompts(input);
-        self.start_prompt(prompt, input, "queued_batch");
+        self.start_prompt_with_jobs(prompt, input, "queued_batch", job_ids);
+    }
+
+    pub(super) fn finish_active_jobs(
+        &self,
+        input: &mut InputState,
+        status: &str,
+        error: Option<&str>,
+    ) {
+        let result = input.last_result_output.as_deref();
+        for job_id in std::mem::take(&mut input.active_job_ids) {
+            let _ = self.store.set_tui_job_status(job_id, status, result, error);
+        }
+    }
+
+    pub(super) fn handle_run_event(&self, event: RunProgress, input: &mut InputState) -> bool {
+        self.attach_active_jobs(&event, input);
+        handle_run_event(event, input)
+    }
+
+    fn attach_active_jobs(&self, event: &RunProgress, input: &InputState) {
+        for job_id in &input.active_job_ids {
+            attach_tui_job_progress_to_store(&self.store, *job_id, event);
+        }
     }
 
     fn start_prompt(&self, prompt: String, input: &mut InputState, user_status: &str) {
+        self.start_prompt_with_jobs(prompt, input, user_status, Vec::new());
+    }
+
+    fn start_prompt_with_jobs(
+        &self,
+        prompt: String,
+        input: &mut InputState,
+        user_status: &str,
+        existing_job_ids: Vec<uuid::Uuid>,
+    ) {
         if run_is_active(input) {
+            let job_id = self
+                .store
+                .create_tui_job(
+                    &prompt,
+                    "queued",
+                    input.run_route.as_deref(),
+                    input.agent_hint.as_deref(),
+                )
+                .ok()
+                .map(|job| job.id);
             queue_followup(input, prompt);
+            if let Some(job_id) = job_id {
+                input.queued_job_ids.push(job_id);
+            }
             return;
         }
 
@@ -61,6 +108,25 @@ impl RunController {
         input.last_context_chars = contextual_prompt.context_chars;
         let task_prompt = contextual_prompt.prompt;
         apply_route_preview(input, &task_prompt);
+        input.active_job_ids = if existing_job_ids.is_empty() {
+            self.store
+                .create_tui_job(
+                    &prompt,
+                    "running",
+                    input.run_route.as_deref(),
+                    input.agent_hint.as_deref(),
+                )
+                .ok()
+                .map(|job| vec![job.id])
+                .unwrap_or_default()
+        } else {
+            for job_id in &existing_job_ids {
+                let _ = self
+                    .store
+                    .set_tui_job_status(*job_id, "running", None, None);
+            }
+            existing_job_ids
+        };
 
         input.transcript.push(ChatMsg {
             role: "user".into(),
@@ -83,7 +149,9 @@ impl RunController {
         input.last_event_at = Some(Instant::now());
         input.run_events.clear();
         input.run_final_output = None;
+        input.run_live_answer_output = None;
         input.run_last_worker_output = None;
+        input.run_last_worker_error = None;
         input.run_review_issue_count = 0;
         input.run_review_unavailable_count = 0;
         input.run_worker_failure_count = 0;
@@ -209,6 +277,46 @@ async fn run_with_cancel(
     Ok(())
 }
 
+fn attach_tui_job_progress_to_store(store: &SessionStore, job_id: uuid::Uuid, event: &RunProgress) {
+    match event {
+        RunProgress::WorkerStarted { task_id, role, .. } => {
+            let _ = store.attach_tui_job_worker(job_id, Some(*task_id), Some(role), None, None);
+        }
+        RunProgress::WorkerThreadWaiting {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+        }
+        | RunProgress::WorkerThreadReady {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            ..
+        }
+        | RunProgress::WorkerRecovery {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            ..
+        } => {
+            let _ = store.attach_tui_job_worker(
+                job_id,
+                Some(*task_id),
+                Some(role),
+                Some(*thread_id),
+                native_session_id.as_deref(),
+            );
+        }
+        RunProgress::WorkerDone { task_id, role, .. } => {
+            let _ = store.attach_tui_job_completed_task(job_id, *task_id, Some(role));
+        }
+        _ => {}
+    }
+}
+
 /// Handle progress events from the running orchestrator.
 pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bool {
     input.last_event_at = Some(Instant::now());
@@ -239,8 +347,10 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
         | RunProgress::ControlFallback { .. }
         | RunProgress::DirectAnswer
         | RunProgress::Executing { .. }
+        | RunProgress::WorkerThreadWaiting { .. }
         | RunProgress::WorkerThreadReady { .. }
         | RunProgress::WorkerStarted { .. }
+        | RunProgress::WorkerRecovery { .. }
         | RunProgress::Reviewing { .. }
         | RunProgress::ReviewSkipped { .. } => {}
         RunProgress::WorkerOutput {
@@ -249,6 +359,8 @@ pub(super) fn handle_run_event(event: RunProgress, input: &mut InputState) -> bo
             ..
         } => {
             remember_worker_output(input, &event_kind, &content);
+            remember_worker_error(input, &event_kind, &content);
+            stream_worker_answer_to_assistant(input, &event_kind, &content);
             capture_worker_output_as_chat(input, &event_kind, &content);
         }
         RunProgress::RoleOutput { .. } => {}
@@ -376,6 +488,9 @@ fn apply_run_status_view(input: &mut InputState, view: RunStatusView) {
     input.current_stage = view.stage;
     input.current_stage_detail = view.detail;
     if let Some(update) = view.assistant_update {
+        if input.run_live_answer_output.is_some() {
+            return;
+        }
         update_last_assistant(input, update, "thinking");
     }
 }
@@ -419,6 +534,9 @@ fn update_last_assistant(input: &mut InputState, content: String, status: &str) 
 }
 
 fn remember_worker_output(input: &mut InputState, event_kind: &str, content: &str) {
+    if is_worker_error_event(event_kind) {
+        return;
+    }
     let display = humanize_jsonish(content, FINAL_OUTPUT_MAX_CHARS);
     if display.trim().is_empty() || is_low_value_worker_output(&display) {
         return;
@@ -431,6 +549,95 @@ fn remember_worker_output(input: &mut InputState, event_kind: &str, content: &st
     if !is_low_value_worker_output(&normalized) {
         remember_better_text(&mut input.run_last_worker_output, normalized);
     }
+}
+
+fn remember_worker_error(input: &mut InputState, event_kind: &str, content: &str) {
+    if !is_worker_error_event(event_kind) {
+        return;
+    }
+
+    let display = humanize_jsonish(content, FINAL_OUTPUT_MAX_CHARS);
+    if display.trim().is_empty() || is_low_value_worker_output(&display) {
+        return;
+    }
+
+    let normalized = normalize_chat_worker_output(&display);
+    if normalized.trim().is_empty() || is_low_value_worker_output(&normalized) {
+        return;
+    }
+    remember_better_text(&mut input.run_last_worker_error, normalized);
+}
+
+fn stream_worker_answer_to_assistant(input: &mut InputState, event_kind: &str, content: &str) {
+    let Some(candidate) = worker_live_answer_candidate(event_kind, content) else {
+        return;
+    };
+    let merged = merge_live_answer(input.run_live_answer_output.as_deref(), &candidate);
+    if merged.trim().is_empty() || is_low_value_worker_output(&merged) {
+        return;
+    }
+    input.run_live_answer_output = Some(merged.clone());
+    update_last_assistant(input, merged, "thinking");
+}
+
+fn worker_live_answer_candidate(event_kind: &str, content: &str) -> Option<String> {
+    if is_worker_error_event(event_kind) {
+        return None;
+    }
+    if let Some(final_output) = worker_final_output_candidate(event_kind, content) {
+        return Some(final_output);
+    }
+    let kind = agent_events::visible_agent_output_kind_for_event_kind(event_kind);
+    let runtime_kind = agent_events::runtime_output_kind(content);
+    let is_answer = matches!(
+        kind,
+        Some(agent_events::VisibleAgentOutputKind::Answer)
+            | Some(agent_events::VisibleAgentOutputKind::Final)
+    ) || runtime_kind
+        .as_deref()
+        .is_some_and(|kind| matches!(kind, "assistant" | "result" | "final" | "turn_complete"));
+    if !is_answer {
+        return None;
+    }
+    if kind.is_some_and(|kind| kind.is_process_event()) {
+        return None;
+    }
+    let display = humanize_jsonish(content, FINAL_OUTPUT_MAX_CHARS);
+    let normalized = normalize_chat_worker_output(&display);
+    (!normalized.trim().is_empty() && !is_low_value_worker_output(&normalized))
+        .then_some(normalized)
+}
+
+fn merge_live_answer(current: Option<&str>, candidate: &str) -> String {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return current.unwrap_or_default().trim().to_string();
+    }
+    let Some(current) = current.map(str::trim).filter(|current| !current.is_empty()) else {
+        return candidate.to_string();
+    };
+    if candidate == current || current.contains(candidate) {
+        return current.to_string();
+    }
+    if candidate.contains(current) || candidate.starts_with(current) {
+        return candidate.to_string();
+    }
+    if candidate
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_punctuation())
+    {
+        return format!("{current}{candidate}");
+    }
+    format!("{current}\n{candidate}")
+}
+
+fn is_worker_error_event(event_kind: &str) -> bool {
+    matches!(
+        agent_events::visible_agent_output_kind_for_event_kind(event_kind),
+        Some(agent_events::VisibleAgentOutputKind::Stderr)
+            | Some(agent_events::VisibleAgentOutputKind::Actionable)
+    ) || matches!(event_kind, "error" | "stderr" | "process_exit")
 }
 
 fn capture_worker_output_as_chat(input: &mut InputState, event_kind: &str, content: &str) {
@@ -517,6 +724,9 @@ fn remember_better_text(slot: &mut Option<String>, candidate: String) {
 }
 
 fn worker_final_output_candidate(event_kind: &str, content: &str) -> Option<String> {
+    if is_worker_error_event(event_kind) {
+        return None;
+    }
     if agent_events::visible_agent_output_kind_for_event_kind(event_kind)
         .is_some_and(|kind| kind.is_process_event())
     {
@@ -526,34 +736,30 @@ fn worker_final_output_candidate(event_kind: &str, content: &str) -> Option<Stri
 }
 
 fn final_output_for_run(input: &InputState) -> Option<String> {
-    let mut best = None;
-    for text in [&input.run_final_output, &input.run_last_worker_output]
-        .into_iter()
-        .flatten()
-    {
-        remember_better_text(&mut best, humanize_jsonish(text, FINAL_OUTPUT_MAX_CHARS));
+    if let Some(final_output) = input.run_final_output.as_deref() {
+        let display = humanize_jsonish(final_output, FINAL_OUTPUT_MAX_CHARS);
+        if !display.trim().is_empty() {
+            return Some(display);
+        }
     }
-    best.filter(|text| !text.trim().is_empty())
+    input
+        .run_last_worker_output
+        .as_deref()
+        .map(|text| humanize_jsonish(text, FINAL_OUTPUT_MAX_CHARS))
+        .filter(|text| !text.trim().is_empty())
 }
 
 fn format_done_message(final_output: Option<&str>) -> String {
-    format_completion_notice("✓ done", final_output)
+    format_completion_result("✓ done", final_output)
 }
 
 fn format_done_with_review_issues_message(final_output: Option<&str>) -> String {
-    format_completion_notice("⚠ completed with review issues", final_output)
+    format_completion_result("⚠ completed with review issues", final_output)
 }
 
 fn format_done_with_review_unavailable_message(final_output: Option<&str>, count: usize) -> String {
-    let mut out = format_completion_notice("✓ done · review unavailable", final_output);
-    let review = if count == 1 {
-        "Reviewer control check was unavailable; worker output was kept."
-    } else {
-        "Reviewer control checks were unavailable; worker output was kept."
-    };
-    out.push('\n');
-    out.push_str(review);
-    out
+    let _ = count;
+    format_completion_result("✓ done · review unavailable", final_output)
 }
 
 fn completion_detail(input: &InputState, task_count: usize, worker_failures: usize) -> String {
@@ -585,26 +791,31 @@ fn completion_detail(input: &InputState, task_count: usize, worker_failures: usi
     }
 }
 
-fn format_completion_notice(status: &str, final_output: Option<&str>) -> String {
-    let mut out = status.to_string();
-    if final_output
-        .map(str::trim)
-        .is_some_and(|text| !text.is_empty())
-    {
-        out.push_str("\n\nResult captured. Use /result to show it or /copy result to copy.");
-    } else {
-        out.push_str("\n\nNo final text was emitted by the worker.");
+fn format_completion_result(status: &str, final_output: Option<&str>) -> String {
+    if let Some(text) = final_output.map(str::trim) {
+        if !text.is_empty() {
+            return text.to_string();
+        }
     }
-    out.push_str("\nDetails: /process 200");
-    out
+    format!("{status}\n\nNo final text was emitted by the worker.\nDetails: /process 200")
 }
 
 fn format_no_completed_tasks_message(input: &InputState, worker_failures: usize) -> String {
     let detail = completion_detail(input, 0, worker_failures);
+    let error = input
+        .run_last_worker_error
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     if worker_failures > 0 {
-        format!("✗ {detail} — {worker_failures} worker failure(s)\n\nDetails: /process 200")
+        if let Some(error) = error {
+            return format!(
+                "✗ {detail} — {worker_failures} worker failure(s)\n\n{error}\n\nNext: /process 200 · /thread"
+            );
+        }
+        format!("✗ {detail} — {worker_failures} worker failure(s)\n\nNext: /process 200 · /thread")
     } else {
-        format!("✗ {detail}\n\nDetails: /process 200")
+        format!("✗ {detail}\n\nNext: /process 200")
     }
 }
 
@@ -727,6 +938,83 @@ mod tests {
     }
 
     #[test]
+    fn active_job_progress_tracks_worker_thread_and_native_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
+        let job = store
+            .create_tui_job(
+                "continue worker",
+                "running",
+                Some("single"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+        let task_id = uuid::Uuid::new_v4();
+        let thread_id = uuid::Uuid::new_v4();
+
+        attach_tui_job_progress_to_store(
+            &store,
+            job.id,
+            &RunProgress::WorkerStarted {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                runtime: "claude-code".into(),
+                cc_agent: None,
+                model: "claude-sonnet-4-6".into(),
+                provider: Some("anthropic".into()),
+                prompt: "continue worker".into(),
+            },
+        );
+        attach_tui_job_progress_to_store(
+            &store,
+            job.id,
+            &RunProgress::WorkerThreadReady {
+                task_id,
+                role: "worker-cc".into(),
+                thread_id,
+                native_session_id: Some("native-claude-session".into()),
+                reused: true,
+            },
+        );
+
+        let tracked = store.get_tui_job(job.id).unwrap().expect("tracked job");
+        assert_eq!(tracked.task_id, Some(task_id));
+        assert_eq!(tracked.worker_thread_id, Some(thread_id));
+        assert_eq!(tracked.session_id, None);
+        assert_eq!(
+            tracked.native_session_id.as_deref(),
+            Some("native-claude-session")
+        );
+
+        let mut session = crate::core::types::Session::new(
+            task_id,
+            "claude-code",
+            crate::core::types::Role::Worker,
+        );
+        session.worker_thread_id = Some(thread_id);
+        session.native_session_id = Some("native-claude-session".into());
+        store.finalize(&session).unwrap();
+
+        attach_tui_job_progress_to_store(
+            &store,
+            job.id,
+            &RunProgress::WorkerDone {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                duration_ms: 120,
+                ok: true,
+            },
+        );
+
+        let tracked = store.get_tui_job(job.id).unwrap().expect("tracked job");
+        assert_eq!(tracked.session_id, Some(session.id));
+        assert_eq!(tracked.worker_thread_id, Some(thread_id));
+    }
+
+    #[test]
     fn paused_queue_is_not_drained_by_start_next_queued() {
         let mut input = InputState {
             queued_prompts: vec!["wait".into()],
@@ -755,14 +1043,12 @@ mod tests {
         assert_eq!(result, "Implemented the requested TUI changes.");
 
         let message = format_done_message(Some(&result));
-        assert!(message.contains("✓ done"));
-        assert!(message.contains("Result captured."));
-        assert!(message.contains("/result"));
-        assert!(!message.contains("Implemented the requested TUI changes."));
+        assert_eq!(message, "Implemented the requested TUI changes.");
+        assert!(!message.contains("/result"));
     }
 
     #[test]
-    fn done_message_hides_final_result_but_keeps_result_state() {
+    fn done_message_shows_final_result_and_keeps_result_state() {
         let mut input = InputState::default();
         input.transcript.push(ChatMsg {
             role: "assistant".into(),
@@ -785,12 +1071,113 @@ mod tests {
 
         let msg = input.transcript.last().expect("assistant message");
         assert_eq!(msg.status, "complete");
-        assert!(msg.content.contains("Result captured."));
-        assert!(!msg.content.contains("final answer body"));
+        assert_eq!(msg.content, "final answer body");
         assert_eq!(
             input.last_result_output.as_deref(),
             Some("final answer body")
         );
+    }
+
+    #[test]
+    fn worker_answer_stream_updates_assistant_before_done() {
+        let mut input = InputState::default();
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: "thinking...".into(),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        handle_run_event(
+            RunProgress::WorkerOutput {
+                task_id: uuid::Uuid::nil(),
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "assistant".into(),
+                content: "claude-code assistant: first visible answer line".into(),
+            },
+            &mut input,
+        );
+
+        let msg = input.transcript.last().expect("assistant message");
+        assert_eq!(msg.status, "thinking");
+        assert_eq!(msg.content, "first visible answer line");
+        assert_eq!(
+            input.run_live_answer_output.as_deref(),
+            Some("first visible answer line")
+        );
+        assert!(input.last_result_output.is_none());
+    }
+
+    #[test]
+    fn live_worker_answer_is_not_overwritten_by_review_status() {
+        let mut input = InputState::default();
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: "thinking...".into(),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        handle_run_event(
+            RunProgress::WorkerOutput {
+                task_id: uuid::Uuid::nil(),
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "assistant".into(),
+                content: "claude-code assistant: live answer".into(),
+            },
+            &mut input,
+        );
+        handle_run_event(
+            RunProgress::Reviewing {
+                task_id: uuid::Uuid::nil(),
+            },
+            &mut input,
+        );
+
+        let msg = input.transcript.last().expect("assistant message");
+        assert_eq!(msg.status, "thinking");
+        assert_eq!(msg.content, "live answer");
+
+        handle_run_event(RunProgress::Done { task_count: 1 }, &mut input);
+        let msg = input.transcript.last().expect("assistant message");
+        assert_eq!(msg.status, "complete");
+        assert_eq!(msg.content, "live answer");
+    }
+
+    #[test]
+    fn tool_output_does_not_stream_into_assistant_answer() {
+        let mut input = InputState::default();
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: "thinking...".into(),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        handle_run_event(
+            RunProgress::WorkerOutput {
+                task_id: uuid::Uuid::nil(),
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "tool_result".into(),
+                content: "claude-code tool_result: tool result: tests passed".into(),
+            },
+            &mut input,
+        );
+
+        let assistant = input
+            .transcript
+            .iter()
+            .find(|msg| msg.role == "assistant")
+            .expect("assistant message");
+        assert_eq!(assistant.content, "thinking...");
+        assert!(input.run_live_answer_output.is_none());
+        assert!(input
+            .transcript
+            .iter()
+            .any(|msg| msg.role == "tool" && msg.content.contains("tests passed")));
     }
 
     #[test]
@@ -809,7 +1196,23 @@ mod tests {
     }
 
     #[test]
-    fn final_result_prefers_longer_worker_output_over_short_result_event() {
+    fn final_result_is_not_truncated_at_process_summary_limit() {
+        let mut input = InputState::default();
+        let long_result = format!("{}END", "x".repeat(RUN_CHAT_OUTPUT_MAX_CHARS + 128));
+
+        remember_worker_output(
+            &mut input,
+            "result",
+            &format!("claude-code result: {long_result}"),
+        );
+
+        let result = final_output_for_run(&input).expect("final output");
+        assert_eq!(result, long_result);
+        assert!(!result.contains('…'));
+    }
+
+    #[test]
+    fn final_result_prefers_explicit_result_event_over_longer_process_output() {
         let mut input = InputState::default();
 
         remember_worker_output(
@@ -820,10 +1223,7 @@ mod tests {
         remember_worker_output(&mut input, "result", "claude-code result: done");
 
         let result = final_output_for_run(&input).expect("final output");
-        assert_eq!(
-            result,
-            "full answer paragraph one\nfull answer paragraph two"
-        );
+        assert_eq!(result, "done");
     }
 
     #[test]
@@ -1122,15 +1522,104 @@ mod tests {
         assert_eq!(input.run_review_issue_count, 0);
         assert_eq!(input.run_review_unavailable_count, 1);
         assert_eq!(msg.status, "warning");
-        assert!(msg.content.contains("✓ done · review unavailable"));
-        assert!(msg.content.contains("Result captured."));
-        assert!(msg.content.contains("worker output was kept"));
+        assert_eq!(msg.content, "implemented orchestration flow");
         assert!(!msg.content.contains("completed with review issues"));
         assert!(!msg.content.contains("needs fixes"));
         assert_eq!(
             input.last_result_output.as_deref(),
             Some("implemented orchestration flow")
         );
+    }
+
+    #[test]
+    fn review_issues_completion_keeps_worker_result_visible() {
+        let mut input = InputState {
+            run_route: Some("full-pipeline".into()),
+            ..InputState::default()
+        };
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: "thinking...".into(),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        let task_id = uuid::Uuid::nil();
+        handle_run_event(
+            RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "result".into(),
+                content: r#"claude-code result: {"result":"final answer should stay selectable"}"#
+                    .into(),
+            },
+            &mut input,
+        );
+        handle_run_event(
+            RunProgress::ReviewResult {
+                task_id,
+                approved: false,
+                issues: 2,
+            },
+            &mut input,
+        );
+        handle_run_event(RunProgress::Done { task_count: 1 }, &mut input);
+
+        let msg = input.transcript.last().expect("assistant message");
+        assert_eq!(input.current_stage, "Review needs fixes");
+        assert_eq!(msg.status, "warning");
+        assert_eq!(msg.content, "final answer should stay selectable");
+        assert!(!msg.content.contains("completed with review issues"));
+        assert_eq!(
+            input.last_result_output.as_deref(),
+            Some("final answer should stay selectable")
+        );
+    }
+
+    #[test]
+    fn worker_failure_completion_shows_last_worker_error() {
+        let mut input = InputState {
+            run_route: Some("direct-answer".into()),
+            ..InputState::default()
+        };
+        input.transcript.push(ChatMsg {
+            role: "assistant".into(),
+            content: "thinking...".into(),
+            ts: std::time::SystemTime::now(),
+            status: "thinking".into(),
+        });
+
+        let task_id = uuid::Uuid::nil();
+        handle_run_event(
+            RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "error".into(),
+                content: "claude-code error: Native session is already in use; native_session=native-123; resume manually with claude --resume native-123".into(),
+            },
+            &mut input,
+        );
+        handle_run_event(
+            RunProgress::WorkerDone {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                duration_ms: 42,
+                ok: false,
+            },
+            &mut input,
+        );
+        handle_run_event(RunProgress::Done { task_count: 0 }, &mut input);
+
+        let msg = input.transcript.last().expect("assistant message");
+        assert_eq!(msg.status, "error");
+        assert!(msg.content.contains("✗ no answer completed"));
+        assert!(msg.content.contains("Native session is already in use"));
+        assert!(msg.content.contains("native_session=native-123"));
+        assert!(msg.content.contains("claude --resume native-123"));
+        assert!(msg.content.contains("Next: /process 200"));
     }
 
     #[test]

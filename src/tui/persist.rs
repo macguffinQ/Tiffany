@@ -14,6 +14,10 @@ struct PersistedTuiSession {
     transcript: Vec<PersistedChatMsg>,
     queued_prompts: Vec<String>,
     #[serde(default)]
+    queued_job_ids: Vec<String>,
+    #[serde(default)]
+    active_job_ids: Vec<String>,
+    #[serde(default)]
     queue_paused: bool,
     history_folded: bool,
     trace_live_enabled: bool,
@@ -97,6 +101,16 @@ impl PersistedTuiSession {
                 .map(PersistedChatMsg::from_chat_msg)
                 .collect(),
             queued_prompts: input.queued_prompts.clone(),
+            queued_job_ids: input
+                .queued_job_ids
+                .iter()
+                .map(uuid::Uuid::to_string)
+                .collect(),
+            active_job_ids: input
+                .active_job_ids
+                .iter()
+                .map(uuid::Uuid::to_string)
+                .collect(),
             queue_paused: input.queue_paused,
             history_folded: input.history_folded,
             trace_live_enabled: input.trace_live_enabled,
@@ -133,6 +147,16 @@ impl PersistedTuiSession {
             last_context_messages: self.last_context_messages,
             last_context_chars: self.last_context_chars,
             queued_prompts: self.queued_prompts,
+            queued_job_ids: self
+                .queued_job_ids
+                .into_iter()
+                .filter_map(|id| uuid::Uuid::parse_str(&id).ok())
+                .collect(),
+            active_job_ids: self
+                .active_job_ids
+                .into_iter()
+                .filter_map(|id| uuid::Uuid::parse_str(&id).ok())
+                .collect(),
             queue_paused: self.queue_paused,
             last_prompt: self.last_prompt,
             last_result_output: self.last_result_output,
@@ -153,6 +177,7 @@ impl PersistedTuiSession {
             .context_summary_upto
             .max(input.context_cutoff)
             .min(input.transcript.len());
+        input.queued_job_ids.truncate(input.queued_prompts.len());
         input.trace_message_index = input.transcript.iter().rposition(|msg| msg.role == "trace");
         input
     }
@@ -246,6 +271,10 @@ mod tests {
             status: "thinking".into(),
         });
         input.queued_prompts.push("next".into());
+        let queued_job_id = uuid::Uuid::new_v4();
+        input.queued_job_ids.push(queued_job_id);
+        let active_job_id = uuid::Uuid::new_v4();
+        input.active_job_ids = vec![active_job_id];
 
         let path = save_tui_session(&store, &input).unwrap();
         let loaded = load_last_tui_session(&store).unwrap();
@@ -258,6 +287,8 @@ mod tests {
         assert_eq!(loaded.context_summary_text, "earlier summary");
         assert_eq!(loaded.context_summary_upto, 1);
         assert_eq!(loaded.queued_prompts, vec!["next"]);
+        assert_eq!(loaded.queued_job_ids, vec![queued_job_id]);
+        assert_eq!(loaded.active_job_ids, vec![active_job_id]);
         assert!(loaded.queue_paused);
         assert_eq!(loaded.last_prompt.as_deref(), Some("continue"));
         assert_eq!(loaded.last_result_output.as_deref(), Some("done text"));

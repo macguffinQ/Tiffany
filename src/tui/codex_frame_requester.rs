@@ -3,6 +3,8 @@
 //
 // OpenAI Codex CLI is licensed under Apache-2.0. This local version keeps the
 // same coalesced redraw scheduler and points it at tiffany-loop TUI event loop.
+// This remains a legacy compatibility shim; new native TUI work lives under
+// tiffany-ui/codex-rs/.
 
 //! Frame draw scheduling utilities for the TUI.
 

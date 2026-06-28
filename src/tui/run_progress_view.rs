@@ -100,6 +100,31 @@ pub(super) fn progress_history_view(event: &RunProgress) -> Option<ProgressHisto
             native_session_id.as_deref(),
             *reused,
         ))),
+        RunProgress::WorkerThreadWaiting {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+        } => Some(running(format_worker_thread_waiting_line(
+            role,
+            task_id,
+            thread_id,
+            native_session_id.as_deref(),
+        ))),
+        RunProgress::WorkerRecovery {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            recovery,
+            ..
+        } => Some(warning(format_worker_recovery_line(
+            role,
+            task_id,
+            thread_id,
+            native_session_id.as_deref(),
+            recovery,
+        ))),
         RunProgress::WorkerDone {
             task_id,
             role,
@@ -281,8 +306,8 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
             let id = short_task_id(task_id);
             let native = native_session_id
                 .as_deref()
-                .map(short_str)
-                .unwrap_or_else(|| "none".to_string());
+                .map(str::trim)
+                .unwrap_or("none");
             Some(status(
                 format!(
                     "worker: {role} thread {} · {id}",
@@ -298,6 +323,61 @@ pub(super) fn run_status_view(event: &RunProgress) -> Option<RunStatusView> {
                         native_session_id.as_deref(),
                         *reused
                     )
+                )),
+            ))
+        }
+        RunProgress::WorkerThreadWaiting {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+        } => {
+            let id = short_task_id(task_id);
+            let native = native_session_id
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("none");
+            Some(status(
+                format!("worker: {role} waiting · {id}"),
+                format!("thread {} · native {native}", short_task_id(thread_id)),
+                Some(format!(
+                    "● worker  {}",
+                    format_worker_thread_waiting_line(
+                        role,
+                        task_id,
+                        thread_id,
+                        native_session_id.as_deref()
+                    )
+                )),
+            ))
+        }
+        RunProgress::WorkerRecovery {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            recovery,
+            content,
+            ..
+        } => {
+            let id = short_task_id(task_id);
+            let native = native_session_id
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("none");
+            Some(status(
+                format!("worker: {role} recovery · {recovery} · {id}"),
+                format!("thread {} · native {native}", short_task_id(thread_id)),
+                Some(format!(
+                    "⚠ worker  {}\n{}",
+                    format_worker_recovery_line(
+                        role,
+                        task_id,
+                        thread_id,
+                        native_session_id.as_deref(),
+                        recovery
+                    ),
+                    content
                 )),
             ))
         }
@@ -455,7 +535,7 @@ fn format_worker_thread_line(
     reused: bool,
 ) -> String {
     let native = native_session_id
-        .map(short_str)
+        .map(str::trim)
         .map(|id| format!(" · native {id}"))
         .unwrap_or_default();
     format!(
@@ -463,6 +543,43 @@ fn format_worker_thread_line(
         if reused { "reused" } else { "created" },
         short_task_id(thread_id),
         short_task_id(task_id)
+    )
+}
+
+fn format_worker_thread_waiting_line(
+    role: &str,
+    task_id: &uuid::Uuid,
+    thread_id: &uuid::Uuid,
+    native_session_id: Option<&str>,
+) -> String {
+    let native = native_session_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| format!(" · native {id}"))
+        .unwrap_or_default();
+    format!(
+        "{role} waiting for worker session · thread {} · task {}{native}",
+        short_task_id(thread_id),
+        short_task_id(task_id),
+    )
+}
+
+fn format_worker_recovery_line(
+    role: &str,
+    task_id: &uuid::Uuid,
+    thread_id: &uuid::Uuid,
+    native_session_id: Option<&str>,
+    recovery: &str,
+) -> String {
+    let native = native_session_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| format!(" · native {id}"))
+        .unwrap_or_default();
+    format!(
+        "{role} native session recovery · {recovery} · thread {} · task {}{native}",
+        short_task_id(thread_id),
+        short_task_id(task_id),
     )
 }
 
@@ -562,10 +679,6 @@ fn short_task_id(task_id: &uuid::Uuid) -> String {
     task_id.to_string()[..8].to_string()
 }
 
-fn short_str(value: &str) -> String {
-    value.chars().take(8).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,6 +716,58 @@ mod tests {
 
         assert_eq!(done.icon, "✓");
         assert_eq!(done.line, "worker  worker-cc done · 00000000 · 1.2s");
+    }
+
+    #[test]
+    fn worker_thread_line_keeps_full_native_session_id() {
+        let task_id = uuid::Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let thread_id = uuid::Uuid::parse_str("87654321-0000-0000-0000-000000000000").unwrap();
+
+        let view = progress_history_view(&RunProgress::WorkerThreadReady {
+            task_id,
+            role: "worker-cc".into(),
+            thread_id,
+            native_session_id: Some("fake-claude-native-session".into()),
+            reused: true,
+        })
+        .expect("thread ready view");
+
+        assert!(view.line.contains("native fake-claude-native-session"));
+        assert!(!view.line.contains("native fake-cla "));
+
+        let status = run_status_view(&RunProgress::WorkerThreadReady {
+            task_id,
+            role: "worker-cc".into(),
+            thread_id,
+            native_session_id: Some("fake-claude-native-session".into()),
+            reused: true,
+        })
+        .expect("thread ready status");
+        assert!(status.detail.contains("native fake-claude-native-session"));
+
+        let waiting = progress_history_view(&RunProgress::WorkerThreadWaiting {
+            task_id,
+            role: "worker-cc".into(),
+            thread_id,
+            native_session_id: Some("fake-claude-native-session".into()),
+        })
+        .expect("thread waiting view");
+        assert_eq!(waiting.icon, "●");
+        assert_eq!(waiting.tone, ProgressTone::Running);
+        assert!(waiting.line.contains("waiting for worker session"));
+        assert!(waiting.line.contains("native fake-claude-native-session"));
+
+        let waiting_status = run_status_view(&RunProgress::WorkerThreadWaiting {
+            task_id,
+            role: "worker-cc".into(),
+            thread_id,
+            native_session_id: Some("fake-claude-native-session".into()),
+        })
+        .expect("thread waiting status");
+        assert_eq!(waiting_status.stage, "worker: worker-cc waiting · 12345678");
+        assert!(waiting_status
+            .detail
+            .contains("native fake-claude-native-session"));
     }
 
     #[test]

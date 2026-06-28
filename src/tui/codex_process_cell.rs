@@ -208,7 +208,7 @@ fn worker_output_style(kind: agent_events::VisibleAgentOutputKind) -> (&'static 
     match kind {
         agent_events::VisibleAgentOutputKind::Answer => ("◆", TIFFANY),
         agent_events::VisibleAgentOutputKind::Question => ("?", TIFFANY),
-        agent_events::VisibleAgentOutputKind::Approval => ("?", TIFFANY),
+        agent_events::VisibleAgentOutputKind::Approval => ("⚠", YELLOW),
         agent_events::VisibleAgentOutputKind::ToolCall => ("↳", CYAN),
         agent_events::VisibleAgentOutputKind::ToolResult => ("✓", DIM),
         agent_events::VisibleAgentOutputKind::Diff => ("±", TIFFANY),
@@ -374,7 +374,7 @@ fn format_captured_final_result(display: &str) -> String {
     let normalized = normalized.trim();
     let char_count = normalized.chars().count();
     format!(
-        "final response captured ({} chars); /result prints selectable plain text",
+        "final response captured ({} chars); /copy copies the final answer",
         char_count
     )
 }
@@ -569,6 +569,36 @@ mod tests {
     }
 
     #[test]
+    fn keeps_expanded_worker_output_complete() {
+        let task_id = uuid::Uuid::nil();
+        let long_message = format!(
+            "{}END",
+            "完整输出行 ".repeat(PROGRESS_OUTPUT_FOLDED_LIMIT + 4)
+        );
+
+        let line = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "assistant".into(),
+                content: format!("claude-code assistant: {long_message}"),
+            },
+            0,
+            &InputState {
+                history_folded: false,
+                ..InputState::default()
+            },
+        )
+        .expect("expanded worker output should be visible");
+
+        assert_eq!(line.0, "◆");
+        assert!(line.2.contains("worker-cc · claude-code · answer"));
+        assert!(line.2.contains("END"));
+        assert!(!line.2.contains('…'));
+    }
+
+    #[test]
     fn marks_final_worker_output_without_duplication() {
         let task_id = uuid::Uuid::nil();
 
@@ -589,7 +619,7 @@ mod tests {
         assert_eq!(line.0, "✓");
         assert_eq!(line.1, CYAN);
         assert!(line.2.contains("final response captured"));
-        assert!(line.2.contains("/result"));
+        assert!(line.2.contains("/copy"));
         assert!(!line.2.contains("Implemented it in several paragraphs."));
         assert!(!line.2.contains('{'));
     }
@@ -618,6 +648,54 @@ mod tests {
     }
 
     #[test]
+    fn shows_native_session_missing_recovery_as_alert() {
+        let task_id = uuid::Uuid::nil();
+        let line = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "status".into(),
+                content: "claude-code status: native session missing · cleared saved session native-missing and retrying once with a fresh native session".into(),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("native session recovery should be visible");
+
+        assert_eq!(line.0, "⚠");
+        assert_eq!(line.1, YELLOW);
+        assert!(line.2.contains("worker-cc · claude-code · alert"));
+        assert!(line.2.contains("native session missing"));
+        assert!(line.2.contains("retrying once"));
+    }
+
+    #[test]
+    fn shows_native_session_busy_recovery_as_alert_without_clearing_session() {
+        let task_id = uuid::Uuid::nil();
+        let line = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "status".into(),
+                content: "claude-code status: native session busy · waiting for saved session native-busy and retrying once with the same native session".into(),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("native session busy recovery should be visible");
+
+        assert_eq!(line.0, "⚠");
+        assert_eq!(line.1, YELLOW);
+        assert!(line.2.contains("worker-cc · claude-code · alert"));
+        assert!(line.2.contains("native session busy"));
+        let compact = line.2.split_whitespace().collect::<String>();
+        assert!(compact.contains("samenativesession"));
+        assert!(!line.2.contains("cleared saved session"));
+    }
+
+    #[test]
     fn labels_worker_tool_calls_in_history() {
         let task_id = uuid::Uuid::nil();
         let line = progress_line(
@@ -637,6 +715,109 @@ mod tests {
         assert_eq!(line.1, CYAN);
         assert!(line.2.contains("worker-codex · tool call"));
         assert!(line.2.contains("tool shell: cargo test --all"));
+    }
+
+    #[test]
+    fn labels_native_runtime_rollout_events_in_history_without_json() {
+        let task_id = uuid::Uuid::nil();
+        let raw_command = serde_json::json!({
+            "timestamp": "2026-06-26T00:00:01Z",
+            "item": {
+                "event_msg": {
+                    "exec_command_begin": { "command": ["cargo", "test", "--all"] }
+                }
+            }
+        })
+        .to_string();
+        let summary =
+            agent_events::summarize_cli_stream_line(&raw_command, 8_000).expect("summary");
+        let command = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "codex".into(),
+                role: "worker-codex".into(),
+                event_kind: summary.kind,
+                content: format!("codex tool_use: {}", summary.text),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("codex command should be visible");
+
+        assert_eq!(command.0, "↳");
+        assert!(command.2.contains("worker-codex · codex · tool call"));
+        assert!(command.2.contains("tool shell: cargo test --all"));
+        assert!(!command.2.contains('{'));
+        assert!(!command.2.contains("event_msg"));
+
+        let raw_approval = serde_json::json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "guardian_assessment",
+                "status": "in_progress",
+                "action": {
+                    "type": "command",
+                    "command": "rm -rf /tmp/guardian"
+                }
+            }
+        })
+        .to_string();
+        let summary =
+            agent_events::summarize_cli_stream_line(&raw_approval, 8_000).expect("approval");
+        let approval = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "codex".into(),
+                role: "worker-codex".into(),
+                event_kind: summary.kind,
+                content: format!("codex approval: {}", summary.text),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("approval should be visible");
+
+        assert_eq!(approval.0, "⚠");
+        assert!(approval.2.contains("worker-codex · codex · approval"));
+        assert!(approval.2.contains("waiting for permission approval"));
+
+        let raw_gemini = serde_json::json!({
+            "toolCalls": [
+                {
+                    "name": "replace",
+                    "displayName": "Edit",
+                    "status": "cancelled",
+                    "result": [
+                        {
+                            "functionResponse": {
+                                "response": {
+                                    "error": "[Operation Cancelled] Reason: User did not allow tool call"
+                                }
+                            }
+                        }
+                    ]
+                }
+            ]
+        })
+        .to_string();
+        let summary = agent_events::summarize_cli_stream_line(&raw_gemini, 8_000).expect("gemini");
+        let gemini = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "gemini".into(),
+                role: "worker-gemini".into(),
+                event_kind: summary.kind,
+                content: format!("gemini tool_result: {}", summary.text),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("gemini result should be visible");
+
+        assert_eq!(gemini.0, "✓");
+        assert!(gemini.2.contains("worker-gemini · gemini · tool result"));
+        assert!(gemini.2.contains("tool Edit error"));
+        assert!(!gemini.2.contains("functionResponse"));
     }
 
     #[test]
@@ -756,7 +937,34 @@ mod tests {
         assert_eq!(question.0, "?");
         assert_eq!(question.1, TIFFANY);
         assert!(question.2.contains("worker-cc · claude-code · question"));
-        assert!(question.2.contains("question requested"));
+        assert!(question.2.contains("waiting for user input"));
+
+        let detailed_question_payload = serde_json::json!({
+            "type": "tool_use",
+            "name": "AskUserQuestion",
+            "input": {
+                "questions": [
+                    { "question": "想了解比赛规则，还是直接写参赛 agent？" }
+                ]
+            }
+        });
+        let detailed_question = progress_line(
+            &RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".into(),
+                role: "worker-cc".into(),
+                event_kind: "tool_use".into(),
+                content: format!("claude-code tool_use: {detailed_question_payload}"),
+            },
+            0,
+            &InputState::default(),
+        )
+        .expect("detailed question should be visible");
+
+        assert_eq!(detailed_question.0, "?");
+        assert!(detailed_question
+            .2
+            .contains("想了解比赛规则，还是直接写参赛 agent？"));
 
         let waiting = progress_line(
             &RunProgress::WorkerOutput {

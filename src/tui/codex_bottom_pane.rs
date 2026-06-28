@@ -195,7 +195,7 @@ pub(super) fn hint_lines(input: &InputState, active: bool, terminal_width: usize
     } else if input.buffer.trim_start().starts_with('/') {
         "↑↓ select · Enter accept/run · Esc close · /help"
     } else if input.last_result_output.is_some() {
-        "/ for commands · /result text · /copy result · /doctor"
+        "/ for commands · /copy final answer · /process logs · /doctor"
     } else {
         "/ for commands · ↑↓ history · /doctor · /help"
     };
