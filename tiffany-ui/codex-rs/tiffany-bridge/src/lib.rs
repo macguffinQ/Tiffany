@@ -27,7 +27,8 @@ pub use native_history::{
     native_history_kind_matches,
 };
 pub use native_history_render::{
-    native_history_tool_event_label, native_turn_event_summary, render_native_history_mermaid,
+    NativeHistoryMarkdownTurn, native_history_tool_event_label, native_turn_event_summary,
+    render_native_history_markdown, render_native_history_mermaid,
     render_native_history_text_graph,
 };
 pub use native_session::{

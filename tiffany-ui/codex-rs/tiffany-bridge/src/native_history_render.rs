@@ -1,5 +1,62 @@
 use crate::native_chat_store::{NativeChatConversation, NativeChatEvent, NativeChatTurn};
 
+#[derive(Clone, Debug)]
+pub struct NativeHistoryMarkdownTurn<'a> {
+    pub turn_number: usize,
+    pub user_prompt: &'a str,
+    pub result: &'a str,
+    pub events: Vec<&'a NativeChatEvent>,
+}
+
+pub fn render_native_history_markdown(
+    conversation: &NativeChatConversation,
+    turns: &[NativeHistoryMarkdownTurn<'_>],
+    filter_label: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    out.push_str("# Tiffany Native Conversation History\n\n");
+    out.push_str(&format!("- Conversation: `{}`\n", conversation.id));
+    out.push_str(&format!("- CWD: `{}`\n", conversation.cwd));
+    out.push_str(&format!("- Turns: {}\n", turns.len()));
+    if let Some(filter) = filter_label.and_then(nonempty_trimmed) {
+        out.push_str(&format!("- Filter: `{}`\n", markdown_escape_inline(filter)));
+    }
+    out.push_str(&format!("- Created: {}\n", conversation.created_at_unix));
+    out.push_str(&format!("- Updated: {}\n\n", conversation.updated_at_unix));
+
+    for turn in turns {
+        out.push_str(&format!("## Turn {}\n\n", turn.turn_number));
+        out.push_str("### User\n\n");
+        out.push_str(turn.user_prompt.trim());
+        out.push_str("\n\n### Assistant Result\n\n");
+        out.push_str(turn.result.trim());
+        out.push_str("\n\n### Native Events\n\n");
+        if turn.events.is_empty() {
+            out.push_str("_No native events captured._\n\n");
+            continue;
+        }
+        for event in &turn.events {
+            out.push_str(&format!(
+                "- **{} {}**",
+                status_glyph(&event.status),
+                markdown_escape_inline(&event.title)
+            ));
+            let meta = native_event_markdown_meta(event);
+            if !meta.is_empty() {
+                out.push_str(&format!("  \n  {}", meta.join(" · ")));
+            }
+            out.push('\n');
+            if let Some(content) = event.content.as_deref().and_then(nonempty_trimmed) {
+                out.push_str("\n```text\n");
+                out.push_str(content.trim_end());
+                out.push_str("\n```\n");
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
 pub fn render_native_history_text_graph(
     conversation: &NativeChatConversation,
     limit: usize,
@@ -121,6 +178,36 @@ pub fn native_history_tool_event_label(prefix: &str, event: &NativeChatEvent) ->
         .unwrap_or_else(|| prefix.to_string())
 }
 
+fn native_event_markdown_meta(event: &NativeChatEvent) -> Vec<String> {
+    let mut meta = Vec::new();
+    if let Some(role) = event.worker_role.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("role `{}`", markdown_escape_inline(role)));
+    }
+    if let Some(kind) = event.kind.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("kind `{}`", markdown_escape_inline(kind)));
+    }
+    if let Some(agent) = event.agent.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("agent `{}`", markdown_escape_inline(agent)));
+    }
+    if let Some(provider) = event.provider.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("provider `{}`", markdown_escape_inline(provider)));
+    }
+    if let Some(model) = event.model.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("model `{}`", markdown_escape_inline(model)));
+    }
+    if let Some(thread) = event.worker_thread_id.as_deref().and_then(nonempty_trimmed) {
+        meta.push(format!("thread `{}`", markdown_escape_inline(thread)));
+    }
+    if let Some(native) = event
+        .native_session_id
+        .as_deref()
+        .and_then(nonempty_trimmed)
+    {
+        meta.push(format!("native `{}`", markdown_escape_inline(native)));
+    }
+    meta
+}
+
 fn limited_turns(conversation: &NativeChatConversation, limit: usize) -> Vec<&NativeChatTurn> {
     conversation
         .turns
@@ -200,6 +287,10 @@ fn escape_mermaid_label(value: &str) -> String {
         .replace('\n', " ")
 }
 
+fn markdown_escape_inline(value: &str) -> String {
+    value.replace('`', "\\`")
+}
+
 fn nonempty_trimmed(value: &str) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty()).then_some(value)
@@ -224,6 +315,16 @@ fn truncate_text(text: &str, max: usize) -> String {
 
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn status_glyph(status: &str) -> &'static str {
+    match status {
+        "ready" | "done" | "skipped" => "✓",
+        "failed" => "✗",
+        "warning" => "⚠",
+        "output" => "↳",
+        _ => "●",
+    }
 }
 
 #[cfg(test)]
@@ -277,6 +378,41 @@ mod tests {
         assert!(graph.contains("answer: 登录完成"));
         assert!(graph.contains("events: tool: Bash: cargo test -q -> tool result -> diff"));
         assert!(!graph.contains("\"command\""));
+    }
+
+    #[test]
+    fn native_history_markdown_renders_metadata_and_fenced_content() {
+        let mut conversation = conversation_with_events(vec![event(
+            "approval",
+            "waiting for permission approval: write access",
+        )]);
+        conversation.cwd = "/tmp/repo`tick".into();
+        conversation.turns[0].user_prompt = "需要权限".into();
+        conversation.turns[0].result = "等待用户批准".into();
+
+        let markdown = render_native_history_markdown(
+            &conversation,
+            &[NativeHistoryMarkdownTurn {
+                turn_number: 1,
+                user_prompt: &conversation.turns[0].user_prompt,
+                result: &conversation.turns[0].result,
+                events: conversation.turns[0].events.iter().collect(),
+            }],
+            Some("kind approval`danger"),
+        );
+
+        assert!(markdown.contains("# Tiffany Native Conversation History"));
+        assert!(markdown.contains("- CWD: `/tmp/repo`tick`"));
+        assert!(markdown.contains("- Filter: `kind approval\\`danger`"));
+        assert!(markdown.contains("## Turn 1"));
+        assert!(markdown.contains("### User\n\n需要权限"));
+        assert!(markdown.contains("- **↳ native approval**"));
+        assert!(markdown.contains("role `worker-cc`"));
+        assert!(markdown.contains("kind `approval`"));
+        assert!(markdown.contains("agent `claude-code`"));
+        assert!(markdown.contains("thread `thread-1`"));
+        assert!(markdown.contains("native `native-1`"));
+        assert!(markdown.contains("```text\nwaiting for permission approval: write access\n```"));
     }
 
     #[test]

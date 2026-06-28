@@ -503,3 +503,29 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker. Claude Code 2.1.193 is installed locally; `--help` confirms `stream-json`, `--verbose`, `--resume`, and `--session-id` semantics remain available. A live minimal `claude --print` smoke command produced no output within the short timeout and was cancelled, so this slice did not rely on live Claude network behavior.
 - Next:
   - Continue F5+ with another small pure native-history/search/export slice, or switch to real-runtime Claude/Codex/Gemini handoff verification if validation is now the priority.
+
+## F5+ — native history Markdown export rendering extraction completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Extract native history markdown rendering into tiffany bridge`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge native_history_markdown --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_history_export --lib --quiet` — green, 4 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_history --lib --quiet` — green, 26 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 43 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build --quiet` — green.
+  - `git diff --check` — green.
+- Decisions:
+  - Extended `tiffany-bridge/src/native_history_render.rs` with `NativeHistoryMarkdownTurn` and pure Markdown body rendering for `/history export`.
+  - Kept filtering, export path selection, directory creation, file writes, and Ratatui status lines in `codex-tui`.
+  - Preserved worker role and kind filtered exports through existing TUI tests.
+  - `tiffany_orchestrator.rs` is now 14,945 lines.
+  - No push and no release.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue F5+ with another small pure native-history slice, likely search hit extraction or compact storyline shaping, unless Claude prioritizes real-runtime handoff validation.

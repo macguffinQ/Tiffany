@@ -23,6 +23,7 @@ use tiffany_bridge::NATIVE_CHAT_STORE_SCHEMA_VERSION as NATIVE_SESSIONS_SCHEMA_V
 use tiffany_bridge::NativeHistoryCommand;
 use tiffany_bridge::NativeHistoryEventView;
 use tiffany_bridge::NativeHistoryFilter;
+use tiffany_bridge::NativeHistoryMarkdownTurn;
 use tiffany_bridge::NativeHistoryOptions;
 use tiffany_bridge::NativeSessionCommand as TiffanyBridgeNativeSessionCommand;
 use tiffany_bridge::NativeSessionRuntime as TiffanyNativeTranscriptRuntime;
@@ -65,6 +66,7 @@ use tiffany_bridge::parse_thread_fields;
 use tiffany_bridge::parse_thread_list_summaries;
 use tiffany_bridge::parse_worker_thread_title;
 use tiffany_bridge::provider_command_args;
+use tiffany_bridge::render_native_history_markdown;
 use tiffany_bridge::render_native_history_mermaid;
 use tiffany_bridge::render_native_history_text_graph;
 use tiffany_bridge::retry_prompt_from_jobs_retry_output;
@@ -2294,7 +2296,18 @@ fn native_history_export_lines(
             next_line("/history full", "show all native process events"),
         ];
     }
-    let body = render_native_history_markdown(conversation, &turns, filter.as_ref());
+    let filter_label = filter.as_ref().map(NativeHistoryFilter::display);
+    let markdown_turns = turns
+        .iter()
+        .map(|turn| NativeHistoryMarkdownTurn {
+            turn_number: turn.turn_number,
+            user_prompt: turn.user_prompt,
+            result: turn.result,
+            events: turn.events.clone(),
+        })
+        .collect::<Vec<_>>();
+    let body =
+        render_native_history_markdown(conversation, &markdown_turns, filter_label.as_deref());
     if let Some(parent) = path.parent()
         && let Err(err) = std::fs::create_dir_all(parent)
     {
@@ -2457,92 +2470,6 @@ fn default_native_history_graph_path(codex_home: &Path, cwd: &Path, mermaid: boo
             native_conversation_id(&cwd_key(cwd)),
             if mermaid { "mmd" } else { "txt" }
         ))
-}
-
-fn render_native_history_markdown(
-    conversation: &TiffanyNativeChatConversation,
-    turns: &[NativeHistoryTurnView<'_>],
-    filter: Option<&NativeHistoryFilter>,
-) -> String {
-    let mut out = String::new();
-    out.push_str("# Tiffany Native Conversation History\n\n");
-    out.push_str(&format!("- Conversation: `{}`\n", conversation.id));
-    out.push_str(&format!("- CWD: `{}`\n", conversation.cwd));
-    out.push_str(&format!("- Turns: {}\n", turns.len()));
-    if let Some(filter) = filter {
-        out.push_str(&format!(
-            "- Filter: `{}`\n",
-            markdown_escape_inline(&filter.display())
-        ));
-    }
-    out.push_str(&format!("- Created: {}\n", conversation.created_at_unix));
-    out.push_str(&format!("- Updated: {}\n\n", conversation.updated_at_unix));
-
-    for turn in turns {
-        out.push_str(&format!("## Turn {}\n\n", turn.turn_number));
-        out.push_str("### User\n\n");
-        out.push_str(turn.user_prompt.trim());
-        out.push_str("\n\n### Assistant Result\n\n");
-        out.push_str(turn.result.trim());
-        out.push_str("\n\n### Native Events\n\n");
-        if turn.events.is_empty() {
-            out.push_str("_No native events captured._\n\n");
-            continue;
-        }
-        for event in &turn.events {
-            out.push_str(&format!(
-                "- **{} {}**",
-                status_glyph(&event.status),
-                markdown_escape_inline(&event.title)
-            ));
-            let meta = native_event_markdown_meta(event);
-            if !meta.is_empty() {
-                out.push_str(&format!("  \n  {}", meta.join(" · ")));
-            }
-            out.push('\n');
-            if let Some(content) = event.content.as_deref().and_then(nonempty_trimmed) {
-                out.push_str("\n```text\n");
-                out.push_str(content.trim_end());
-                out.push_str("\n```\n");
-            }
-        }
-        out.push('\n');
-    }
-    out
-}
-
-fn native_event_markdown_meta(event: &TiffanyNativeChatEvent) -> Vec<String> {
-    let mut meta = Vec::new();
-    if let Some(role) = event.worker_role.as_deref().and_then(nonempty_trimmed) {
-        meta.push(format!("role `{}`", markdown_escape_inline(role)));
-    }
-    if let Some(kind) = event.kind.as_deref().and_then(nonempty_trimmed) {
-        meta.push(format!("kind `{}`", markdown_escape_inline(kind)));
-    }
-    if let Some(agent) = event.agent.as_deref().and_then(nonempty_trimmed) {
-        meta.push(format!("agent `{}`", markdown_escape_inline(agent)));
-    }
-    if let Some(provider) = event.provider.as_deref().and_then(nonempty_trimmed) {
-        meta.push(format!("provider `{}`", markdown_escape_inline(provider)));
-    }
-    if let Some(model) = event.model.as_deref().and_then(nonempty_trimmed) {
-        meta.push(format!("model `{}`", markdown_escape_inline(model)));
-    }
-    if let Some(thread) = event.worker_thread_id.as_deref().and_then(nonempty_trimmed) {
-        meta.push(format!("thread `{}`", markdown_escape_inline(thread)));
-    }
-    if let Some(native) = event
-        .native_session_id
-        .as_deref()
-        .and_then(nonempty_trimmed)
-    {
-        meta.push(format!("native `{}`", markdown_escape_inline(native)));
-    }
-    meta
-}
-
-fn markdown_escape_inline(value: &str) -> String {
-    value.replace('`', "\\`")
 }
 
 fn append_native_history_event_lines(
