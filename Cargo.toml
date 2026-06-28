@@ -10,10 +10,6 @@ homepage = "https://github.com/macguffinQ/Tiffany"
 keywords = ["agents", "cli", "llm", "orchestration", "tui"]
 categories = ["command-line-utilities", "development-tools"]
 
-[[bin]]
-name = "orchestrator"
-path = "src/main.rs"
-
 [lib]
 name = "orchestrator"
 path = "src/lib.rs"
@@ -37,7 +33,7 @@ serde_json = "1"
 shellexpand = "3"
 
 # Storage
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 
 # HTTP / API
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }

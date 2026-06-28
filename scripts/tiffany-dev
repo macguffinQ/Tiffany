@@ -48,8 +48,9 @@ tiffany-dev - run tiffany-loop from this source checkout
 
 Usage:
   ./scripts/tiffany-dev
-      Build ./target/dev-small/orchestrator and ./target/dev-small/tiffany-loop
-      when needed, then open the local tiffany-loop TUI in orchestrator mode.
+      Build ./target/dev-small/tiffany-loop when needed, create the
+      orchestrator/tiffany command aliases next to it, then open the local
+      tiffany-loop TUI in orchestrator mode.
       This is the source-checkout equivalent of running installed `tiffany-loop`.
 
   ./scripts/tiffany-dev orchestrator ["prompt"...]
@@ -84,7 +85,7 @@ In the TUI:
 Environment:
   TIFFANY_HOME              UI config/state root, default: ~/.tiffany
   TIFFANY_SQLITE_HOME       UI SQLite root, default: $TIFFANY_HOME
-  TIFFANY_ORCHESTRATOR_BIN  Orchestrator binary used by tiffany-loop
+  TIFFANY_ORCHESTRATOR_BIN  Optional orchestrator command override
   TIFFANY_CARGO_TARGET_DIR  shared Cargo target dir, default: ./target
   TIFFANY_DEV_PROFILE       Cargo profile for local binaries, default: dev-small
                             Set to dev for full debug symbols.
@@ -163,15 +164,20 @@ needs_rebuild() {
   [[ "$actual_stamp" != "$expected_stamp" ]]
 }
 
-build_orchestrator_bin() {
-  (cd "$repo_dir" && "$cargo_bin" build "${cargo_profile_args[@]}" --bin orchestrator)
+build_tiffany_bin() {
+  (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" build "${cargo_profile_args[@]}" -p tiffany-cli --bin tiffany-loop)
+  install_tiffany_aliases
+  write_build_stamp "$(profile_dir)/tiffany-loop"
   write_build_stamp "$(profile_dir)/orchestrator"
+  write_build_stamp "$(profile_dir)/tiffany"
 }
 
-build_tiffany_bin() {
-  (cd "$repo_dir/tiffany-ui/codex-rs" && "$cargo_bin" build "${cargo_profile_args[@]}" -p tiffany-cli --bin tiffany-loop --bin tiffany)
-  write_build_stamp "$(profile_dir)/tiffany-loop"
-  write_build_stamp "$(profile_dir)/tiffany"
+install_tiffany_aliases() {
+  local dir
+  dir="$(profile_dir)"
+  mkdir -p "$dir"
+  ln -sf tiffany-loop "$dir/orchestrator"
+  ln -sf tiffany-loop "$dir/tiffany"
 }
 
 ensure_orchestrator_bin() {
@@ -188,9 +194,10 @@ ensure_orchestrator_bin() {
     return
   fi
 
+  ensure_tiffany_bin
   orchestrator_bin="$(profile_dir)/orchestrator"
-  if needs_rebuild "$orchestrator_bin"; then
-    build_orchestrator_bin
+  if [[ ! -x "$orchestrator_bin" ]]; then
+    install_tiffany_aliases
   fi
 }
 
@@ -212,11 +219,14 @@ ensure_tiffany_bin() {
 
   if needs_rebuild "$tiffany_bin"; then
     build_tiffany_bin
+  elif [[ ! -x "$(profile_dir)/orchestrator" || ! -x "$(profile_dir)/tiffany" ]]; then
+    install_tiffany_aliases
   fi
 }
 
 run_tiffany() {
   ensure_tiffany_bin
+  export PATH="$(profile_dir):$PATH"
   if [[ "${TIFFANY_DEV_CARGO_RUN:-0}" == "1" ]]; then
     cd "$repo_dir/tiffany-ui/codex-rs"
     exec "$cargo_bin" run "${cargo_profile_args[@]}" -p tiffany-cli --bin tiffany-loop -- "$@"

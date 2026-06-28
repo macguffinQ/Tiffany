@@ -1,8 +1,8 @@
 # tiffany-loop architecture
 
 tiffany-loop is a preview-stage multi-agent orchestration shell. The public
-product name is `tiffany-loop`; the installed commands remain `orchestrator`
-and `tiffany` for compatibility.
+product name is `tiffany-loop`; the installed `orchestrator` and `tiffany`
+commands are compatibility aliases for the same multi-call binary.
 
 ## Layers (7 + session log)
 
@@ -74,7 +74,7 @@ previous routing model; UI code keeps those readable for compatibility.
 ├── scripts/                  # tiffany-loop dev/build/check entrypoints
 ├── tiffany-ui/               # primary tiffany-loop TUI fork
 ├── src/
-│   ├── main.rs                # CLI entry
+│   ├── cli_entry.rs           # runtime CLI entry exported through the library
 │   ├── lib.rs                 # library re-exports
 │   ├── cli.rs                 # command dispatch
 │   ├── config.rs              # YAML config + types
@@ -106,9 +106,9 @@ writes local runnable binaries to `target/dev-small/`. Use
 profile and full debug symbols in `target/debug/`.
 
 Normal release builds use `target/release/`. Fast distributable builds use
-`target/tiffany-dist/` and install the root `orchestrator` binary next to the
-primary `tiffany-loop` UI and the compatibility `tiffany` alias. The final
-binaries are small relative to the build cache; use
+`target/tiffany-dist/` and expose the same multi-call `tiffany-loop` binary as
+`orchestrator` and the compatibility `tiffany` alias. The final binaries are
+small relative to the build cache; use
 `./scripts/tiffany-build --fast-release --locked --prune-dist-cache` or
 `./scripts/tiffany-clean-targets --dist-cache` when you want to keep the runnable
 dist binaries but remove rebuildable dist internals.

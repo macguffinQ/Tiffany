@@ -18,7 +18,7 @@ tiffany-loop
 ```
 
 The tap repository should publish the formula at `Formula/tiffany-loop.rb`.
-The formula installs three binaries:
+The formula installs one multi-call binary exposed under three command names:
 
 - `orchestrator` for config, roles, event streaming, ACP, and non-interactive runs.
 - `tiffany-loop` for the primary TUI. Use this command first.
@@ -104,8 +104,9 @@ After that, pushing a tag like `vX.Y.Z` will:
 1. Run `./scripts/tiffany-release-preflight --quick --tag <tag>` on the tagged commit.
 2. Build the macOS Apple Silicon release archive used by Homebrew.
 3. Publish the GitHub Release.
-4. Update `macguffinQ/homebrew-tap` with a `tiffany-loop` formula that installs
-   `tiffany-loop`, `orchestrator`, and the compatibility alias `tiffany`.
+4. Update `macguffinQ/homebrew-tap` with a `tiffany-loop` formula that exposes
+   the same binary as `tiffany-loop`, `orchestrator`, and the compatibility alias
+   `tiffany`.
 
 The current release matrix publishes a prebuilt `aarch64-apple-darwin` archive.
 The generated formula uses that archive on Apple Silicon Macs. Intel Macs,

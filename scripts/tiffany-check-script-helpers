@@ -186,8 +186,8 @@ run_fake_tiffany_dev_status() {
 : >"$tiffany_dev_cargo_log"
 run_fake_tiffany_dev_status
 first_builds="$(wc -l <"$tiffany_dev_cargo_log" | tr -d ' ')"
-if [[ "$first_builds" != "2" ]]; then
-  echo "expected tiffany-dev to build missing orchestrator and UI binaries" >&2
+if [[ "$first_builds" != "1" ]]; then
+  echo "expected tiffany-dev to build the missing multi-call binary once" >&2
   echo "actual fake cargo invocations: $first_builds" >&2
   cat "$tiffany_dev_cargo_log" >&2
   exit 1
@@ -208,8 +208,8 @@ printf '%s\n' "stale stamp" >"$tiffany_dev_target/dev-small/tiffany-loop.tiffany
 : >"$tiffany_dev_cargo_log"
 run_fake_tiffany_dev_status
 stale_builds="$(wc -l <"$tiffany_dev_cargo_log" | tr -d ' ')"
-if [[ "$stale_builds" != "2" ]]; then
-  echo "expected tiffany-dev to rebuild binaries when source stamp is stale" >&2
+if [[ "$stale_builds" != "1" ]]; then
+  echo "expected tiffany-dev to rebuild the multi-call binary once when source stamp is stale" >&2
   echo "actual fake cargo invocations: $stale_builds" >&2
   cat "$tiffany_dev_cargo_log" >&2
   exit 1

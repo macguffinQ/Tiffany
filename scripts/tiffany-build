@@ -8,9 +8,9 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   printf '%s\n' \
     "Usage: ./scripts/tiffany-build [cargo-build-args...]" \
     "" \
-    "Builds runtime and UI binaries:" \
-    "  - target/*/orchestrator" \
-    "  - target/*/tiffany-loop (plus tiffany compatibility alias)" \
+    "Builds the single multi-call binary:" \
+    "  - target/*/tiffany-loop" \
+    "  - target/*/orchestrator and target/*/tiffany aliases" \
     "" \
     "Default profile: --small (target/dev-small). Use --dev for Cargo's normal debug profile." \
     "" \
@@ -128,14 +128,32 @@ run_build() {
   (cd "$dir" && "$cargo_bin" build "${cargo_flags[@]}" "$@")
 }
 
-run_build "orchestrator" "$repo_dir" --bin orchestrator
-run_build "tiffany-loop UI" "$repo_dir/tiffany-ui/codex-rs" -p tiffany-cli --bin tiffany-loop --bin tiffany
+run_build "tiffany-loop" "$repo_dir/tiffany-ui/codex-rs" -p tiffany-cli --bin tiffany-loop
+
+install_aliases_in() {
+  local dir="$1"
+  if [[ -x "$dir/tiffany-loop" ]]; then
+    ln -sf tiffany-loop "$dir/orchestrator"
+    ln -sf tiffany-loop "$dir/tiffany"
+  fi
+}
+
+install_aliases_in "$target_dir/dev-small"
+install_aliases_in "$target_dir/debug"
+install_aliases_in "$target_dir/release"
+install_aliases_in "$target_dir/tiffany-dist"
+if [[ -n "$build_target" ]]; then
+  install_aliases_in "$target_dir/$build_target/dev-small"
+  install_aliases_in "$target_dir/$build_target/debug"
+  install_aliases_in "$target_dir/$build_target/release"
+  install_aliases_in "$target_dir/$build_target/tiffany-dist"
+fi
 
 if [[ "$dist_mode" == "1" && "${TIFFANY_NO_STRIP:-0}" != "1" ]]; then
   case "$(uname -s)" in
     Darwin|Linux)
       if command -v strip >/dev/null 2>&1; then
-        for binary in "$target_dir/tiffany-dist/orchestrator" "$target_dir/tiffany-dist/tiffany-loop" "$target_dir/tiffany-dist/tiffany"; do
+        for binary in "$target_dir/tiffany-dist/tiffany-loop"; do
           if [[ -x "$binary" ]]; then
             echo "stripping $(basename "$binary")..."
             strip "$binary" || true

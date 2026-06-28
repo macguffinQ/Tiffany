@@ -227,13 +227,16 @@ class TiffanyLoop < Formula
 
   def install
     if (OS.mac? || OS.linux?) && (Hardware::CPU.arm? || Hardware::CPU.intel?)
-      bin.install "orchestrator", "tiffany-loop", "tiffany"
+      bin.install "tiffany-loop"
+      bin.install_symlink "tiffany-loop" => "orchestrator"
+      bin.install_symlink "tiffany-loop" => "tiffany"
     else
-      system "cargo", "install", *std_cargo_args, "--profile", "tiffany-dist"
       system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/tiffany-cli"), "--profile", "tiffany-dist"
+      bin.install_symlink "tiffany-loop" => "orchestrator"
+      bin.install_symlink "tiffany-loop" => "tiffany"
     end
 
-    system "strip", bin/"orchestrator", bin/"tiffany-loop", bin/"tiffany" if OS.mac? || OS.linux?
+    system "strip", bin/"tiffany-loop" if OS.mac? || OS.linux?
   end
 
   def caveats

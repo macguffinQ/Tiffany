@@ -3,18 +3,28 @@ use clap::Args;
 use clap::Parser;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
+#[cfg(feature = "tui")]
 use codex_config::LoaderOverrides;
+#[cfg(feature = "tui")]
 use codex_tui::AppExitInfo;
+#[cfg(feature = "tui")]
 use codex_tui::Cli as TuiCli;
+#[cfg(feature = "tui")]
 use codex_tui::ExitReason;
+#[cfg(feature = "tui")]
 use codex_tui::TiffanyOrchestratorLaunch;
+#[cfg(feature = "tui")]
 use codex_tui::run_main;
+use orchestrator as orchestrator_runtime;
 use std::env;
 use std::ffi::OsString;
+#[cfg(feature = "tui")]
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::ExitCode;
+#[cfg(feature = "tui")]
 use supports_color::Stream;
 
 const TIFFANY_HOME_ENV: &str = "TIFFANY_HOME";
@@ -152,6 +162,7 @@ struct TiffanyPassthroughCommand {
 }
 
 impl TiffanyOrchestratorCommand {
+    #[cfg(feature = "tui")]
     fn native_launch(&self) -> TiffanyOrchestratorLaunch {
         let prompt = self.args.join(" ");
         TiffanyOrchestratorLaunch {
@@ -165,6 +176,7 @@ impl TiffanyOrchestratorCommand {
         }
     }
 
+    #[cfg(any(feature = "tui", test))]
     fn event_args(&self) -> Vec<String> {
         let mut args = Vec::new();
         if let Some(planner) = &self.planner {
@@ -195,7 +207,21 @@ impl TiffanyOrchestratorCommand {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> ExitCode {
+    if is_orchestrator_invocation(env::args_os().next().as_ref()) {
+        return orchestrator_runtime::cli_entry::run_from_env();
+    }
+
+    match run_tiffany_from_env() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Error: {err:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_tiffany_from_env() -> anyhow::Result<()> {
     let args = env::args_os().collect::<Vec<_>>();
     if is_early_clap_request(&args) {
         TiffanyCli::parse_from(args);
@@ -207,6 +233,21 @@ fn main() -> anyhow::Result<()> {
         let cli = TiffanyCli::parse();
         run_tiffany(cli, arg0_paths).await
     })
+}
+
+fn is_orchestrator_invocation(arg0: Option<&OsString>) -> bool {
+    invocation_name(arg0).as_deref() == Some("orchestrator")
+}
+
+fn invocation_name(arg0: Option<&OsString>) -> Option<String> {
+    let arg0 = arg0?;
+    let file_name = Path::new(arg0).file_name()?.to_str()?;
+    Some(
+        file_name
+            .strip_suffix(".exe")
+            .unwrap_or(file_name)
+            .to_string(),
+    )
 }
 
 fn is_early_clap_request(args: &[OsString]) -> bool {
@@ -237,12 +278,9 @@ fn is_primary_tiffany_invocation(arg0: Option<&OsString>) -> bool {
     let Some(arg0) = arg0 else {
         return false;
     };
-    let Some(file_name) = Path::new(arg0).file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
     matches!(
-        file_name.strip_suffix(".exe").unwrap_or(file_name),
-        "tiffany-loop" | "tiffany"
+        invocation_name(Some(arg0)).as_deref(),
+        Some("tiffany-loop" | "tiffany")
     )
 }
 
@@ -263,6 +301,7 @@ async fn run_tiffany(cli: TiffanyCli, arg0_paths: Arg0DispatchPaths) -> anyhow::
     run_tiffany_orchestrator(command, arg0_paths).await
 }
 
+#[cfg(feature = "tui")]
 async fn run_tiffany_orchestrator(
     command: TiffanyOrchestratorCommand,
     arg0_paths: Arg0DispatchPaths,
@@ -286,6 +325,21 @@ async fn run_tiffany_orchestrator(
     )
     .await?;
     handle_exit(exit_info)
+}
+
+#[cfg(not(feature = "tui"))]
+async fn run_tiffany_orchestrator(
+    command: TiffanyOrchestratorCommand,
+    _arg0_paths: Arg0DispatchPaths,
+) -> anyhow::Result<()> {
+    if command.legacy {
+        run_orchestrator_bridge(command)?;
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "this tiffany-loop binary was built without the TUI feature; invoke it as `orchestrator` or rebuild with default features"
+    )
 }
 
 fn run_orchestrator_passthrough(subcommand: Subcommand) -> anyhow::Result<()> {
@@ -330,6 +384,7 @@ fn command_from_default_prompt(prompt: Option<String>) -> TiffanyOrchestratorCom
     }
 }
 
+#[cfg(feature = "tui")]
 fn base_tui_cli() -> TuiCli {
     TuiCli::parse_from(["tiffany-loop"])
 }
@@ -567,6 +622,7 @@ fn exe_name(name: &str) -> String {
     }
 }
 
+#[cfg(feature = "tui")]
 fn handle_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     let is_fatal = match &exit_info.exit_reason {
         ExitReason::Fatal(message) => {
@@ -587,6 +643,7 @@ fn handle_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "tui")]
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
     let is_fatal = matches!(&exit_info.exit_reason, ExitReason::Fatal(_));
     let AppExitInfo {
@@ -733,6 +790,22 @@ mod tests {
             OsString::from("help"),
             OsString::from("orchestrator")
         ]));
+    }
+
+    #[test]
+    fn argv0_orchestrator_dispatch_is_separate_from_tiffany_aliases() {
+        assert!(is_orchestrator_invocation(Some(&OsString::from(
+            "/opt/homebrew/bin/orchestrator"
+        ))));
+        assert!(is_orchestrator_invocation(Some(&OsString::from(
+            "orchestrator.exe"
+        ))));
+        assert!(!is_orchestrator_invocation(Some(&OsString::from(
+            "tiffany-loop"
+        ))));
+        assert!(!is_orchestrator_invocation(Some(&OsString::from(
+            "tiffany"
+        ))));
     }
 
     #[test]

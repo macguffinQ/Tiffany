@@ -109,14 +109,14 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 
 开发入口：
 
-- `./scripts/tiffany-dev`：默认进入 tiffany-loop orchestrator 的 tiffany-loop orchestration mode，首次缺失时构建 `./target/dev-small/orchestrator` 和 `./target/dev-small/tiffany-loop`，之后复用本地 binary 直接启动，打开后等待输入。需要完整调试符号时设置 `TIFFANY_DEV_PROFILE=dev`。
+- `./scripts/tiffany-dev`：默认进入 tiffany-loop orchestrator 的 tiffany-loop orchestration mode，首次缺失时构建一个 `./target/dev-small/tiffany-loop` multi-call binary，并在同目录生成 `orchestrator` / `tiffany` 别名，之后复用本地 binary 直接启动。需要完整调试符号时设置 `TIFFANY_DEV_PROFILE=dev`。
 - `./scripts/tiffany-dev --help`：只显示源码 checkout 的入口说明，不构建、不启动 UI。
 - `./scripts/tiffany-dev setup`：不安装二进制，直接运行本工程首次配置向导。
 - `./scripts/tiffany-dev config ...`：直接执行本工程 orchestrator config 命令，不会启动 TUI，也不要求 UI 登录；适合进 TUI 前先脚本化配置 provider。
 - `./scripts/tiffany-dev orchestrator "..."`：带初始问题立即运行 orchestrator 流程；native mode 默认执行者是 Claude Code（`worker-cc`），进入后输入框继续提交也会走 orchestrator。
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml`：指定 orchestrator 配置文件，同时继续让 tiffany-loop UI 配置隔离在 `TIFFANY_HOME`。
 - `./scripts/tiffany-dev orchestrator --legacy ...`：兼容旧 orchestrator CLI 桥接。
-- `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；默认使用源码本地运行的 `--small` profile，需要普通 debug profile 时用 `--dev`，需要更快的可分发构建时用 `--fast-release`。最终 dist 二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。需要构建后只保留最终 dist 二进制时，加 `--prune-dist-cache`。
+- `./scripts/tiffany-build [cargo-build-args...]`：构建单个 multi-call `tiffany-loop` binary，并在共享 `./target` 里生成 `orchestrator` / `tiffany` 别名；默认使用源码本地运行的 `--small` profile，需要普通 debug profile 时用 `--dev`，需要更快的可分发构建时用 `--fast-release`。最终 dist 二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。需要构建后只保留最终 dist 二进制时，加 `--prune-dist-cache`。
 - `./scripts/tiffany-check --smoke`：small debug 构建、检查 fork 格式，验证隔离安装入口、legacy bridge、事件流入口、fake Claude/Codex/Gemini runtime e2e，并运行示例 smoke 测试。
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
 - `./scripts/tiffany-install-smoke --smoke|--dist`：在临时 HOME 中验证 `orchestrator`、`tiffany-loop` 和 `tiffany` 兼容别名，不触碰真实用户配置。
@@ -137,8 +137,8 @@ Tag 发布 workflow 会先发布 GitHub Release asset。只有配置了仓库 se
 
 tiffany-loop 的 fork 状态和上游 UI 分离。默认使用 `TIFFANY_HOME=~/.tiffany`，tiffany-loop 内部配置读取会被映射到 `~/.tiffany/config.toml`，不会读写上游默认配置目录。SQLite 状态库默认也通过 `TIFFANY_SQLITE_HOME` 指到同一目录。需要多套配置时可以用 `TIFFANY_HOME=/path/to/tiffany-home` 覆盖。
 
-运行源码辅助脚本或直接运行 fork binary 时，可以设置 `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator`，也可以传 `tiffany-loop orchestrator --bin /path/to/orchestrator`。
-安装后的发布包会同时包含 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。`orchestrator tui` 会优先转到 `tiffany-loop orchestrator`，只有找不到 UI binary 时才回退到旧终端对话；需要强制旧入口时设置 `ORCHESTRATOR_LEGACY_TUI=1`。
+运行源码辅助脚本或直接运行 fork binary 时，`orchestrator` 和 `tiffany` 是同一个 `tiffany-loop` 可执行文件旁边的别名。`TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator` 和 `tiffany-loop orchestrator --bin /path/to/orchestrator` 仍保留为覆盖入口。
+安装后的发布包会把同一个 multi-call binary 暴露为 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。`orchestrator tui` 默认转到 `tiffany-loop orchestrator`；需要强制旧入口时设置 `ORCHESTRATOR_LEGACY_TUI=1`。
 
 ## 主要特性
 
@@ -218,7 +218,7 @@ tiffany-loop doctor
 `tiffany-loop doctor` 和 `orchestrator doctor` 会检查 Homebrew package
 prefix、实际安装的 `tiffany-loop` / `orchestrator` 二进制，以及这两个命令是否真的在 `PATH` 上可见。
 
-每个 `v*` tag 发布后，macOS、Linux 和 Windows 都会发布预编译 release 压缩包，里面包含 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。不在矩阵内的 CPU/OS 组合仍可用源码安装。
+每个 `v*` tag 发布后，macOS、Linux 和 Windows 都会发布预编译 release 压缩包，里面把同一个 multi-call binary 暴露为 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。不在矩阵内的 CPU/OS 组合仍可用源码安装。
 
 当前 release 目标状态：
 
@@ -246,9 +246,10 @@ macOS 源码构建如果在 Xcode 更新后失败，或 `xcode-select` 指向 `/
 如果不用 Homebrew，又想把命令安装进 `PATH`：
 
 ```bash
-cargo install --path . --profile tiffany-dist
 cargo install --path tiffany-ui/codex-rs/tiffany-cli --profile tiffany-dist
-strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v tiffany)" 2>/dev/null || true
+ln -sf "$(command -v tiffany-loop)" "$(dirname "$(command -v tiffany-loop)")/orchestrator"
+ln -sf "$(command -v tiffany-loop)" "$(dirname "$(command -v tiffany-loop)")/tiffany"
+strip "$(command -v tiffany-loop)" 2>/dev/null || true
 ```
 
 ```bash
@@ -380,8 +381,8 @@ behavior:
 |---|---|
 | `./scripts/tiffany-dev` | 运行 tiffany-loop UI |
 | `./scripts/tiffany-dev setup` | 从源码运行首次配置向导 |
-| `./scripts/tiffany-dev orchestrator` | 从 tiffany-loop fork 桥接到现有 orchestrator runtime |
-| `./scripts/tiffany-build [args]` | 在共享 `./target` 中构建 runtime 和 UI 二进制；默认等价源码本地运行的 `--small`，需要普通 debug 用 `--dev --locked`，也可用默认 strip 的 `--fast-release --locked`；加 `--prune-dist-cache` 可只保留最终 dist 二进制 |
+| `./scripts/tiffany-dev orchestrator` | 运行本地 tiffany-loop 编排 adapter |
+| `./scripts/tiffany-build [args]` | 在共享 `./target` 中构建单个 multi-call `tiffany-loop` binary，并生成 `orchestrator` / `tiffany` 别名；默认等价源码本地运行的 `--small`，需要普通 debug 用 `--dev --locked`，也可用默认 strip 的 `--fast-release --locked`；加 `--prune-dist-cache` 可只保留最终 dist 二进制 |
 | `./scripts/tiffany-check --smoke` | 执行快速本地 fork/install/bridge/example 验证 |
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/install/bridge/example 验证 |
 | `./scripts/tiffany-install-smoke --smoke|--dist` | 在隔离临时 HOME 中验证安装后的命令行为 |
@@ -600,7 +601,7 @@ AGENTS.md > CLAUDE.md > orchestrator history > Claude Code prior sessions
 # 构建
 cargo build                # 普通 debug profile
 cargo build --release
-./scripts/tiffany-build      # orchestrator + tiffany-loop UI，默认 dev-small
+./scripts/tiffany-build      # 单个 multi-call binary，默认 dev-small
 ./scripts/tiffany-build --small --locked
 ./scripts/tiffany-build --dev --locked
 ./scripts/tiffany-build --release --locked
@@ -669,7 +670,7 @@ cargo run -- config
 - `tiffany-loop orchestrator --legacy ...` 兼容旧 runtime
 - 已 vendor tiffany-loop TUI 源码快照：`third_party/openai-codex/codex-rs/tui`
 - `orchestrator tui` 在安装了 `tiffany-loop` 时默认进入 tiffany-loop UI
-- Release/Homebrew 同时安装 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`
+- Release/Homebrew 把同一个 multi-call binary 暴露为 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`
 - Session 导出为 Markdown/HTML
 - 成本预算告警
 - 后台任务和 attach

@@ -27,11 +27,11 @@ land in the fork and keep the upstream terminal architecture intact.
   bottom pending queue and merge into the next run when the current run exits.
 - `tiffany-loop orchestrator --legacy ...` remains as the compatibility bridge to
   the existing `orchestrator` CLI.
-- `./scripts/tiffany-dev` defaults to `tiffany-loop orchestrator --bin
-  target/debug/orchestrator`, building the local debug `orchestrator` binary
-  first when needed.
-- Source helper scripts share `./target` between the root orchestrator crate and
-  the tiffany-loop UI fork to avoid duplicate Cargo intermediate artifacts.
+- `./scripts/tiffany-dev` defaults to `tiffany-loop orchestrator` with a locally
+  built `target/dev-small/tiffany-loop` multi-call binary and adjacent
+  `orchestrator` / `tiffany` aliases.
+- Source helper scripts share `./target` and build the single tiffany-loop entry
+  from `codex-rs/tiffany-cli`, avoiding duplicate Cargo intermediate artifacts.
 - `./scripts/tiffany-dev orchestrator` is the explicit spelling for the same
   native adapter mode.
 - `orchestrator tui` delegates to an installed adjacent or PATH `tiffany-loop`
@@ -90,8 +90,8 @@ areas:
 - `tiffany-ui/codex-rs/tui/src/tiffany_orchestrator.rs`
 - small hook points that route native input, pending queue, provider, role, and
   doctor panels into the orchestrator bridge
-- release packaging paths that install `tiffany-loop`, `orchestrator`, and the
-  compatibility `tiffany` alias
+- release packaging paths that expose the same multi-call binary as
+  `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias
 
 If a sync requires broad edits to upstream render, resize, history, bottom pane,
 or terminal event code, stop and move the Tiffany behavior back behind the
@@ -105,7 +105,7 @@ cargo test --all
 cd tiffany-ui/codex-rs
 cargo fmt -- --check
 cargo test -p codex-tui tiffany_orchestrator --lib
-cargo build --locked -p tiffany-cli --bin tiffany-loop --bin tiffany
+cargo build --locked -p tiffany-cli --bin tiffany-loop
 ```
 
 ## Target Integration
@@ -138,15 +138,15 @@ follow-ups, and pending queue drain for plain prompts.
 
 ## Migration Steps
 
-1. Use `./scripts/tiffany-build` to build the runtime and UI binaries.
+1. Use `./scripts/tiffany-build` to build the single multi-call binary and aliases.
 2. Use `./scripts/tiffany-check --smoke` as the local fork/bridge smoke test.
 3. Use `./scripts/tiffany-check --dist` before cutting a release archive.
 4. Run the native tiffany-loop adapter through `./scripts/tiffany-dev`.
 5. Use `tiffany-loop "..."` for an initial prompt in the native tiffany-loop
    TUI event adapter.
 6. Keep `tiffany-loop orchestrator --legacy ...` only for compatibility checks.
-7. Keep release/Homebrew packaging installing `tiffany-loop`, `orchestrator`,
-   and the compatibility alias `tiffany`.
+7. Keep release/Homebrew packaging exposing `tiffany-loop`, `orchestrator`, and
+   the compatibility alias `tiffany` from the same binary.
 8. Remove legacy partial upstream copies under `src/tui/codex_*` when the fork path
    is stable.
 

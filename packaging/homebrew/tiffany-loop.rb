@@ -10,11 +10,12 @@ class TiffanyLoop < Formula
   depends_on "rust" => :build
 
   def install
-    system "cargo", "install", *std_cargo_args, "--profile", "tiffany-dist"
     system "cargo", "install", *std_cargo_args(path: "tiffany-ui/codex-rs/tiffany-cli"), "--profile", "tiffany-dist"
+    bin.install_symlink "tiffany-loop" => "orchestrator"
+    bin.install_symlink "tiffany-loop" => "tiffany"
 
     if OS.mac? || OS.linux?
-      system "strip", "#{bin}/orchestrator", "#{bin}/tiffany-loop", "#{bin}/tiffany"
+      system "strip", "#{bin}/tiffany-loop"
     end
   end
 

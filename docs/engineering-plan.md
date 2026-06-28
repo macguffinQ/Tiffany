@@ -126,6 +126,15 @@ Acceptance:
 - `tiffany-loop`, `orchestrator`, and `tiffany` are one multi-call binary;
   invoking any name works with no PATH coupling and no discovery step. This
   replaces the old "adjacent binary discovery" requirement.
+- A runtime-only slim build of the single binary exists and smoke-passes:
+  building with the TUI feature off produces a working orchestrator-mode binary
+  (`--help`, `status`) without the Codex TUI compiled in — the hedge against the
+  one-binary merge raising build cost.
+- The Codex TUI is a feature-gated dependency of the single binary
+  (`optional = true`, default feature), so the slim path cannot regress silently.
+- CI tracks clean release-build time for the default (full) binary and fails on a
+  regression beyond a set threshold versus the pre-merge baseline; the one-binary
+  merge ships only if build weight stays bounded.
 - Upstream update prompts are disabled in Tiffany mode.
 - `tiffany-ui/UPSTREAM.md` exists, names the frozen upstream commit, and lists
   the Tiffany-owned file set versus the vendored-untouched set.

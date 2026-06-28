@@ -104,14 +104,14 @@ The legacy [`src/tui`](src/tui/) path remains only as a compatibility bridge for
 
 Development entrypoints:
 
-- `./scripts/tiffany-dev` - run the tiffany-loop orchestrator in tiffany-loop orchestration mode, reusing `./target/dev-small/orchestrator` and `./target/dev-small/tiffany-loop` after the first build, then waiting for input. Set `TIFFANY_DEV_PROFILE=dev` when you need full debug symbols.
+- `./scripts/tiffany-dev` - run the tiffany-loop orchestrator in tiffany-loop orchestration mode, reusing one `./target/dev-small/tiffany-loop` binary plus `orchestrator`/`tiffany` aliases after the first build, then waiting for input. Set `TIFFANY_DEV_PROFILE=dev` when you need full debug symbols.
 - `./scripts/tiffany-dev --help` - explain the source-checkout entrypoints without building or launching the UI.
 - `./scripts/tiffany-dev setup` - run the local first-run setup wizard without installing binaries.
 - `./scripts/tiffany-dev config ...` - run the local orchestrator config command directly. It does not launch the TUI or require a UI login; use it for scriptable provider setup before opening the TUI.
 - `./scripts/tiffany-dev orchestrator "..."` - run the orchestrator pipeline immediately with an initial prompt; native mode defaults worker execution to Claude Code (`worker-cc`), and later input-box submissions are routed into the same orchestrator pipeline.
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml` - use a specific orchestrator config while keeping tiffany-loop UI config isolated under `TIFFANY_HOME`.
 - `./scripts/tiffany-dev orchestrator --legacy ...` - compatibility bridge to the old orchestrator CLI.
-- `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI in the shared `./target` directory. It defaults to `--small` for source-checkout local binaries; use `--dev` for Cargo's normal debug profile or `--fast-release` for a faster distributable build. Final dist binaries are stripped unless `TIFFANY_NO_STRIP=1`. Add `--prune-dist-cache` when you want to keep only the final dist binaries after a successful build.
+- `./scripts/tiffany-build [cargo-build-args...]` - build the single multi-call `tiffany-loop` binary and create `orchestrator`/`tiffany` aliases in the shared `./target` directory. It defaults to `--small` for source-checkout local binaries; use `--dev` for Cargo's normal debug profile or `--fast-release` for a faster distributable build. Final dist binaries are stripped unless `TIFFANY_NO_STRIP=1`. Add `--prune-dist-cache` when you want to keep only the final dist binaries after a successful build.
 - `./scripts/tiffany-check --smoke` - small debug-build, format-check the fork, verify the isolated install surface, legacy bridge, event-stream entrypoint, fake Claude/Codex/Gemini runtime e2e, and example smoke tests.
 - `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
 - `./scripts/tiffany-install-smoke --smoke|--dist` - verify `orchestrator`, `tiffany-loop`, and the `tiffany` alias in a temporary HOME without touching real user config.
@@ -132,8 +132,8 @@ For source-checkout development, `./scripts/tiffany-dev` builds missing `dev-sma
 
 tiffany-loop keeps fork state separate from upstream UI source. The fork uses `TIFFANY_HOME`, defaulting to `~/.tiffany`, and maps UI-internal config reads to `~/.tiffany/config.toml` instead of the upstream default config directory. SQLite state defaults to the same root through `TIFFANY_SQLITE_HOME`. Override with `TIFFANY_HOME=/path/to/tiffany-home`.
 
-When running the source helper or fork binary directly, set `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator` or pass `tiffany-loop orchestrator --bin /path/to/orchestrator`.
-Installed builds include `tiffany-loop`, `orchestrator`, and the compatibility alias `tiffany`; `orchestrator tui` delegates to `tiffany-loop orchestrator` when the UI binary is installed, and falls back to the legacy terminal chat only when it is missing. Set `ORCHESTRATOR_LEGACY_TUI=1` to force the fallback.
+When running the source helper or fork binary directly, `orchestrator` and `tiffany` are aliases next to the same `tiffany-loop` executable. `TIFFANY_ORCHESTRATOR_BIN=/path/to/orchestrator` and `tiffany-loop orchestrator --bin /path/to/orchestrator` remain as overrides.
+Installed builds include one multi-call binary exposed as `tiffany-loop`, `orchestrator`, and the compatibility alias `tiffany`; `orchestrator tui` delegates to `tiffany-loop orchestrator` unless `ORCHESTRATOR_LEGACY_TUI=1` forces the legacy terminal chat.
 
 ---
 
@@ -317,7 +317,7 @@ both commands are actually visible on `PATH`. They also compare the installed
 package, local tap formula, and remote tap formula when Homebrew appears stuck
 on an older release.
 
-Prebuilt release archives are published for macOS, Linux, and Windows after each `v*` tag. Archives include `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias. Source install remains available for unsupported CPU/OS combinations or local development.
+Prebuilt release archives are published for macOS, Linux, and Windows after each `v*` tag. Archives expose the same multi-call binary as `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias. Source install remains available for unsupported CPU/OS combinations or local development.
 
 Current release target status:
 
@@ -345,9 +345,10 @@ On macOS source builds, run `orchestrator doctor` if compilation fails after an 
 Manual source install, if you want the commands in `PATH` without Homebrew:
 
 ```bash
-cargo install --path . --profile tiffany-dist
 cargo install --path tiffany-ui/codex-rs/tiffany-cli --profile tiffany-dist
-strip "$(command -v orchestrator)" "$(command -v tiffany-loop)" "$(command -v tiffany)" 2>/dev/null || true
+ln -sf "$(command -v tiffany-loop)" "$(dirname "$(command -v tiffany-loop)")/orchestrator"
+ln -sf "$(command -v tiffany-loop)" "$(dirname "$(command -v tiffany-loop)")/tiffany"
+strip "$(command -v tiffany-loop)" 2>/dev/null || true
 ```
 
 ```bash
@@ -492,8 +493,8 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 |---|---|
 | `./scripts/tiffany-dev` | Run the tiffany-loop UI |
 | `./scripts/tiffany-dev setup` | Run the first-run setup wizard from source |
-| `./scripts/tiffany-dev orchestrator` | Bridge from the tiffany-loop fork into the existing orchestrator runtime |
-| `./scripts/tiffany-build [args]` | Build runtime and UI binaries in shared `./target`; defaults to `--small`, use `--dev --locked` for normal debug, or use stripped `--fast-release --locked`; add `--prune-dist-cache` to keep only final dist binaries |
+| `./scripts/tiffany-dev orchestrator` | Run the local tiffany-loop orchestration adapter |
+| `./scripts/tiffany-build [args]` | Build the single multi-call `tiffany-loop` binary plus `orchestrator`/`tiffany` aliases in shared `./target`; defaults to `--small`, use `--dev --locked` for normal debug, or use stripped `--fast-release --locked`; add `--prune-dist-cache` to keep only final dist binaries |
 | `./scripts/tiffany-check --smoke` | Run the fast local fork/install/bridge/example verification |
 | `./scripts/tiffany-check --dist` | Run the release-profile fork/install/bridge/example verification |
 | `./scripts/tiffany-install-smoke --smoke|--dist` | Verify installed command behavior in an isolated temporary HOME |
@@ -766,7 +767,7 @@ Agent Teams (CC's experimental multi-agent feature) already does shared task lis
 # Build
 cargo build              # normal debug profile
 cargo build --release    # release, ~5-8min first time
-./scripts/tiffany-build   # orchestrator + tiffany-loop UI, defaults to dev-small
+./scripts/tiffany-build   # single multi-call binary, defaults to dev-small
 ./scripts/tiffany-build --small --locked
 ./scripts/tiffany-build --dev --locked
 ./scripts/tiffany-build --release --locked
@@ -891,7 +892,7 @@ Current beta status:
 - [x] Vendored tiffany-loop TUI source snapshot under `third_party/openai-codex/codex-rs/tui`
 - [x] Native tiffany-loop adapter inside the tiffany-loop TUI app/session layer
 - [x] Make the tiffany-loop UI the default `orchestrator tui` command path when `tiffany-loop` is installed
-- [x] Release/Homebrew packaging installs `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias
+- [x] Release/Homebrew packaging exposes one multi-call binary as `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias
 - [x] Session export (markdown / HTML)
 - [x] Cost budget alerts
 - [x] Background task mode (`orchestrator run --detach` + `orchestrator attach`)

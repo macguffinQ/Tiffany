@@ -8,9 +8,9 @@ license.workspace = true
 name = "tiffany-loop"
 path = "src/main.rs"
 
-[[bin]]
-name = "tiffany"
-path = "src/bin/tiffany.rs"
+[features]
+default = ["tui"]
+tui = ["dep:codex-tui"]
 
 [lints]
 workspace = true
@@ -20,5 +20,6 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-arg0 = { workspace = true }
 codex-config = { workspace = true }
-codex-tui = { workspace = true }
+codex-tui = { workspace = true, optional = true }
+orchestrator = { package = "tiffany-loop", path = "../../.." }
 supports-color = { workspace = true }

@@ -98,32 +98,19 @@ jobs:
             exit 1
           fi
 
-      - name: Build orchestrator
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo_args=(--profile tiffany-dist --locked --bin orchestrator)
-          if [[ "${{ matrix.native }}" != "true" ]]; then
-            cargo_args+=(--target "${{ matrix.target }}")
-          fi
-          started_at="$(date +%s)"
-          cargo build "${cargo_args[@]}"
-          finished_at="$(date +%s)"
-          echo "orchestrator build took $((finished_at - started_at))s"
-
-      - name: Build tiffany-loop UI
+      - name: Build tiffany-loop
         shell: bash
         working-directory: tiffany-ui/codex-rs
         run: |
           set -euo pipefail
-          cargo_args=(--profile tiffany-dist --locked -p tiffany-cli --bin tiffany-loop --bin tiffany)
+          cargo_args=(--profile tiffany-dist --locked -p tiffany-cli --bin tiffany-loop)
           if [[ "${{ matrix.native }}" != "true" ]]; then
             cargo_args+=(--target "${{ matrix.target }}")
           fi
           started_at="$(date +%s)"
           cargo build "${cargo_args[@]}"
           finished_at="$(date +%s)"
-          echo "tiffany-loop UI build took $((finished_at - started_at))s"
+          echo "tiffany-loop build took $((finished_at - started_at))s"
 
       - name: Package
         shell: bash
@@ -155,38 +142,34 @@ jobs:
           }
 
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            for binary in orchestrator.exe tiffany-loop.exe tiffany.exe; do
-              if [[ ! -f "${binary_dir}/${binary}" ]]; then
-                echo "::error::missing release binary ${binary_dir}/${binary}"
-                ls -la "${binary_dir}" || true
-                exit 1
-              fi
-            done
-            cp "${binary_dir}/orchestrator.exe" "${staging}/"
+            if [[ ! -f "${binary_dir}/tiffany-loop.exe" ]]; then
+              echo "::error::missing release binary ${binary_dir}/tiffany-loop.exe"
+              ls -la "${binary_dir}" || true
+              exit 1
+            fi
             cp "${binary_dir}/tiffany-loop.exe" "${staging}/"
-            cp "${binary_dir}/tiffany.exe" "${staging}/"
+            cp "${binary_dir}/tiffany-loop.exe" "${staging}/orchestrator.exe"
+            cp "${binary_dir}/tiffany-loop.exe" "${staging}/tiffany.exe"
             if [[ "${{ matrix.native }}" == "true" ]]; then
               assert_binary_version "${staging}/orchestrator.exe"
               assert_binary_version "${staging}/tiffany-loop.exe"
               assert_binary_version "${staging}/tiffany.exe"
             fi
           else
-            for binary in orchestrator tiffany-loop tiffany; do
-              if [[ ! -x "${binary_dir}/${binary}" ]]; then
-                echo "::error::missing release binary ${binary_dir}/${binary}"
-                ls -la "${binary_dir}" || true
-                exit 1
-              fi
-            done
-            cp "${binary_dir}/orchestrator" "${staging}/"
+            if [[ ! -x "${binary_dir}/tiffany-loop" ]]; then
+              echo "::error::missing release binary ${binary_dir}/tiffany-loop"
+              ls -la "${binary_dir}" || true
+              exit 1
+            fi
             cp "${binary_dir}/tiffany-loop" "${staging}/"
-            cp "${binary_dir}/tiffany" "${staging}/"
+            ln -s tiffany-loop "${staging}/orchestrator"
+            ln -s tiffany-loop "${staging}/tiffany"
             if [[ "${{ matrix.native }}" == "true" ]]; then
               assert_binary_version "${staging}/orchestrator"
               assert_binary_version "${staging}/tiffany-loop"
               assert_binary_version "${staging}/tiffany"
             fi
-            strip "${staging}/orchestrator" "${staging}/tiffany-loop" "${staging}/tiffany" || true
+            strip "${staging}/tiffany-loop" || true
           fi
 
           cp README.md README.zh-CN.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md "${staging}/"

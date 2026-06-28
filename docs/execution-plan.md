@@ -6,40 +6,59 @@ executes.** Each card below is a self-contained task Codex can pick up. The
 planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
 (Codex) owns implementation.
 
-## Active instructions from Claude (2026-06-28)
+## Active instructions from Claude (updated 2026-06-28, after F5 local slice)
 
-- **F1 and F2 are done and verified.** F1's 11 commits (G0–G4) all build green
-  and pass the fast gate; F2 landed as `4b7848e Document upstream fork boundary`
-  and `tiffany-ui/UPSTREAM.md` is accurate and thorough (frozen point recorded,
-  exact upstream commit correctly left TODO, owned-file list complete). Good
-  work. No push, as required.
-- **Next: do F4 (scaffold + one slice).** See the F4 card — placement is
-  corrected to `tiffany-ui/codex-rs/tiffany-bridge/` (codex-rs workspace member,
-  not `tiffany-ui/tiffany-bridge/`), and the first slice is the native-session-
-  path cluster or config parsing.
-- **Ordering reply to Codex's F2 log (you proposed F3 next): hold — F4 first.**
-  F3 is NOT the low-risk step it looks like: the probe showed "one binary" is a
-  crate merge that reverses the fork→outer dependency and touches five install
-  files in lockstep. F4 is unblocked, decision-free, and the god-file is still
-  growing with every commit, so structural extraction comes first. There is no
-  release imminent (no push, pre-`v0.2`), so the binary-discovery failure mode
-  is not urgent for installed users right now. **Do F4 next.**
-- **F3 direction is locked (user-confirmed 2026-06-28): Option A** — single binary via `tiffany-cli`
-  gaining a path dep on the outer `orchestrator` lib plus `argv[0]` dispatch.
-  This executes the locked Product Contract. You MAY run F3 Step 0 recon in
-  parallel with F4 (report in `docs/codex-log.md` how the TUI reaches the
-  runtime today: subprocess spawn vs lib call). Do NOT start the merge itself
-  until recon is logged; if recon finds Option A infeasible, stop and report
-  rather than forcing it.
-- **F3 build-cost caveat (user judgment 2026-06-28):** linking the Codex TUI
-  into the single root binary will raise compile cost noticeably. The trade is
-  accepted — it kills the real install failure class ("event bridge failed",
-  "can't find orchestrator"). But it makes slimming mandatory afterward:
-  structure the merge so the TUI is a feature-gated dependency from day one
-  (declare it `optional = true` behind a default feature, so a runtime-only slim
-  build can be exposed later without restructuring — see queued F7), and F4+
-  bridge extraction must continue to lean the TUI crate. This reinforces
-  F4-first: leaning the crate before the merge shrinks the build-cost hit.
+- **F1, F2, F4 ✅ done and verified.** F1 (G0–G4) and F2 (`4b7848e`) as before;
+  F4 landed as `15c50d2` Extract config summary into tiffany bridge.
+  `tiffany-bridge` is a codex-rs workspace member at
+  `tiffany-ui/codex-rs/tiffany-bridge/`; one pure slice moved (config YAML
+  parsing + default worker readiness summary); no dep back on `codex-tui`;
+  build + fast gate green. Extraction pattern proven. No push (~127 ahead).
+- **F3 ✅ implemented locally, verified, staged for the combined fallback
+  commit.** The feasible
+  direction was `tiffany-cli` → outer `orchestrator` lib. The probe did not hit
+  the `codex-rmcp` skew in this direction; it hit a SQLite native-link mismatch
+  instead, fixed by aligning root `rusqlite` to the Codex workspace's
+  `libsqlite3-sys` line. Current local tree builds one Cargo bin
+  (`tiffany-loop`) and exposes `orchestrator` / `tiffany` as package/dev aliases.
+  `tiffany-cli` dispatches by argv[0], and `codex-tui` is optional behind the
+  default `tui` feature. No push, no release tag.
+- **F5 ✅ implemented locally, verified, staged for the combined fallback
+  commit.** Moved the
+  native-session path helper slice into `tiffany-bridge` as
+  `src/native_session.rs`: runtime detection, Claude/Codex/Gemini transcript
+  path lookup, Gemini project hash, and Gemini message count. `codex-tui`
+  now uses a thin adapter in `tiffany_orchestrator.rs`; transcript parsing and
+  rendering stayed in the TUI. One slice only.
+- **Commit directive resolved with the allowed combined fallback; push still
+  gated.** F3 + F5 are staged together because the F3-only split forced a fresh
+  fork lockfile generation that rolled unrelated upstream dependencies. Do not
+  freeze that noisy intermediate. The started `scripts/tiffany-slim-smoke`
+  remains untracked F7 groundwork and is NOT bundled here. Original target was
+  TWO logical commits if each builds green —
+    - F3 first: `Unify tiffany-loop, orchestrator, and tiffany into one
+      multi-call binary` (delete root `src/main.rs`, add `src/cli_entry.rs`,
+      argv[0] dispatch in `tiffany-cli/src/main.rs`, drop
+      `tiffany-cli/src/bin/tiffany.rs`, `codex-tui` optional behind the `tui`
+      feature, the install-surface files, and the SQLite alignment). The commit
+      body MUST note the new coupling — outer `rusqlite` now tracks the vendored
+      codex-rs `libsqlite3-sys` line — and add a one-line
+      `tiffany-ui/UPSTREAM.md` Non-Owned Vendored Edit Log entry for it.
+    - F5 second: `Extract native session path helpers into tiffany bridge`.
+  The applied fallback is ONE combined commit with a body covering both. Still
+  DO NOT push.
+- **Next:** F7 is the M0-critical follow-up because F3 already made `codex-tui`
+  optional; finish the slim runtime-only smoke path and CI/preflight guard. If
+  staying on extraction instead, the next F5+ slice should be visible-output
+  formatting, not transcript parsing.
+- **Tech debt noted (not blocking):** a full `cargo test -p codex-tui --lib` run
+  hangs / has snapshot drift unrelated to F4 — Codex killed a stuck run and
+  cleaned `.snap.new`. Track as queued F8 before it bites CI. Targeted fast-gate
+  tests all pass.
+- **F7 is now M0-required (hard acceptance, per user 2026-06-28):** the slim
+  runtime-only build must exist and smoke-pass before M0 / `v0.2` ships. F3 must
+  declare the TUI dep `optional = true` to make this cheap.
+- **Still no push, no release tag.**
 
 Toolchain note for every task: cargo lives at `/Users/allendred/.cargo/bin/cargo`
 (not on the default PATH), toolchain `+1.95.0`. Fast validation gate to run
@@ -57,9 +76,10 @@ git diff --check
 ```
 F1 (commit hygiene)        ── independent
 F2 (UPSTREAM.md)           ── independent, unblocks F4
-F3 (multi-call binary)     ── independent
+F3 (multi-call binary)     ── independent, local merge verified
 F4 (bridge crate + first   ── blocked by F2
      extraction slice)
+F5 (native session paths)  ── local slice verified
 PUSH (origin/main)         ── GATED, user-only, only after F1 grouping approved
 ```
 
@@ -96,18 +116,18 @@ beyond the scaffold until F2 lands.
   files/seams, and seeds a Non-Owned Vendored Edit Log (with a forward entry for
   F4 bridge wiring). Verified by Claude; no changes needed.
 
-## F3 — Single multi-call binary — Option A confirmed; recon-gated, do F4 first
+## F3 — Single multi-call binary — ✅ STAGED IN COMBINED FALLBACK COMMIT
 
-- **Reality (from probe):** the three command names are NOT one binary today.
-  - `orchestrator` ← top-level package `tiffany-loop`, `[[bin]]` → `src/main.rs`
-    (runtime/scripting entry; also `[lib] name = orchestrator`).
-  - `tiffany-loop` + `tiffany` ← the `tiffany-cli` crate
-    (`tiffany-ui/codex-rs/tiffany-cli`; two `[[bin]]`s → `src/main.rs` and
-    `src/bin/tiffany.rs`; depends on `codex-tui`). UI entry.
-  - `.github/workflows/release.yml` builds them in two separate `cargo build`
-    steps; the Homebrew formula and `tiffany-update-homebrew-tap` install all
-    three. So the Product Contract's "one multi-call binary" is a crate merge,
-    not an argv[0] tweak.
+- **Status:** implemented, verified, and staged with F5 in the combined fallback
+  commit. No push or release has happened.
+- **Previous reality:** the three command names used to be separate binaries:
+  root `orchestrator`, plus `tiffany-cli`'s `tiffany-loop` and `tiffany`.
+- **Current implementation:** `tiffany-cli` is now the single Cargo binary. It
+  depends on the outer `orchestrator` library and dispatches by argv[0] basename:
+  `tiffany-loop` / `tiffany` → TUI, `orchestrator` → runtime CLI. The root package
+  keeps `[lib]` and drops the explicit `[[bin]] orchestrator`; the old
+  `src/bin/tiffany.rs` wrapper is removed so Cargo metadata exposes only
+  `tiffany-loop`.
 - **Option A (recommended, honors the locked contract):** make `tiffany-cli`
   the single binary. It gains a path dep on the outer `orchestrator` lib and its
   `main()` dispatches by `argv[0]` basename — `tiffany-loop`/`tiffany` → TUI,
@@ -130,23 +150,27 @@ beyond the scaffold until F2 lands.
   F4+ bridge extraction. Design the merge so the TUI is a feature-gated
   dependency from the start (`optional = true`, default feature); retrofitting
   that later is expensive.
-- **Step 0 (do now, in parallel with F4; needs no decision):** recon — determine
-  how the TUI reaches the runtime today (subprocess spawn of `orchestrator`, or a
-  lib call into the `orchestrator` lib). Write the finding to `docs/codex-log.md`.
-  If recon confirms the TUI can link the `orchestrator` lib (or be made to),
-  proceed with Option A; if it reveals a hard blocker, stop and report.
-- **Acceptance (once A is approved):** one binary; all three names dispatch
-  correctly and are unit-tested; `cargo +1.95.0 build` + fast gate green;
-  release.yml / formula / tap / release-targets all consistent; legacy `src/tui/`
-  untouched.
+- **Step 0 ✅ DONE (recon result):** the "link TUI into root" direction is blocked
+  by `codex-rmcp-client` type skew (`InitializeResult` vs `Arc<InitializeResult>`)
+  and nested-workspace pull-in. The feasible direction is `tiffany-cli` → outer
+  `orchestrator` lib.
+- **Acceptance:** one binary; all three names dispatch correctly and are
+  unit-tested; `cargo +1.95.0 build` + fast gate green; release.yml / formula /
+  tap / release-targets all consistent; legacy `src/tui/` untouched.
 - **Deps:** none.
 - **Risk:** the fork→outer dependency direction (`tiffany-cli` depending on the
   outer `orchestrator` lib) is a new coupling; `tiffany-cli` is Tiffany-owned so
   it is acceptable, but record it. Five install-surface files must change in
   lockstep or release breaks.
 
-## F4 — Scaffold `tiffany-bridge` crate + first extraction slice
+## F4 — Scaffold `tiffany-bridge` crate + first extraction slice — ✅ DONE
 
+- **Status:** complete (commit `15c50d2`). `tiffany-bridge` created as a codex-rs
+  workspace member at `tiffany-ui/codex-rs/tiffany-bridge/`; one pure slice moved
+  (config YAML parsing + default worker readiness summary); no dep back on
+  `codex-tui`; UPSTREAM.md updated; build + fast gate green (tiffany-bridge 2
+  tests, codex-tui `tiffany_orchestrator` 243 tests). Pattern proven. Further
+  extraction is queued as F5+.
 - **Goal:** stand up the crate boundary that `tiffany_orchestrator.rs` (~18.5k
   lines) migrates into, and prove the pattern by moving ONE self-contained
   slice. Do NOT move more than one slice in this task.
@@ -187,6 +211,22 @@ beyond the scaffold until F2 lands.
   internals hits the circular-dependency wall — which is why purity is verified
   before moving. Never big-bang; one slice, build green, then stop.
 
+## F5 — Native session path helpers — ✅ STAGED IN COMBINED FALLBACK COMMIT
+
+- **Status:** implemented, verified, and staged with F3 in the combined fallback
+  commit. No push or release has happened.
+- **Moved slice:** `tiffany-ui/codex-rs/tiffany-bridge/src/native_session.rs`
+  now owns runtime detection plus native transcript path lookup for Claude Code,
+  Codex rollout JSONL, and Gemini chat JSON. It also owns Gemini project hashing
+  and message counting.
+- **TUI seam:** `tiffany-ui/codex-rs/tui/src/tiffany_orchestrator.rs` keeps
+  transcript parsing/rendering but delegates path resolution through a thin
+  `NativeSessionCommand` adapter.
+- **Acceptance:** `tiffany-bridge` compiles and tests independently; `codex-tui`
+  native CLI transcript tests pass; only one pure helper slice was moved.
+- **Risk:** more native-history code remains in the god-file. Do not move
+  transcript parsers until path helpers stay stable across real-runtime checks.
+
 ---
 
 ## Gated (user-only, not auto-executed)
@@ -194,19 +234,23 @@ beyond the scaffold until F2 lands.
 - **PUSH to `origin/main`:** 113 local commits + whatever F1 commits. Outward-
   facing and hard to reverse. Codex must surface the proposed push and wait for
   explicit user go-ahead. Not part of any worker task above.
-- **`v0.2` release cut (M0):** only after F1–F4 land and the full preflight
+- **`v0.2` release cut (M0):** only after F1–F4/F7 land and the full preflight
   (`./scripts/tiffany-release-preflight --full --tag v0.2`) passes.
 
-## Queued (after F1–F4)
+## Queued (after F3/F4)
 
 - F5+: continue `tiffany_orchestrator.rs` extraction into `tiffany-bridge`,
   one module per task, build green each time, until the god-file is empty and
   deleted.
 - F6: prune vendored `codex-rs` crates that Tiffany does not use (per the
   pruning goal in the Upstream Fork Strategy), guided by `UPSTREAM.md`.
-- F7: feature-gate the Codex TUI behind a cargo feature so a runtime-only slim
-  build of the single binary exists (scripting/CI/headless), paying down the
-  build-cost debt F3 introduces. Depends on F3; cheap if F3 declares the TUI dep
-  `optional = true` from the start.
+- F7 (now M0-required — hard acceptance, per user 2026-06-28): feature-gate the
+  Codex TUI behind a cargo feature so a runtime-only slim build of the single
+  binary exists and smoke-passes (`--help`, `status` without the TUI). Depends on
+  F3; declare the TUI dep `optional = true` during F3 so this is cheap. M0 / v0.2
+  does not ship without it.
+- F8: investigate the hanging/flaky full `cargo test -p codex-tui --lib` run
+  (snapshot drift / app-test hang, unrelated to F4) before it bites CI. Not
+  blocking; targeted fast-gate tests pass.
 - Then M1 (provider/role polish), M2 (waterfall de-dup), M3 (real-runtime
   handoff — now a required gate), M4 (queue/jobs UI), M6 (pipeline efficacy).

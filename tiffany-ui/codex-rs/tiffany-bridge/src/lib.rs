@@ -1,6 +1,16 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
+mod native_session;
+
+pub use native_session::{
+    NativeSessionCommand, NativeSessionPath, NativeSessionRuntime, claude_session_jsonl_path,
+    codex_session_jsonl_path, find_codex_rollout_path_by_id, find_gemini_chat_path_by_id,
+    gemini_project_hash, gemini_session_json_path_in_home, gemini_session_message_count,
+    native_session_command_is_claude, native_session_command_is_codex,
+    native_session_command_is_gemini, native_session_path_in_home,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigSummary {
     pub providers: usize,

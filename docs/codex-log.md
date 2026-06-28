@@ -109,3 +109,49 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - The next extraction should stay small: native session path helpers or visible-output formatting, not a broad bridge rewrite.
 - Next:
   - Recommended next task: F3 Step 0 recon only, then either implement the `tiffany-cli` single-binary dispatch path if feasible, or start F5 by moving the next pure helper cluster into `tiffany-bridge`.
+
+## F3/F5 — completed locally, combined fallback staged — 2026-06-28
+- Commits:
+  - this combined commit: `Unify tiffany-loop multi-call binary and bridge native session paths`.
+- Build/tests:
+  - Probe: `tiffany-cli` depending on the outer `orchestrator` lib built cleanly in this direction; the previous `codex-rmcp-client` type skew did not recur.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-cli --quiet` — green, 18 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-cli --no-default-features --quiet` — green, 18 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop cli_entry --quiet` — green, 20 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 7 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_cli --lib --quiet` — green, 23 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build --quiet` — green.
+  - `TIFFANY_QUIET=1 ./scripts/tiffany-build --small` — green.
+  - `./scripts/tiffany-install-smoke --smoke` — green; `orchestrator`, `tiffany-loop`, and `tiffany` all resolved in isolated `target/dev-small`.
+  - `./scripts/tiffany-check-homebrew-tap-helper` — green.
+  - `./scripts/tiffany-release-targets --check` — green.
+  - `./scripts/tiffany-check-script-helpers` — green.
+  - Cargo metadata now shows only one `tiffany-cli` bin target: `tiffany-loop`.
+  - argv0 smoke with symlinked `orchestrator`/`tiffany` verified `orchestrator --help` routes to runtime CLI while `tiffany-loop --help` and `tiffany --help` route to Tiffany Loop.
+  - `git diff --check` — green.
+  - Known warning cleanup for `src/tui/queue_state.rs` is left outside this commit with F7 groundwork.
+- Decisions:
+  - Implemented Option A in the feasible direction: `tiffany-ui/codex-rs/tiffany-cli` depends on the outer `tiffany-loop` package as library crate `orchestrator`.
+  - Moved the runtime CLI entry from root `src/main.rs` into `src/cli_entry.rs`, exported it from `src/lib.rs`, removed the root `[[bin]] orchestrator`, and deleted root `src/main.rs`.
+  - Added argv[0] dispatch in `tiffany-cli/src/main.rs`: `orchestrator` invokes `orchestrator_runtime::cli_entry::run_from_env()`, while `tiffany-loop` and `tiffany` keep the TUI path.
+  - Made `codex-tui` an optional dependency behind default feature `tui`; the no-default test path now passes, satisfying the F7 foundation.
+  - Deleted `tiffany-cli/src/bin/tiffany.rs` so Cargo does not auto-discover/install a second `tiffany` wrapper binary.
+  - Updated release workflow, Homebrew formula template, tap updater, dev/build scripts, release-target checks, and docs to build/package one `tiffany-loop` binary and expose `orchestrator`/`tiffany` aliases.
+  - The probe initially hit a SQLite native-link conflict (`rusqlite 0.32` vs the Codex workspace `libsqlite3-sys 0.37` line); aligned root `rusqlite` to `0.39` with bundled sqlite.
+  - Did not touch legacy `src/tui/` behavior except through the library entry move.
+  - Used the allowed combined fallback instead of two commits: an attempted F3-only fork lockfile generation rolled unrelated upstream dependencies, so freezing that intermediate would have been noisier and riskier than the verified combined state.
+  - Moved exactly one pure slice into `tiffany-bridge`: native session runtime detection plus Claude/Codex/Gemini transcript path lookup, Gemini project hashing, and Gemini message counting.
+  - Added `tiffany-ui/codex-rs/tiffany-bridge/src/native_session.rs` and re-exported its public API from `tiffany_bridge`.
+  - Added bridge dependencies `serde_json` and `sha2`, plus dev-dependency `tempfile` for isolated path tests.
+  - Kept transcript parsing, event construction, and Ratatui rendering in `codex-tui`; `tui/src/tiffany_orchestrator.rs` now adapts `TiffanyNativeCliCommand` into `tiffany_bridge::NativeSessionCommand`.
+  - `tiffany_orchestrator.rs` dropped from 18,369 lines to 18,151 lines after this slice.
+  - Did not touch legacy `src/tui/` behavior.
+  - Left F7 groundwork uncommitted/untracked as requested: `scripts/tiffany-slim-smoke` plus the queue warning cleanup are not part of this combined commit.
+- Blockers / questions for Claude:
+  - No F3/F5 blocker.
+  - Full `cargo test -p codex-tui --lib` remains queued as F8.
+- Next:
+  - Recommended next task: F7, because M0 requires the runtime-only slim build to smoke-pass and F3 already introduced the `tui` feature gate. If continuing extraction instead, move visible-output formatting as the next single slice.

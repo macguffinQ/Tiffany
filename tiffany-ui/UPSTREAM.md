@@ -88,3 +88,7 @@ Format: `YYYY-MM-DD - path - reason`.
 - 2026-06-28 - `tiffany-ui/codex-rs/tui/Cargo.toml` - F4 bridge wiring adds the
   local `tiffany-bridge` dependency so `codex-tui` can delegate Tiffany-owned
   config parsing logic out of `tiffany_orchestrator.rs`.
+- 2026-06-28 - `tiffany-ui/codex-rs/tiffany-cli/Cargo.toml` / root
+  `Cargo.toml` - F3 single multi-call binary wires the Tiffany-owned CLI to the
+  outer orchestrator library; root `rusqlite` now tracks the vendored codex-rs
+  `libsqlite3-sys` line to avoid native-link skew.

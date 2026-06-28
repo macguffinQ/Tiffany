@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-mod cli;
+use crate::cli;
 
 #[derive(Parser)]
 #[command(
@@ -24,7 +24,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
-enum Cmd {
+pub(crate) enum Cmd {
     /// Initialize config in ~/.orchestrator/
     Init,
 
@@ -239,7 +239,7 @@ pub(crate) enum SessionExportFormatArg {
 }
 
 #[derive(Subcommand)]
-enum ConfigCmd {
+pub(crate) enum ConfigCmd {
     /// Show all loaded config (default)
     Show,
 
@@ -341,7 +341,7 @@ enum ConfigCmd {
 }
 
 #[derive(Subcommand)]
-enum ProviderConfigCmd {
+pub(crate) enum ProviderConfigCmd {
     /// Open an interactive provider setup selector
     #[command(alias = "interactive")]
     Ui {
@@ -408,7 +408,7 @@ enum ProviderConfigCmd {
 }
 
 #[derive(Subcommand)]
-enum RolesCmd {
+pub(crate) enum RolesCmd {
     /// List registered roles
     List,
 
@@ -529,7 +529,7 @@ pub(crate) enum ThreadCmd {
 }
 
 #[derive(Subcommand)]
-enum SessionsCmd {
+pub(crate) enum SessionsCmd {
     /// List recent sessions
     List {
         #[arg(long, default_value = "20")]
@@ -612,7 +612,7 @@ enum SessionsCmd {
 }
 
 #[derive(Subcommand)]
-enum JobsCmd {
+pub(crate) enum JobsCmd {
     /// List recent persisted jobs
     List {
         /// Number of recent jobs to show
@@ -649,7 +649,7 @@ enum JobsCmd {
 }
 
 #[tokio::main]
-async fn main() -> ExitCode {
+pub async fn run_from_env() -> ExitCode {
     let cli = Cli::parse();
 
     // Init tracing: for terminal chat, ACP, and JSONL events, route to a

@@ -14,9 +14,9 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use serde::Deserialize;
 use serde::Serialize;
-use sha2::Digest;
-use sha2::Sha256;
 use tiffany_bridge::ConfigSummary as TiffanyConfigSummary;
+use tiffany_bridge::NativeSessionCommand as TiffanyBridgeNativeSessionCommand;
+use tiffany_bridge::NativeSessionRuntime as TiffanyNativeTranscriptRuntime;
 use tiffany_bridge::WorkerReadinessStatus as TiffanyWorkerReadinessStatus;
 use tiffany_event_format as event_format;
 use tokio::io::AsyncBufReadExt;
@@ -117,13 +117,6 @@ pub(crate) struct TiffanyNativeCliTranscriptCursor {
     byte_len: u64,
     runtime: TiffanyNativeTranscriptRuntime,
     message_count: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum TiffanyNativeTranscriptRuntime {
-    Claude,
-    Codex,
-    Gemini,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1430,35 +1423,19 @@ pub(crate) fn native_cli_transcript_preview(events: &[TiffanyNativeChatEvent]) -
 pub(crate) fn native_cli_transcript_cursor(
     command: &TiffanyNativeCliCommand,
 ) -> Option<TiffanyNativeCliTranscriptCursor> {
-    let (runtime, path) = if native_cli_command_is_claude(command) {
-        (
-            TiffanyNativeTranscriptRuntime::Claude,
-            claude_session_jsonl_path(command)?,
-        )
-    } else if native_cli_command_is_codex(command) {
-        (
-            TiffanyNativeTranscriptRuntime::Codex,
-            codex_session_jsonl_path(command)?,
-        )
-    } else if native_cli_command_is_gemini(command) {
-        (
-            TiffanyNativeTranscriptRuntime::Gemini,
-            gemini_session_json_path(command)?,
-        )
-    } else {
-        return None;
-    };
-    let byte_len = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-    let message_count = if matches!(runtime, TiffanyNativeTranscriptRuntime::Gemini) {
-        gemini_session_message_count(&path).unwrap_or(0)
-    } else {
-        0
-    };
+    let home = dirs::home_dir()?;
+    let session_path = tiffany_bridge::native_session_path_in_home(
+        &home,
+        &bridge_native_session_command(command),
+    )?;
+    let byte_len = std::fs::metadata(&session_path.path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
     Some(TiffanyNativeCliTranscriptCursor {
-        path,
+        path: session_path.path,
         byte_len,
-        runtime,
-        message_count,
+        runtime: session_path.runtime,
+        message_count: session_path.message_count,
     })
 }
 
@@ -1527,237 +1504,42 @@ pub(crate) fn native_cli_transcript_events_after_return(
     )
 }
 
+#[cfg(test)]
 fn native_cli_command_is_claude(command: &TiffanyNativeCliCommand) -> bool {
-    native_cli_command_runtime_matches(command, &["claude-code", "claude", "cc"])
-        || native_cli_command_role_matches(command, &["worker-cc", "claude"])
-        || command.command.contains("claude --resume")
-        || command.command.contains("claude resume")
+    tiffany_bridge::native_session_command_is_claude(&bridge_native_session_command(command))
 }
 
 fn native_cli_command_is_codex(command: &TiffanyNativeCliCommand) -> bool {
-    native_cli_command_runtime_matches(command, &["codex"])
-        || native_cli_command_role_matches(command, &["codex"])
-        || command.command.contains("codex resume")
-        || command.command.contains("codex exec resume")
+    tiffany_bridge::native_session_command_is_codex(&bridge_native_session_command(command))
 }
 
 fn native_cli_command_is_gemini(command: &TiffanyNativeCliCommand) -> bool {
-    native_cli_command_runtime_matches(command, &["gemini", "gemini-cli"])
-        || native_cli_command_role_matches(command, &["gemini"])
-        || command.command.contains("gemini --resume")
-        || command.command.contains("gemini -r")
+    tiffany_bridge::native_session_command_is_gemini(&bridge_native_session_command(command))
 }
 
-fn native_cli_command_runtime_matches(
+fn bridge_native_session_command(
     command: &TiffanyNativeCliCommand,
-    runtimes: &[&str],
-) -> bool {
-    let Some(runtime) = command
-        .runtime
-        .as_deref()
-        .and_then(nonempty_trimmed)
-        .map(|runtime| runtime.to_ascii_lowercase())
-    else {
-        return false;
-    };
-    runtimes.iter().any(|candidate| runtime == *candidate)
-}
-
-fn native_cli_command_role_matches(command: &TiffanyNativeCliCommand, markers: &[&str]) -> bool {
-    let role = command.role.to_ascii_lowercase();
-    markers
-        .iter()
-        .any(|marker| role == *marker || role.contains(marker))
-}
-
-fn claude_session_jsonl_path(command: &TiffanyNativeCliCommand) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let worktree = command.worktree.as_deref().and_then(nonempty_trimmed)?;
-    let canonical = Path::new(worktree)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(worktree));
-    let project_slug = canonical
-        .to_string_lossy()
-        .replace('/', "-")
-        .trim_start_matches('-')
-        .to_string();
-    let path = home
-        .join(".claude")
-        .join("projects")
-        .join(project_slug)
-        .join(format!("{}.jsonl", command.native_session));
-    Some(path)
-}
-
-fn codex_session_jsonl_path(command: &TiffanyNativeCliCommand) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    find_codex_rollout_path_by_id(
-        &home.join(".codex").join("sessions"),
-        &command.native_session,
-    )
-}
-
-fn find_codex_rollout_path_by_id(root: &Path, id: &str) -> Option<PathBuf> {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            if file_name.contains(id) && file_name.ends_with(".jsonl") {
-                return Some(path);
-            }
-        }
+) -> TiffanyBridgeNativeSessionCommand<'_> {
+    TiffanyBridgeNativeSessionCommand {
+        role: &command.role,
+        runtime: command.runtime.as_deref(),
+        native_session: &command.native_session,
+        command: &command.command,
+        worktree: command.worktree.as_deref(),
     }
-    None
 }
 
-fn gemini_session_json_path(command: &TiffanyNativeCliCommand) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    gemini_session_json_path_in_home(&home, command)
-}
-
+#[cfg(test)]
 fn gemini_session_json_path_in_home(
     home: &Path,
     command: &TiffanyNativeCliCommand,
 ) -> Option<PathBuf> {
-    let root = home.join(".gemini").join("tmp");
-    let id = command.native_session.trim();
-    if !id.is_empty() && id != "latest" {
-        if let Some(path) = find_gemini_chat_path_by_id(&root, id) {
-            return Some(path);
-        }
-    }
-    if let Some(project_path) = command
-        .worktree
-        .as_deref()
-        .and_then(gemini_project_hash)
-        .and_then(|hash| latest_gemini_chat_path_for_project(&root, &hash))
-    {
-        return Some(project_path);
-    }
-    if command
-        .worktree
-        .as_deref()
-        .and_then(nonempty_trimmed)
-        .is_some()
-    {
-        return None;
-    }
-    latest_gemini_chat_path(&root)
+    tiffany_bridge::gemini_session_json_path_in_home(home, &bridge_native_session_command(command))
 }
 
+#[cfg(test)]
 fn gemini_project_hash(worktree: &str) -> Option<String> {
-    let worktree = nonempty_trimmed(worktree)?;
-    let canonical = Path::new(worktree)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(worktree));
-    let mut hasher = Sha256::new();
-    hasher.update(canonical.to_string_lossy().as_bytes());
-    Some(format!("{:x}", hasher.finalize()))
-}
-
-fn find_gemini_chat_path_by_id(root: &Path, id: &str) -> Option<PathBuf> {
-    gemini_chat_paths(root)
-        .into_iter()
-        .find(|path| gemini_chat_path_matches_id(path, id))
-}
-
-fn gemini_chat_path_matches_id(path: &Path, id: &str) -> bool {
-    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
-        return false;
-    };
-    if file_name.contains(id) {
-        return true;
-    }
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
-        .and_then(|value| {
-            value
-                .get("sessionId")
-                .and_then(|value| value.as_str())
-                .map(str::to_string)
-        })
-        .is_some_and(|session_id| session_id == id || session_id.starts_with(id))
-}
-
-fn latest_gemini_chat_path_for_project(root: &Path, project_hash: &str) -> Option<PathBuf> {
-    newest_gemini_chat_path(
-        gemini_chat_paths(&root.join(project_hash).join("chats"))
-            .into_iter()
-            .collect(),
-    )
-}
-
-fn latest_gemini_chat_path(root: &Path) -> Option<PathBuf> {
-    newest_gemini_chat_path(gemini_chat_paths(root))
-}
-
-fn newest_gemini_chat_path(paths: Vec<PathBuf>) -> Option<PathBuf> {
-    paths
-        .into_iter()
-        .filter_map(|path| {
-            let modified = std::fs::metadata(&path)
-                .and_then(|meta| meta.modified())
-                .unwrap_or(UNIX_EPOCH);
-            Some((modified, path))
-        })
-        .max_by_key(|(modified, _)| *modified)
-        .map(|(_, path)| path)
-}
-
-fn gemini_chat_paths(root: &Path) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            if file_name.starts_with("session-") && file_name.ends_with(".json") {
-                paths.push(path);
-            }
-        }
-    }
-    paths
-}
-
-fn gemini_session_message_count(path: &Path) -> Option<usize> {
-    let body = std::fs::read_to_string(path).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&body).ok()?;
-    value
-        .get("messages")
-        .and_then(|value| value.as_array())
-        .map(Vec::len)
+    tiffany_bridge::gemini_project_hash(worktree)
 }
 
 fn native_cli_transcript_events_from_claude_jsonl(
