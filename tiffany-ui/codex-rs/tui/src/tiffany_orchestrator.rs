@@ -19,6 +19,7 @@ use tiffany_bridge::ContextPromptTurn as TiffanyContextPromptTurn;
 #[cfg(test)]
 use tiffany_bridge::ContinueRequest;
 use tiffany_bridge::JobSummary;
+use tiffany_bridge::NATIVE_CHAT_STORE_SCHEMA_VERSION as NATIVE_SESSIONS_SCHEMA_VERSION;
 use tiffany_bridge::NativeHistoryCommand;
 use tiffany_bridge::NativeHistoryEventView;
 use tiffany_bridge::NativeHistoryFilter;
@@ -41,7 +42,10 @@ use tiffany_bridge::doctor_command_args;
 use tiffany_bridge::job_actions;
 use tiffany_bridge::job_state_summary;
 use tiffany_bridge::jobs_command_args;
+use tiffany_bridge::native_conversation_id;
 use tiffany_bridge::native_history_kind_matches;
+use tiffany_bridge::normalize_native_chat_store;
+use tiffany_bridge::normalize_native_event as bridge_normalize_native_event;
 use tiffany_bridge::parse_claude_native_transcript_events;
 use tiffany_bridge::parse_codex_native_transcript_events;
 use tiffany_bridge::parse_gemini_native_transcript_events;
@@ -75,6 +79,11 @@ use crate::app_event_sender::AppEventSender;
 use crate::history_cell::PlainHistoryCell;
 use codex_app_server_protocol::UserInput;
 
+pub(crate) type TiffanyNativeChatStore = tiffany_bridge::NativeChatStore;
+pub(crate) type TiffanyNativeChatConversation = tiffany_bridge::NativeChatConversation;
+pub(crate) type TiffanyNativeChatTurn = tiffany_bridge::NativeChatTurn;
+pub(crate) type TiffanyNativeChatEvent = tiffany_bridge::NativeChatEvent;
+
 #[allow(clippy::disallowed_methods)]
 pub(crate) const TIFFANY_BLUE: Color = Color::Rgb(10, 186, 181);
 #[allow(clippy::disallowed_methods)]
@@ -89,7 +98,6 @@ const MEMORY_FILE: &str = "tiffany-orchestrator/memory.json";
 const MEMORY_SCHEMA_VERSION: u32 = 1;
 const MEMORY_MAX_TURNS: usize = 8;
 const NATIVE_SESSIONS_FILE: &str = "tiffany-orchestrator/native-sessions.json";
-const NATIVE_SESSIONS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug)]
 pub struct TiffanyOrchestratorLaunch {
@@ -184,57 +192,8 @@ struct TiffanyOrchestratorMemoryTurn {
     result: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub(crate) struct TiffanyNativeChatStore {
-    #[serde(default = "native_sessions_schema_version")]
-    pub(crate) version: u32,
-    #[serde(default)]
-    pub(crate) conversations: Vec<TiffanyNativeChatConversation>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct TiffanyNativeChatConversation {
-    pub(crate) id: String,
-    pub(crate) cwd: String,
-    pub(crate) created_at_unix: u64,
-    pub(crate) updated_at_unix: u64,
-    #[serde(default)]
-    pub(crate) turns: Vec<TiffanyNativeChatTurn>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct TiffanyNativeChatTurn {
-    pub(crate) user_prompt: String,
-    pub(crate) result: String,
-    pub(crate) captured_at_unix: u64,
-    #[serde(default)]
-    pub(crate) events: Vec<TiffanyNativeChatEvent>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct TiffanyNativeChatEvent {
-    pub(crate) role: String,
-    pub(crate) status: String,
-    pub(crate) title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) kind: Option<String>,
-    pub(crate) content: Option<String>,
-    pub(crate) agent: Option<String>,
-    pub(crate) worker_role: Option<String>,
-    pub(crate) model: Option<String>,
-    pub(crate) provider: Option<String>,
-    pub(crate) task_id: Option<String>,
-    #[serde(default)]
-    pub(crate) worker_thread_id: Option<String>,
-    pub(crate) native_session_id: Option<String>,
-}
-
 fn memory_schema_version() -> u32 {
     MEMORY_SCHEMA_VERSION
-}
-
-fn native_sessions_schema_version() -> u32 {
-    NATIVE_SESSIONS_SCHEMA_VERSION
 }
 
 pub(crate) fn memory_max_turns() -> usize {
@@ -2858,14 +2817,10 @@ fn load_native_chat_store(codex_home: &Path) -> anyhow::Result<TiffanyNativeChat
         Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
     };
 
-    Ok(TiffanyNativeChatStore {
-        version: NATIVE_SESSIONS_SCHEMA_VERSION,
-        conversations: store
-            .conversations
-            .into_iter()
-            .filter_map(normalize_native_conversation)
-            .collect(),
-    })
+    Ok(normalize_native_chat_store(
+        store,
+        CONTROL_SUMMARY_MAX_CHARS,
+    ))
 }
 
 fn cwd_key(cwd: &Path) -> String {
@@ -2875,15 +2830,6 @@ fn cwd_key(cwd: &Path) -> String {
         .to_string()
 }
 
-fn native_conversation_id(cwd_key: &str) -> String {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in cwd_key.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("tiffany-native-{hash:016x}")
-}
-
 fn now_unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2891,95 +2837,8 @@ fn now_unix_seconds() -> u64 {
         .as_secs()
 }
 
-fn normalize_native_conversation(
-    conversation: TiffanyNativeChatConversation,
-) -> Option<TiffanyNativeChatConversation> {
-    let cwd = conversation.cwd.trim().to_string();
-    if cwd.is_empty() {
-        return None;
-    }
-
-    let turns = conversation
-        .turns
-        .into_iter()
-        .filter_map(normalize_native_turn)
-        .collect::<Vec<_>>();
-    if turns.is_empty() {
-        return None;
-    }
-
-    let id = if conversation.id.trim().is_empty() {
-        native_conversation_id(&cwd)
-    } else {
-        conversation.id.trim().to_string()
-    };
-    let first_turn_ts = turns
-        .first()
-        .map(|turn| turn.captured_at_unix)
-        .unwrap_or_default();
-    let last_turn_ts = turns
-        .last()
-        .map(|turn| turn.captured_at_unix)
-        .unwrap_or(first_turn_ts);
-    let created_at_unix = if conversation.created_at_unix == 0 {
-        first_turn_ts
-    } else {
-        conversation.created_at_unix
-    };
-    let updated_at_unix = conversation.updated_at_unix.max(last_turn_ts);
-
-    Some(TiffanyNativeChatConversation {
-        id,
-        cwd,
-        created_at_unix,
-        updated_at_unix,
-        turns,
-    })
-}
-
-fn normalize_native_turn(turn: TiffanyNativeChatTurn) -> Option<TiffanyNativeChatTurn> {
-    let user_prompt = turn.user_prompt.trim().to_string();
-    let result = turn.result.trim().to_string();
-    if user_prompt.is_empty() || result.is_empty() {
-        return None;
-    }
-    Some(TiffanyNativeChatTurn {
-        user_prompt,
-        result,
-        captured_at_unix: turn.captured_at_unix,
-        events: turn
-            .events
-            .into_iter()
-            .filter_map(normalize_native_event)
-            .collect(),
-    })
-}
-
 fn normalize_native_event(event: TiffanyNativeChatEvent) -> Option<TiffanyNativeChatEvent> {
-    let role = event.role.trim().to_string();
-    let status = event.status.trim().to_string();
-    let title = event.title.trim().to_string();
-    if role.is_empty() || status.is_empty() || title.is_empty() {
-        return None;
-    }
-    let kind = event
-        .kind
-        .and_then(trimmed_string)
-        .or_else(|| inferred_native_event_kind(&title, event.content.as_deref()));
-    Some(TiffanyNativeChatEvent {
-        role,
-        status,
-        title,
-        kind,
-        content: event.content.and_then(trimmed_string),
-        agent: event.agent.and_then(trimmed_string),
-        worker_role: event.worker_role.and_then(trimmed_string),
-        model: event.model.and_then(trimmed_string),
-        provider: event.provider.and_then(trimmed_string),
-        task_id: event.task_id.and_then(trimmed_string),
-        worker_thread_id: event.worker_thread_id.and_then(trimmed_string),
-        native_session_id: event.native_session_id.and_then(trimmed_string),
-    })
+    bridge_normalize_native_event(event, CONTROL_SUMMARY_MAX_CHARS)
 }
 
 fn trimmed_string(value: String) -> Option<String> {
@@ -6153,32 +6012,6 @@ fn native_event_kind_label(kind: event_format::VisibleAgentOutputKind) -> &'stat
     }
 }
 
-fn inferred_native_event_kind(title: &str, content: Option<&str>) -> Option<String> {
-    let title = title.to_ascii_lowercase();
-    for (needle, kind) in [
-        ("worker final", "final"),
-        ("worker answer", "answer"),
-        ("worker question", "question"),
-        ("worker approval", "approval"),
-        ("worker tool call", "tool_call"),
-        ("worker tool result", "tool_result"),
-        ("worker diff", "diff"),
-        ("worker patch", "patch"),
-        ("worker file update", "file_update"),
-        ("worker stderr", "stderr"),
-        ("worker alert", "alert"),
-        ("worker session recovery", "session_recovery"),
-    ] {
-        if title.contains(needle) {
-            return Some(kind.to_string());
-        }
-    }
-    content
-        .and_then(worker_visible_output_kind_from_raw)
-        .map(native_event_kind_label)
-        .map(str::to_string)
-}
-
 fn worker_context_line(task_id: &str, meta: &WorkerMeta) -> String {
     let mut parts = Vec::new();
     if let Some(role) = meta.worker_role.as_deref().and_then(nonempty_trimmed) {
@@ -7177,23 +7010,6 @@ fn worker_visible_output_kind_for_event(
 ) -> Option<event_format::VisibleAgentOutputKind> {
     tiffany_bridge::visible_output_kind_for_event(
         &bridge_visible_output_event(event),
-        raw,
-        CONTROL_SUMMARY_MAX_CHARS,
-    )
-}
-
-fn worker_visible_output_kind_from_raw(raw: &str) -> Option<event_format::VisibleAgentOutputKind> {
-    tiffany_bridge::visible_output_kind_for_event(
-        &TiffanyBridgeVisibleOutputEvent {
-            role: "worker",
-            status: "output",
-            agent: None,
-            worker_role: None,
-            task_id: None,
-            event_kind: None,
-            recovery: None,
-            content: Some(raw),
-        },
         raw,
         CONTROL_SUMMARY_MAX_CHARS,
     )

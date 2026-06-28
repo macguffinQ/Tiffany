@@ -451,3 +451,28 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue F5+ with another small pure slice, or pause extraction and start real-runtime handoff verification for M3 if Claude wants validation over more god-file reduction.
+
+## F5+ — native chat store model extraction completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Extract native chat store model into tiffany bridge`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge native_chat_store --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_history --lib --quiet` — green, 26 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 40 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build --quiet` — green.
+  - `git diff --check` — green.
+- Decisions:
+  - Added `tiffany-bridge/src/native_chat_store.rs` for native history schema structs, store normalization, conversation id hashing, and event kind inference for older/local JSON events.
+  - `codex-tui` now exposes crate-local type aliases for the bridge store types so existing TUI modules keep their stable `tiffany_orchestrator::TiffanyNativeChatEvent` path.
+  - Kept native history file IO, session-db import orchestration, Markdown/graph export, and Ratatui rendering in `codex-tui`.
+  - `tiffany_orchestrator.rs` is now 15,224 lines.
+  - No push and no release.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue F5+ with a small pure native-history rendering/search slice, or switch to real-runtime handoff verification if validation is the priority.

@@ -83,6 +83,11 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   Codex JSONL, and Gemini chat JSON parsing into normalized native transcript
   events. `codex-tui` only attaches Tiffany role/session metadata and persists
   the events.
+- **F5+ native chat store model slice ✅ implemented locally and verified.**
+  A new `tiffany-bridge/src/native_chat_store.rs` owns the native history store
+  schema, conversation/turn/event structs, conversation id hashing, and
+  normalization. `codex-tui` keeps file IO, Ratatui rendering, and session-db
+  import orchestration local.
 - **F8 ✅ implemented locally and verified.** Full `codex-tui --lib` now passes
   serially after stabilizing no-active-turn app-server paths, no-turn side-thread
   discard behavior, large-stack test wrappers, Tiffany snapshot drift, and

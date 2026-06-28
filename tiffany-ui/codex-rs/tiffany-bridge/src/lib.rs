@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 mod command_args;
 mod context_prompt;
+mod native_chat_store;
 mod native_history;
 mod native_session;
 mod native_transcript;
@@ -14,6 +15,12 @@ pub use command_args::{
     jobs_command_args, provider_command_args, roles_command_args, thread_command_args,
 };
 pub use context_prompt::{ContextPromptTurn, contextual_prompt};
+pub use native_chat_store::{
+    NATIVE_CHAT_STORE_SCHEMA_VERSION, NativeChatConversation, NativeChatEvent, NativeChatStore,
+    NativeChatTurn, native_chat_store_schema_version, native_conversation_id,
+    normalize_native_chat_store, normalize_native_conversation, normalize_native_event,
+    normalize_native_turn,
+};
 pub use native_history::{
     NativeHistoryCommand, NativeHistoryEventView, NativeHistoryFilter, NativeHistoryOptions,
     native_history_kind_matches,
