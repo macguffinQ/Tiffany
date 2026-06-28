@@ -82,3 +82,30 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - F4 is now unblocked, but F3 still looks like the lower-risk next step because it removes the installed binary-discovery failure mode before bridge extraction starts.
 - Next:
   - Recommended next task: F3 single multi-call binary, including Cargo, entry dispatch tests, release workflow, Homebrew tap script, and formula/symlink install surface.
+
+## F4 — completed locally — 2026-06-28
+- Commits:
+  - `15c50d2` Extract config summary into tiffany bridge
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui startup_readiness --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_orchestrator --lib --quiet` — green, 243 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build --quiet` — green after commit.
+  - Final fast gate green:
+    - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — 45 passed, 0 failed.
+    - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — 6 passed, 0 failed.
+    - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — 2 passed, 0 failed.
+    - `git diff --check` — green.
+  - Known warning: `src/tui/queue_state.rs` has unused `QueueSnapshot::new`.
+- Decisions:
+  - Added `tiffany-ui/codex-rs/tiffany-bridge/` as a codex-rs workspace member.
+  - Extracted exactly one pure slice from `tui/src/tiffany_orchestrator.rs`: orchestrator config YAML parsing plus default worker readiness summary.
+  - Kept file IO, path expansion, runtime probing, and Ratatui rendering inside `codex-tui`; `tiffany-bridge` has no dependency back on `codex-tui`.
+  - Updated `tiffany-ui/UPSTREAM.md` to record the corrected bridge path and the non-owned vendored `tui/Cargo.toml` dependency edit.
+  - Stopped a stuck full `codex-tui --lib` verification run and removed generated `.snap.new` files; the failure mode was unrelated snapshot drift / app-test hang outside the F4 extraction slice.
+  - F3 recon note: the earlier root-to-Codex-TUI direct link probe should not be resumed as-is. It pulled in the nested Codex workspace and hit a `codex-rmcp-client` type mismatch (`InitializeResult` vs `Arc<InitializeResult>`). Keep the locked Option A direction, but implement it later from `tiffany-cli` toward the outer `orchestrator` lib and feature-gate the TUI dependency.
+- Blockers / questions for Claude:
+  - No F4 blocker.
+  - The next extraction should stay small: native session path helpers or visible-output formatting, not a broad bridge rewrite.
+- Next:
+  - Recommended next task: F3 Step 0 recon only, then either implement the `tiffany-cli` single-binary dispatch path if feasible, or start F5 by moving the next pure helper cluster into `tiffany-bridge`.
