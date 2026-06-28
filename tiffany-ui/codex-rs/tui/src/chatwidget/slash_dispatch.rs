@@ -151,6 +151,34 @@ fn push_tiffany_queue_preview_section(
     }
 }
 
+fn tiffany_queue_next_action(
+    queued: usize,
+    rejected: usize,
+    pending: usize,
+    paused: bool,
+    running: bool,
+) -> &'static str {
+    if queued + rejected + pending == 0 {
+        return "empty";
+    }
+    if paused {
+        return "paused; use /queue resume or /queue run";
+    }
+    if running {
+        return "armed; runs after current orchestration finishes";
+    }
+    if rejected > 0 {
+        return "run retry-first prompt before queued prompts";
+    }
+    if queued > 1 {
+        return "run queued prompts together as one batch";
+    }
+    if queued == 1 {
+        return "run the queued prompt";
+    }
+    "pending item already submitted"
+}
+
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -1009,9 +1037,7 @@ impl ChatWidget {
             "show" | "status" | "" => self.show_tiffany_queue_output(),
             "clear" | "reset" => {
                 let cleared = self.input_queue.queued_user_messages.len()
-                    + self.input_queue.queued_user_message_history_records.len()
-                    + self.input_queue.rejected_steers_queue.len()
-                    + self.input_queue.rejected_steer_history_records.len();
+                    + self.input_queue.rejected_steers_queue.len();
                 self.input_queue.queued_user_messages.clear();
                 self.input_queue.queued_user_message_history_records.clear();
                 self.input_queue.rejected_steers_queue.clear();
@@ -1023,10 +1049,13 @@ impl ChatWidget {
                 );
             }
             "pause" => {
+                let ready = self.input_queue.queued_user_messages.len()
+                    + self.input_queue.rejected_steers_queue.len();
                 self.input_queue.suppress_queue_autosend = true;
                 self.add_info_message(
-                    "Queue paused. Follow-up prompts will stay queued until /queue resume or /queue run."
-                        .to_string(),
+                    format!(
+                        "Queue paused. {ready} queued item(s) will stay queued until /queue resume or /queue run."
+                    ),
                     /*hint*/ None,
                 );
             }
@@ -1034,17 +1063,32 @@ impl ChatWidget {
                 self.input_queue.suppress_queue_autosend = false;
                 let ready = self.input_queue.queued_user_messages.len()
                     + self.input_queue.rejected_steers_queue.len();
-                self.add_info_message(
-                    format!("Queue resumed. {ready} queued item(s) ready."),
-                    /*hint*/ None,
-                );
-                self.maybe_send_merged_tiffany_queued_input();
+                let running = self.is_user_turn_pending_or_running();
+                let started = self.maybe_send_merged_tiffany_queued_input();
+                let message = if started {
+                    "Queue resumed. Started queued prompt(s).".to_string()
+                } else if running && ready > 0 {
+                    format!(
+                        "Queue resumed. {ready} queued item(s) armed; they will run after the current orchestration finishes."
+                    )
+                } else {
+                    format!("Queue resumed. {ready} queued item(s) ready.")
+                };
+                self.add_info_message(message, /*hint*/ None);
             }
             "run" | "start" | "go" => {
                 self.input_queue.suppress_queue_autosend = false;
+                let has_queued = self.input_queue.has_queued_follow_up_messages();
+                let running = self.is_user_turn_pending_or_running();
                 if self.maybe_send_merged_tiffany_queued_input() {
                     self.add_info_message(
                         "Queue started. Queued prompts are being submitted.".to_string(),
+                        /*hint*/ None,
+                    );
+                } else if running && has_queued {
+                    self.add_info_message(
+                        "Queue armed. Current orchestration is still running; queued prompts will run after it finishes."
+                            .to_string(),
                         /*hint*/ None,
                     );
                 } else {
@@ -1062,16 +1106,29 @@ impl ChatWidget {
         let rejected = preview.rejected_steers.len();
         let pending = preview.pending_steers.len();
         let paused = self.input_queue.suppress_queue_autosend;
+        let running = self.is_user_turn_pending_or_running();
+        let status = if paused {
+            "paused"
+        } else if running {
+            "waiting"
+        } else {
+            "ready"
+        };
         let mut lines: Vec<Line<'static>> = vec![
             vec![
                 "◆ ".fg(crate::tiffany_orchestrator::TIFFANY_BLUE).bold(),
                 "queue ".bold(),
-                if paused { "paused" } else { "ready" }.into(),
+                status.into(),
             ]
             .into(),
             vec![
                 "items  ".dim(),
                 format!("{queued} queued · {rejected} retry-first · {pending} pending").into(),
+            ]
+            .into(),
+            vec![
+                "next   ".dim(),
+                tiffany_queue_next_action(queued, rejected, pending, paused, running).into(),
             ]
             .into(),
         ];

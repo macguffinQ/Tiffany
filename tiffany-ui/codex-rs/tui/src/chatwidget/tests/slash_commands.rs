@@ -3336,6 +3336,75 @@ async fn tiffany_queue_show_lists_retry_first_and_queued_items() {
 }
 
 #[tokio::test]
+async fn tiffany_queue_clear_counts_real_queue_items() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.queue_tiffany_orchestrator_prompt("normal queued prompt".to_string());
+    chat.input_queue
+        .rejected_steers_queue
+        .push_back(UserMessage::from("retry first prompt"));
+    chat.input_queue
+        .rejected_steer_history_records
+        .push_back(UserMessageHistoryRecord::UserMessageText);
+
+    submit_composer_text(&mut chat, "/queue clear");
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Queue cleared. Removed 2 queued item(s)."),
+        "expected real item count, got {rendered:?}"
+    );
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert!(
+        chat.input_queue
+            .queued_user_message_history_records
+            .is_empty()
+    );
+    assert!(chat.input_queue.rejected_steers_queue.is_empty());
+    assert!(chat.input_queue.rejected_steer_history_records.is_empty());
+}
+
+#[tokio::test]
+async fn tiffany_queue_run_while_orchestration_running_arms_batch() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.on_tiffany_orchestrator_run_started();
+    chat.queue_tiffany_orchestrator_prompt("first queued prompt".to_string());
+    chat.queue_tiffany_orchestrator_prompt("second queued prompt".to_string());
+
+    chat.dispatch_command_with_args(SlashCommand::Queue, "run".to_string(), Vec::new());
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Queue armed. Current orchestration is still running"),
+        "expected armed queue message, got {rendered:?}"
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    chat.on_tiffany_orchestrator_run_finished();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "1. first queued prompt\n2. second queued prompt".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected merged queued user turn, got {other:?}"),
+    }
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+}
+
+#[tokio::test]
 async fn slash_copy_state_is_preserved_during_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

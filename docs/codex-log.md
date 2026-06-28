@@ -857,3 +857,24 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M4 by tightening queue run/pause/clear affordances, or return to M2 worker waterfall noise if queue behavior is stable enough for now.
+
+## M4 queue command affordances tightened — 2026-06-29
+
+- Commits:
+  - this commit: `Clarify queue command affordances`
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_queue --lib --quiet` — green, 7 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - `/queue show` now exposes a `next` line so users can see whether the queue is empty, paused, waiting on the current orchestration, ready to run a retry-first item, or ready to merge normal queued prompts into one batch.
+  - `/queue run` during an active Tiffany orchestration now reports that the queue is armed instead of silently falling back to a generic status panel; the queued prompts still submit together after the current run finishes.
+  - `/queue pause` and `/queue resume` now include queued item counts and distinguish immediate start from "armed after current orchestration".
+  - `/queue clear` now reports the real queued item count instead of double-counting internal history records.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M4 with persisted queue/job status visibility, or switch to M2 worker waterfall grouping/raw-debug separation.
