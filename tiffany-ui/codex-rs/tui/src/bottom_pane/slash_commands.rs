@@ -71,9 +71,15 @@ pub(crate) const TIFFANY_ORCHESTRATOR_COMMANDS: &[SlashCommand] = &[
     SlashCommand::Provider,
     SlashCommand::Role,
     SlashCommand::Roles,
+    SlashCommand::Queue,
     SlashCommand::Thread,
+    SlashCommand::Jobs,
     SlashCommand::Continue,
     SlashCommand::History,
+    SlashCommand::Approvals,
+    SlashCommand::Compact,
+    SlashCommand::Process,
+    SlashCommand::Outline,
     SlashCommand::Doctor,
     SlashCommand::Status,
     SlashCommand::Help,
@@ -121,6 +127,12 @@ pub(crate) fn tiffany_orchestrator_command_visible(cmd: SlashCommand) -> bool {
 }
 
 pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Option<String> {
+    if let Some((command, alias)) = tiffany_orchestrator_hidden_alias(name) {
+        return Some(format!(
+            "'/{alias}' is not shown in Tiffany orchestrator mode. Use '/{command}' instead."
+        ));
+    }
+
     let (command, hint) = if let Ok(cmd) = SlashCommand::from_str(name) {
         if tiffany_orchestrator_command_visible(cmd) {
             return None;
@@ -135,7 +147,7 @@ pub(crate) fn tiffany_orchestrator_unsupported_command_message(name: &str) -> Op
                 "Tiffany does not create project instruction files from this shell; add project guidance manually when needed."
             }
             SlashCommand::Compact => {
-                "Tiffany keeps orchestration memory separately; use normal follow-up prompts or /doctor for diagnostics."
+                "Use /compact to build a readable handoff storyline from Tiffany orchestration history."
             }
             SlashCommand::Review => {
                 "Ask for review in the chat, or register a reviewer role with /role and /roles."
@@ -212,8 +224,16 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
         SlashCommand::Role => "register one role with provider, model, and runtime",
         SlashCommand::Roles => "inspect registered roles",
         SlashCommand::Thread => "inspect, clear, or export stable worker sessions",
-        SlashCommand::History => "inspect/export native history by role, thread, or event kind",
+        SlashCommand::Jobs => "inspect persisted queued/running/completed jobs",
+        SlashCommand::Queue => "show or manage queued follow-up prompts",
+        SlashCommand::History => {
+            "inspect/export native history by role, thread, native session, or event kind"
+        }
+        SlashCommand::Approvals => "show native approval requests and resume hints",
+        SlashCommand::Compact => "build a compact handoff storyline from history",
         SlashCommand::Continue => "show/open native CLI handoff for a worker",
+        SlashCommand::Process => "show captured native worker process events",
+        SlashCommand::Outline => "fold or expand process detail",
         SlashCommand::Doctor => "diagnose setup",
         SlashCommand::Status => "show Tiffany orchestration status",
         SlashCommand::Help => "show this command list",
@@ -228,17 +248,11 @@ pub(crate) fn tiffany_orchestrator_command_description(cmd: SlashCommand) -> &'s
 
 fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> {
     let hint = match name {
-        "workflow" | "flow" | "process" | "trace" => {
-            "The native TUI shows the run waterfall inline. Use /status for current state, or ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui for the legacy process commands."
-        }
-        "queue" => {
-            "Queued follow-up prompts are shown in the bottom pane and run automatically after the active task finishes."
+        "workflow" | "flow" | "trace" => {
+            "The native TUI shows the run waterfall inline. Use /status for current state, /process for captured native worker events, or ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui for the legacy process commands."
         }
         "result" | "final" => {
             "The worker answer is already rendered as selectable chat text. Use /copy to copy the last assistant answer."
-        }
-        "o" => {
-            "Detail folding is handled by the native run view; /o exists only in the legacy terminal chat fallback."
         }
         "context" | "ctx" => {
             "Continue by typing the next prompt directly. Stable worker sessions can be inspected with /thread or opened with /continue open."
@@ -254,9 +268,18 @@ fn tiffany_orchestrator_legacy_command_hint(name: &str) -> Option<&'static str> 
             "Ask Tiffany to run the test command in chat, or run the command directly in your shell."
         }
         "graph" => {
-            "Use /history graph for a compact conversation flow, or /history mermaid for a shareable Mermaid diagram."
+            "Use /history compact for a readable handoff storyline, /history graph for text flow, or /history mermaid for a shareable Mermaid diagram."
         }
         "acp" => "Run orchestrator acp from the shell to start the Agent Client Protocol server.",
+        "login" | "signin" | "sign-in" | "auth" | "account" => {
+            "Tiffany orchestrator mode does not use Codex account login. Configure provider credentials with /provider, then bind roles with /role."
+        }
+        "config" | "settings" => {
+            "Configure Tiffany providers with /provider and role routing with /role. Use /status or /doctor to inspect the active setup."
+        }
+        "update" | "upgrade" => {
+            "Tiffany updates are managed outside the orchestrator shell. Use your package manager, for example brew upgrade tiffany-loop."
+        }
         "checkpoint" | "rollback" => {
             "Patch checkpoint and rollback helpers are only available in the legacy terminal chat fallback."
         }
@@ -296,11 +319,15 @@ pub(crate) fn commands_for_input(
 /// command lookup so a typed command can produce a specific unavailable message while the popup
 /// still hides it.
 pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Option<SlashCommand> {
-    let cmd = SlashCommand::from_str(name).ok().or_else(|| {
-        let repeated_os = name.strip_prefix('g')?.strip_suffix("al")?;
-        (!repeated_os.is_empty() && repeated_os.bytes().all(|byte| byte == b'o'))
-            .then_some(SlashCommand::Goal)
-    })?;
+    let cmd = if flags.tiffany_orchestrator_shell {
+        find_tiffany_orchestrator_command(name)?
+    } else {
+        SlashCommand::from_str(name).ok().or_else(|| {
+            let repeated_os = name.strip_prefix('g')?.strip_suffix("al")?;
+            (!repeated_os.is_empty() && repeated_os.bytes().all(|byte| byte == b'o'))
+                .then_some(SlashCommand::Goal)
+        })?
+    };
     builtins_for_input(BuiltinCommandFlags {
         token_activity_command_enabled: true,
         side_conversation_active: false,
@@ -309,6 +336,21 @@ pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Op
     .into_iter()
     .any(|(_, visible_cmd)| visible_cmd == cmd)
     .then_some(cmd)
+}
+
+fn find_tiffany_orchestrator_command(name: &str) -> Option<SlashCommand> {
+    TIFFANY_ORCHESTRATOR_COMMANDS
+        .iter()
+        .copied()
+        .find(|cmd| cmd.command() == name)
+}
+
+fn tiffany_orchestrator_hidden_alias(name: &str) -> Option<(&'static str, &str)> {
+    let cmd = SlashCommand::from_str(name).ok()?;
+    if !tiffany_orchestrator_command_visible(cmd) || cmd.command() == name {
+        return None;
+    }
+    Some((cmd.command(), name))
 }
 
 pub(crate) fn find_slash_command(
@@ -492,9 +534,15 @@ mod tests {
                 SlashCommand::Provider,
                 SlashCommand::Role,
                 SlashCommand::Roles,
+                SlashCommand::Queue,
                 SlashCommand::Thread,
+                SlashCommand::Jobs,
                 SlashCommand::Continue,
                 SlashCommand::History,
+                SlashCommand::Approvals,
+                SlashCommand::Compact,
+                SlashCommand::Process,
+                SlashCommand::Outline,
                 SlashCommand::Doctor,
                 SlashCommand::Status,
                 SlashCommand::Help,
@@ -508,7 +556,13 @@ mod tests {
         assert!(!commands.contains(&SlashCommand::Model));
         assert!(!commands.contains(&SlashCommand::Permissions));
         assert!(!commands.contains(&SlashCommand::Init));
-        assert!(!commands.contains(&SlashCommand::Compact));
+        assert!(!commands.contains(&SlashCommand::Resume));
+        assert!(!commands.contains(&SlashCommand::Usage));
+        assert!(!commands.contains(&SlashCommand::Logout));
+        assert!(commands.contains(&SlashCommand::Compact));
+        assert!(commands.contains(&SlashCommand::Queue));
+        assert!(commands.contains(&SlashCommand::Process));
+        assert!(commands.contains(&SlashCommand::Outline));
         assert_eq!(
             find_builtin_command(
                 "commands",
@@ -517,7 +571,48 @@ mod tests {
                     ..all_enabled_flags()
                 },
             ),
+            None
+        );
+    }
+
+    #[test]
+    fn tiffany_orchestrator_mode_rejects_hidden_aliases() {
+        let flags = BuiltinCommandFlags {
+            tiffany_orchestrator_shell: true,
+            ..all_enabled_flags()
+        };
+
+        for alias in ["providers", "commands", "h"] {
+            assert_eq!(
+                find_builtin_command(alias, flags),
+                None,
+                "hidden alias '/{alias}' should not execute in Tiffany mode"
+            );
+            assert!(
+                tiffany_orchestrator_unsupported_command_message(alias)
+                    .expect("hidden alias should explain canonical command")
+                    .contains("Use '/")
+            );
+        }
+
+        assert_eq!(find_builtin_command("quit", flags), None);
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("quit")
+                .expect("/quit should point to /exit")
+                .contains("Use /exit")
+        );
+
+        assert_eq!(
+            find_builtin_command("provider", flags),
+            Some(SlashCommand::Provider)
+        );
+        assert_eq!(
+            find_builtin_command("help", flags),
             Some(SlashCommand::Help)
+        );
+        assert_eq!(
+            find_builtin_command("exit", flags),
+            Some(SlashCommand::Exit)
         );
     }
 
@@ -553,11 +648,7 @@ mod tests {
                 .expect("init should be known but hidden")
                 .contains("project instruction files")
         );
-        assert!(
-            tiffany_orchestrator_unsupported_command_message("process")
-                .expect("legacy terminal chat command should be explained")
-                .contains("run waterfall")
-        );
+        assert!(tiffany_orchestrator_unsupported_command_message("process").is_none());
         assert!(
             tiffany_orchestrator_unsupported_command_message("result")
                 .expect("legacy result command should be explained")
@@ -566,17 +657,46 @@ mod tests {
         assert!(tiffany_orchestrator_unsupported_command_message("raw").is_none());
         assert!(tiffany_orchestrator_unsupported_command_message("diff").is_none());
         assert!(tiffany_orchestrator_unsupported_command_message("history").is_none());
+        assert!(tiffany_orchestrator_unsupported_command_message("approvals").is_none());
+        assert!(tiffany_orchestrator_unsupported_command_message("compact").is_none());
         assert!(
             tiffany_orchestrator_unsupported_command_message("sessions")
                 .expect("legacy sessions command should be explained")
                 .contains("/history")
         );
         assert!(
-            tiffany_orchestrator_unsupported_command_message("o")
-                .expect("legacy folding command should be explained")
-                .contains("legacy terminal chat fallback")
+            tiffany_orchestrator_unsupported_command_message("login")
+                .expect("account commands should be explained")
+                .contains("/provider")
         );
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("auth")
+                .expect("auth commands should be explained")
+                .contains("/role")
+        );
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("config")
+                .expect("config commands should be explained")
+                .contains("/doctor")
+        );
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("settings")
+                .expect("settings commands should be explained")
+                .contains("/provider")
+        );
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("update")
+                .expect("update commands should be explained")
+                .contains("brew upgrade tiffany-loop")
+        );
+        assert!(tiffany_orchestrator_unsupported_command_message("queue").is_none());
+        assert!(tiffany_orchestrator_unsupported_command_message("o").is_none());
         assert!(tiffany_orchestrator_unsupported_command_message("provider").is_none());
+        assert!(
+            tiffany_orchestrator_unsupported_command_message("providers")
+                .expect("hidden provider alias should be explained")
+                .contains("Use '/provider'")
+        );
         assert!(tiffany_orchestrator_unsupported_command_message("does-not-exist").is_none());
     }
 

@@ -202,7 +202,7 @@ impl ChatWidget {
             .collect::<Vec<_>>();
         history_records.resize(messages.len(), UserMessageHistoryRecord::UserMessageText);
 
-        let (message, history_record) = merge_user_messages_with_history_record(
+        let (message, history_record) = merge_tiffany_queued_user_messages_with_history_record(
             messages.into_iter().zip(history_records).collect(),
         );
         let submitted = self.submit_user_message_with_history_record(message, history_record);

@@ -658,11 +658,38 @@ mod tests {
         assert_eq!(
             cmds.iter().map(String::as_str).collect::<Vec<_>>(),
             vec![
-                "provider", "role", "roles", "thread", "continue", "history", "doctor",
-                "status", "help", "copy", "raw", "diff", "clear", "exit",
+                "provider",
+                "role",
+                "roles",
+                "queue",
+                "thread",
+                "jobs",
+                "continue",
+                "history",
+                "approvals",
+                "compact",
+                "process",
+                "o",
+                "doctor",
+                "status",
+                "help",
+                "copy",
+                "raw",
+                "diff",
+                "clear",
+                "exit",
             ]
         );
-        for hidden in ["model", "permissions", "init", "compact", "apps", "fast"] {
+        for hidden in [
+            "model",
+            "permissions",
+            "init",
+            "resume",
+            "usage",
+            "logout",
+            "apps",
+            "fast",
+        ] {
             assert!(
                 !cmds.iter().any(|cmd| cmd == hidden),
                 "expected '/{hidden}' to be hidden in Tiffany popup, got {cmds:?}"
@@ -695,7 +722,12 @@ mod tests {
         popup.render_ref(area, &mut buf);
         let rendered = format!("{buf:?}");
 
-        assert!(rendered.contains("inspect/export native history by role, thread, or event kind"));
+        assert_eq!(
+            tiffany_orchestrator_command_description(SlashCommand::History),
+            "inspect/export native history by role, thread, native session, or event kind"
+        );
+        assert!(rendered.contains("inspect/export native history"));
+        assert!(rendered.contains("native session"));
         assert!(!rendered.contains("saved chat"));
     }
 

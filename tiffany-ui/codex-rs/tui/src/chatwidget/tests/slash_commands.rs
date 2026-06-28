@@ -257,6 +257,21 @@ async fn slash_thread_inline_args_dispatch_to_tiffany_orchestrator() {
 }
 
 #[tokio::test]
+async fn slash_jobs_dispatches_to_tiffany_orchestrator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command_with_args(SlashCommand::Jobs, "12".to_string(), Vec::new());
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorJobsCommand { args }) => {
+            assert_eq!(args, "12");
+        }
+        other => panic!("expected TiffanyOrchestratorJobsCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_history_dispatches_to_tiffany_orchestrator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);
@@ -278,6 +293,68 @@ async fn slash_history_dispatches_to_tiffany_orchestrator() {
         }
         other => panic!("expected TiffanyOrchestratorHistoryCommand, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn slash_approvals_dispatches_to_tiffany_history_approval_view() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.handle_slash_command_dispatch(SlashCommand::Approvals);
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorHistoryCommand { args }) => {
+            assert_eq!(args, "approvals");
+        }
+        other => panic!("expected TiffanyOrchestratorHistoryCommand, got {other:?}"),
+    }
+
+    chat.dispatch_command_with_args(SlashCommand::Approvals, "full".to_string(), Vec::new());
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorHistoryCommand { args }) => {
+            assert_eq!(args, "approvals");
+        }
+        other => panic!("expected TiffanyOrchestratorHistoryCommand, got {other:?}"),
+    }
+
+    chat.dispatch_command_with_args(SlashCommand::Approvals, "--turns 3".to_string(), Vec::new());
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorHistoryCommand { args }) => {
+            assert_eq!(args, "approvals --turns 3");
+        }
+        other => panic!("expected TiffanyOrchestratorHistoryCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_compact_dispatches_to_tiffany_history_compact() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.handle_slash_command_dispatch(SlashCommand::Compact);
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorHistoryCommand { args }) => {
+            assert_eq!(args, "compact");
+        }
+        other => panic!("expected TiffanyOrchestratorHistoryCommand, got {other:?}"),
+    }
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    submit_composer_text(&mut chat, "/compact role worker-cc");
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::TiffanyOrchestratorHistoryCommand { args }
+                if args == "compact role worker-cc"
+        )),
+        "expected TiffanyOrchestratorHistoryCommand compact role worker-cc, got {events:?}"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]
@@ -314,9 +391,7 @@ async fn slash_continue_guides_when_not_in_orchestrator_mode() {
         Ok(AppEvent::InsertHistoryCell(cell)) => {
             let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
             assert!(rendered.contains("tiffany-loop orchestrator mode"));
-            assert!(rendered.contains(
-                "Usage: /continue [open] [<role>|claude|codex|gemini]"
-            ));
+            assert!(rendered.contains("Usage: /continue [open] [<role>|claude|codex|gemini]"));
         }
         other => panic!("expected InsertHistoryCell, got {other:?}"),
     }
@@ -508,7 +583,7 @@ async fn tiffany_orchestrator_rejects_legacy_terminal_command_submit() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);
 
-    submit_composer_text(&mut chat, "/process 200");
+    submit_composer_text(&mut chat, "/workflow");
 
     let cells = drain_insert_history(&mut rx);
     let rendered = cells
@@ -517,13 +592,48 @@ async fn tiffany_orchestrator_rejects_legacy_terminal_command_submit() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("'/process' is not available in Tiffany orchestrator mode"),
+        rendered.contains("'/workflow' is not available in Tiffany orchestrator mode"),
         "expected Tiffany legacy-command message, got {rendered:?}"
     );
     assert!(rendered.contains("run waterfall"));
     assert!(rendered.contains("/status"));
-    assert_eq!(chat.bottom_pane.composer_text(), "/process 200");
+    assert_eq!(chat.bottom_pane.composer_text(), "/workflow");
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn tiffany_orchestrator_explains_account_and_config_command_submit() {
+    for (input, expected) in [
+        ("/login", "/provider"),
+        ("/auth", "/role"),
+        ("/config", "/doctor"),
+        ("/settings", "/provider"),
+        ("/update", "brew upgrade tiffany-loop"),
+    ] {
+        let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.set_tiffany_orchestrator_shell(true);
+
+        submit_composer_text(&mut chat, input);
+
+        let cells = drain_insert_history(&mut rx);
+        let rendered = cells
+            .iter()
+            .map(|cell| lines_to_single_string(cell))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains(&format!(
+                "'{input}' is not available in Tiffany orchestrator mode"
+            )),
+            "expected Tiffany unsupported-command message for {input}, got {rendered:?}"
+        );
+        assert!(
+            rendered.contains(expected),
+            "expected {expected:?} guidance for {input}, got {rendered:?}"
+        );
+        assert_eq!(chat.bottom_pane.composer_text(), input);
+        assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    }
 }
 
 #[tokio::test]
@@ -583,9 +693,13 @@ async fn tiffany_orchestrator_help_lists_supported_commands() {
         "/provider",
         "/role",
         "/roles",
+        "/queue",
         "/thread",
         "/continue",
         "/history",
+        "/approvals",
+        "/process",
+        "/o",
         "/doctor",
         "/status",
         "/help",
@@ -627,7 +741,7 @@ async fn tiffany_orchestrator_status_uses_native_orchestration_summary() {
     assert!(rendered.contains("runtime"));
     assert!(rendered.contains("orchestrator"));
     assert!(rendered.contains(
-        "/provider  /role  /roles  /thread  /continue  /history  /doctor  /status  /help  /copy  /raw  /diff  /clear  /exit"
+        "/provider  /role  /roles  /queue  /thread  /jobs  /continue  /history  /approvals  /compact  /process  /o  /doctor  /status  /help  /copy  /raw  /diff  /clear  /exit"
     ));
     assert!(!rendered.contains("ChatGPT"));
     assert!(!rendered.contains("Reasoning"));
@@ -647,6 +761,7 @@ async fn tiffany_orchestrator_status_warns_when_runtime_is_missing() {
             bin: missing.display().to_string(),
             extra_args: Vec::new(),
             config_path: None,
+            worker_scope: "tui:test:/tmp/tiffany".to_string(),
         },
     ));
 
@@ -735,13 +850,15 @@ async fn slash_role_bare_opens_registration_prompt() {
     assert!(!popup.contains("minimax-m3-codex"));
     assert!(popup.contains("MiniMax-M3"));
     assert!(popup.contains("roles register"));
+    assert!(popup.contains("minimax/MiniMax-M3 @ codex"));
+    assert!(popup.contains("model id auto"));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     match rx.try_recv() {
         Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
             assert_eq!(
                 args,
-                "register worker-codex --model minimax-m3-codex --runtime codex --provider minimax --model-name MiniMax-M3 --no-agent-teams"
+                "register worker-codex --runtime codex --provider minimax --model-name MiniMax-M3 --no-agent-teams"
             );
         }
         other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
@@ -766,7 +883,49 @@ async fn slash_role_single_arg_prefills_registration_prompt() {
         Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
             assert_eq!(
                 args,
-                "register worker-cc --model sonnet --runtime claude-code --provider anthropic --model-name claude-sonnet-4-6 --agent-teams"
+                "register worker-cc --runtime claude-code --provider anthropic --model-name claude-sonnet-4-6 --agent-teams"
+            );
+        }
+        other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_role_edit_prefills_existing_role_binding() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("config.yaml");
+    std::fs::write(
+        &config_path,
+        "providers:\n  anthropic:\n    type: anthropic\n    api_key: ${ANTHROPIC_API_KEY}\nruntimes:\n  claude-code:\n    type: subprocess\n    binary: claude\n    supports_agent_teams: true\nmodels:\n  - id: sonnet\n    provider: anthropic\n    name: claude-sonnet-4-6\nroles:\n  worker-cc:\n    model: sonnet\n    runtime: claude-code\n    agent_teams: true\nbehavior: {}\n",
+    )
+    .expect("write config");
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.set_tiffany_orchestrator_config(Some(
+        crate::tiffany_orchestrator::TiffanyOrchestratorConfig {
+            bin: "orchestrator".to_string(),
+            extra_args: Vec::new(),
+            config_path: Some(config_path.display().to_string()),
+            worker_scope: "tui:test:/tmp/tiffany".to_string(),
+        },
+    ));
+
+    chat.dispatch_command_with_args(SlashCommand::Role, "edit worker-cc".to_string(), Vec::new());
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(popup.contains("worker-cc"));
+    assert!(popup.contains("anthropic"));
+    assert!(popup.contains("claude-sonnet-4-6"));
+    assert!(popup.contains("claude-code"));
+    assert!(popup.contains("yes"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
+            assert_eq!(
+                args,
+                "register worker-cc --runtime claude-code --provider anthropic --model-name claude-sonnet-4-6 --agent-teams"
             );
         }
         other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
@@ -791,7 +950,7 @@ async fn slash_role_worker_gemini_prefills_registration_prompt() {
         Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
             assert_eq!(
                 args,
-                "register worker-gemini --model gemini-pro --runtime gemini --provider google --model-name gemini-1.5-pro --no-agent-teams"
+                "register worker-gemini --runtime gemini --provider google --model-name gemini-1.5-pro --no-agent-teams"
             );
         }
         other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
@@ -828,7 +987,7 @@ async fn slash_role_control_roles_default_to_neutral_codex_worker() {
                 assert_eq!(
                     args,
                     format!(
-                        "register {role} --model minimax-m3-codex --runtime codex --provider minimax --model-name MiniMax-M3 --no-agent-teams"
+                        "register {role} --runtime codex --provider minimax --model-name MiniMax-M3 --no-agent-teams"
                     )
                 );
             }
@@ -851,7 +1010,7 @@ async fn slash_role_selection_fields_ignore_direct_typing() {
         Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
             assert_eq!(
                 args,
-                "register worker-codex --model minimax-m3-codex --runtime codex --provider minimax --model-name MiniMax-M3 --no-agent-teams"
+                "register worker-codex --runtime codex --provider minimax --model-name MiniMax-M3 --no-agent-teams"
             );
         }
         other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
@@ -882,6 +1041,34 @@ async fn slash_role_provider_selection_filters_model_options() {
     assert!(!popup.contains("gpt4o"));
     assert!(!popup.contains("sonnet"));
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_role_google_provider_defaults_to_gemini_runtime() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.handle_slash_command_dispatch(SlashCommand::Role);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(popup.contains("google"));
+    assert!(popup.contains("gemini-1.5-pro"));
+    assert!(popup.contains("gemini"));
+    assert!(!popup.contains("direct  "));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
+            assert_eq!(
+                args,
+                "register worker-codex --runtime gemini --provider google --model-name gemini-1.5-pro --no-agent-teams"
+            );
+        }
+        other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -925,6 +1112,25 @@ async fn slash_role_register_args_dispatch_directly() {
 }
 
 #[tokio::test]
+async fn slash_role_delete_dispatches_directly() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Role,
+        "delete worker-codex".to_string(),
+        Vec::new(),
+    );
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
+            assert_eq!(args, "delete worker-codex");
+        }
+        other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_provider_dispatches_to_tiffany_orchestrator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);
@@ -940,6 +1146,55 @@ async fn slash_provider_dispatches_to_tiffany_orchestrator() {
             assert_eq!(args, "key openai $OPENAI_API_KEY");
         }
         other => panic!("expected TiffanyOrchestratorProviderCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_provider_delete_dispatches_directly() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Provider,
+        "delete minimax".to_string(),
+        Vec::new(),
+    );
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorProviderCommand { args }) => {
+            assert_eq!(args, "delete minimax");
+        }
+        other => panic!("expected TiffanyOrchestratorProviderCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_provider_bare_delete_stays_on_command_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command_with_args(SlashCommand::Provider, "delete".to_string(), Vec::new());
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorProviderCommand { args }) => {
+            assert_eq!(args, "delete");
+        }
+        other => panic!("expected TiffanyOrchestratorProviderCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_role_bare_delete_stays_on_command_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.dispatch_command_with_args(SlashCommand::Role, "delete".to_string(), Vec::new());
+
+    match rx.try_recv() {
+        Ok(AppEvent::TiffanyOrchestratorRolesCommand { args }) => {
+            assert_eq!(args, "delete");
+        }
+        other => panic!("expected TiffanyOrchestratorRolesCommand, got {other:?}"),
     }
 }
 
@@ -1037,6 +1292,7 @@ async fn slash_provider_edit_prefills_existing_provider_config() {
             bin: "orchestrator".to_string(),
             extra_args: Vec::new(),
             config_path: Some(config_path.display().to_string()),
+            worker_scope: "tui:test:/tmp/tiffany".to_string(),
         },
     ));
 
@@ -1134,8 +1390,89 @@ fn role_setup_draft_registers_role() {
 
     assert_eq!(
         args,
-        "register worker-codex --model minimax-m3-codex --runtime codex --provider minimax --model-name MiniMax-M3 --no-agent-teams"
+        "register worker-codex --runtime codex --provider minimax --model-name MiniMax-M3 --no-agent-teams"
     );
+}
+
+#[test]
+fn role_setup_draft_falls_back_to_internal_model_id_when_api_model_is_missing() {
+    let args =
+        super::super::slash_dispatch::role_setup_draft_args(&crate::bottom_pane::RoleSetupDraft {
+            role: "planner".to_string(),
+            provider: String::new(),
+            model_id: "existing-model".to_string(),
+            model_name: String::new(),
+            runtime: "codex".to_string(),
+            teams: "auto".to_string(),
+        })
+        .expect("role draft args");
+
+    assert_eq!(
+        args,
+        "register planner --model existing-model --runtime codex"
+    );
+}
+
+#[test]
+fn role_setup_draft_requires_api_model_or_internal_model_id() {
+    let err =
+        super::super::slash_dispatch::role_setup_draft_args(&crate::bottom_pane::RoleSetupDraft {
+            role: "planner".to_string(),
+            provider: "minimax".to_string(),
+            model_id: String::new(),
+            model_name: String::new(),
+            runtime: "codex".to_string(),
+            teams: "auto".to_string(),
+        })
+        .expect_err("missing model");
+
+    assert_eq!(err, "provider and API model are required");
+}
+
+#[test]
+fn process_command_aliases_map_to_native_history_filters() {
+    let args = super::super::slash_dispatch::tiffany_process_history_args;
+
+    assert_eq!(args("tool"), "kind tool_result");
+    assert_eq!(args("tool-call"), "kind tool_use");
+    assert_eq!(args("tool_use"), "kind tool_use");
+    assert_eq!(args("questions"), "kind question");
+    assert_eq!(args("approvals"), "approvals");
+    assert_eq!(args("diff"), "kind diff");
+}
+
+#[test]
+fn role_setup_catalog_reads_provider_model_runtime_and_role_options() {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+providers:
+  acme:
+    type: openai
+    base_url: https://api.acme.test/v1
+runtimes:
+  acme-cli:
+    type: subprocess
+    binary: acme
+models:
+  - id: acme-fast
+    provider: acme
+    name: acme-fast-v2
+roles:
+  worker-acme:
+    model: acme-fast
+    runtime: acme-cli
+    agent_teams: false
+"#,
+    )
+    .expect("yaml");
+
+    let catalog = super::super::slash_dispatch::role_setup_catalog_from_yaml(&yaml);
+
+    assert_eq!(catalog.providers[0].value.as_ref(), "acme");
+    assert_eq!(catalog.runtimes[0].value.as_ref(), "acme-cli");
+    assert_eq!(catalog.models[0].id, "acme-fast");
+    assert_eq!(catalog.models[0].name, "acme-fast-v2");
+    assert_eq!(catalog.roles[0].value.as_ref(), "worker-acme");
 }
 
 #[test]
@@ -2934,13 +3271,68 @@ async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
 }
 
 #[tokio::test]
-async fn tiffany_orchestrator_result_updates_copy_source() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn tiffany_orchestrator_result_updates_copy_source_and_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);
 
-    chat.record_tiffany_orchestrator_result_for_copy("  final worker answer  ");
+    chat.add_tiffany_orchestrator_result("  final worker answer  ");
 
     assert_eq!(chat.last_agent_markdown_text(), Some("final worker answer"));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one final answer cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("final worker answer"));
+    assert!(!rendered.contains("Final result"));
+}
+
+#[tokio::test]
+async fn tiffany_orchestrator_visible_result_updates_copy_source_without_duplicate_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    chat.record_tiffany_orchestrator_result("  streamed worker answer  ");
+
+    assert_eq!(
+        chat.last_agent_markdown_text(),
+        Some("streamed worker answer")
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "visible worker result should not be duplicated as a final answer cell"
+    );
+}
+
+#[tokio::test]
+async fn tiffany_queue_show_lists_retry_first_and_queued_items() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.input_queue
+        .rejected_steers_queue
+        .push_back(UserMessage::from("retry first prompt"));
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("normal queued prompt").into());
+
+    submit_composer_text(&mut chat, "/queue show");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("1 queued · 1 retry-first · 0 pending"),
+        "expected queue counts, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("retry-first")
+            && rendered.contains("retry first prompt")
+            && rendered.contains("queued")
+            && rendered.contains("normal queued prompt"),
+        "expected retry-first and queued previews, got {rendered:?}"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]

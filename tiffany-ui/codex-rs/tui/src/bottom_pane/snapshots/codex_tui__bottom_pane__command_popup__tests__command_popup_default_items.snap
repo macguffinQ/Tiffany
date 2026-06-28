@@ -1,16 +1,17 @@
 ---
 source: tui/src/bottom_pane/command_popup.rs
+assertion_line: 440
 expression: commands
 ---
 /model - choose what model and reasoning effort to use
 /ide - include current selection, open files, and other context from your IDE
-/permissions - choose what Codex is allowed to do
+/permissions - choose what tiffany-loop is allowed to do
 /keymap - remap TUI shortcuts
 /vim - toggle Vim mode for the composer
 /experimental - toggle experimental features
 /approve - approve one retry of a recent auto-review denial
 /memories - configure memory use and generation
-/skills - use skills to improve how Codex performs specific tasks
+/skills - use skills to improve how tiffany-loop performs specific tasks
 /import - import setup, this project, and recent chats from Claude Code
 /hooks - view and manage lifecycle hooks
 /review - review my current changes and find issues
@@ -20,9 +21,19 @@ expression: commands
 /delete - permanently delete this session and exit
 /resume - resume a saved chat
 /fork - fork the current chat
-/app - continue this session in Codex Desktop
-/init - create an AGENTS.md file with instructions for Codex
+/app - continue this session in desktop app
+/init - create an AGENTS.md file with instructions for tiffany-loop
 /compact - summarize conversation to prevent hitting the context limit
+/provider - configure tiffany-loop orchestrator providers
+/role - register one tiffany-loop orchestrator role
+/roles - inspect or register tiffany-loop orchestrator roles
+/thread - inspect or clear stable worker thread sessions
+/jobs - inspect persisted Tiffany queue jobs
+/history - inspect, search, export, or graph native Tiffany conversation history
+/approvals - show native worker approval requests
+/continue - show or open a worker's native CLI session
+/doctor - diagnose tiffany-loop orchestrator setup
+/help - show Tiffany orchestrator commands
 /agent - switch the active agent thread
 /side - start a side conversation in an ephemeral fork
 /copy - copy last response as markdown
@@ -35,7 +46,7 @@ expression: commands
 /theme - choose a syntax highlighting theme
 /pets - choose or hide the terminal pet
 /mcp - list configured MCP tools; use /mcp verbose for details
-/exit - exit Codex
+/exit - exit tiffany-loop
 /feedback - send logs to maintainers
 /rollout - print the rollout file path
 /ps - list background terminals

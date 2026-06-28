@@ -430,6 +430,7 @@ use self::user_messages::UserMessageHistoryOverride;
 use self::user_messages::UserMessageHistoryRecord;
 use self::user_messages::app_server_text_elements;
 pub(crate) use self::user_messages::create_initial_user_message;
+use self::user_messages::merge_tiffany_queued_user_messages_with_history_record;
 use self::user_messages::merge_user_messages;
 use self::user_messages::merge_user_messages_with_history_record;
 #[cfg(test)]
@@ -625,6 +626,7 @@ pub(crate) struct ChatWidget {
     /// tiffany-loop orchestrator mode uses Codex's UI shell without a Codex thread.
     tiffany_orchestrator_shell: bool,
     tiffany_orchestrator_config: Option<crate::tiffany_orchestrator::TiffanyOrchestratorConfig>,
+    tiffany_process_detail_expanded: bool,
     /// Nudge dismissals that should survive draft edits within the current thread scope.
     ///
     /// The nudge is only a discovery aid, so once a user dismisses it or enters Plan mode we keep it
@@ -940,11 +942,37 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn record_tiffany_orchestrator_result_for_copy(&mut self, message: &str) {
+    pub(crate) fn add_tiffany_orchestrator_result(&mut self, message: &str) {
         let message = message.trim();
-        if !message.is_empty() {
-            self.record_agent_markdown(message);
+        if message.is_empty() {
+            return;
         }
+        self.record_agent_markdown(message);
+        self.add_to_history(history_cell::AgentMarkdownCell::new(
+            message.to_string(),
+            self.config.cwd.as_path(),
+        ));
+    }
+
+    pub(crate) fn stream_tiffany_orchestrator_result_delta(&mut self, delta: &str) {
+        if delta.is_empty() {
+            return;
+        }
+        self.handle_streaming_delta(delta.to_string());
+    }
+
+    pub(crate) fn finish_tiffany_orchestrator_result_stream(&mut self) {
+        if self.stream_controller.is_some() {
+            self.finalize_completed_assistant_message(None);
+        }
+    }
+
+    pub(crate) fn record_tiffany_orchestrator_result(&mut self, message: &str) {
+        let message = message.trim();
+        if message.is_empty() {
+            return;
+        }
+        self.record_agent_markdown(message);
     }
 
     fn record_visible_user_turn_for_copy(&mut self) {

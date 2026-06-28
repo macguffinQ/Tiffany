@@ -11,7 +11,10 @@ use crate::bottom_pane::ProviderSetupDraft;
 use crate::bottom_pane::ProviderSetupView;
 use crate::bottom_pane::RoleProfileSetupDraft;
 use crate::bottom_pane::RoleProfileSetupView;
+use crate::bottom_pane::RoleSetupCatalog;
+use crate::bottom_pane::RoleSetupChoice;
 use crate::bottom_pane::RoleSetupDraft;
+use crate::bottom_pane::RoleSetupModelChoice;
 use crate::bottom_pane::RoleSetupView;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::role_profile_setup_draft_args;
@@ -49,11 +52,105 @@ const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 const PROVIDER_USAGE: &str = "Usage: /provider [setup|list|delete <provider>|key <provider> <key-or-$ENV>|endpoint <provider> <url>]";
-const ROLE_USAGE: &str = "Usage: /role [<role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]";
-const ROLES_USAGE: &str = "Usage: /roles [list|show <role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>]";
+const ROLE_USAGE: &str = "Usage: /role [<role>|options|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>|delete <role>]";
+const ROLES_USAGE: &str = "Usage: /roles [list|show <role>|register <role> --provider <provider> --model-name <api-model> --runtime <runtime>|delete <role>]";
 const THREAD_USAGE: &str = "Usage: /thread [list|show <role>|clear <role>|export <role> [--format markdown|html|--out <path>|--clipboard]]";
 const CONTINUE_USAGE: &str = "Usage: /continue [open] [<role>|claude|codex|gemini]";
 const DOCTOR_USAGE: &str = "Usage: /doctor [run]";
+const QUEUE_USAGE: &str = "Usage: /queue [show|clear|pause|resume|run]";
+const PROCESS_USAGE: &str =
+    "Usage: /process [summary|full|compact|approvals|questions|tool|tool-call|diff|stderr]";
+
+fn tiffany_approvals_history_args(args: &str) -> String {
+    match args.split_whitespace().collect::<Vec<_>>().as_slice() {
+        [] | ["compact" | "story" | "summary"] | ["full" | "all"] => "approvals".to_string(),
+        ["--turns" | "-n", value] => format!("approvals --turns {value}"),
+        _ => "approvals".to_string(),
+    }
+}
+
+pub(super) fn tiffany_process_history_args(args: &str) -> String {
+    match args.split_whitespace().collect::<Vec<_>>().as_slice() {
+        [] | ["summary"] | ["compact" | "folded"] => "compact".to_string(),
+        ["full" | "all" | "expanded"] => "full".to_string(),
+        ["approval" | "approvals"] => "approvals".to_string(),
+        ["question" | "questions" | "ask"] => "kind question".to_string(),
+        ["answer" | "answers" | "assistant"] => "kind answer".to_string(),
+        ["tool" | "tools" | "tool-result" | "tool_result"] => "kind tool_result".to_string(),
+        ["call" | "calls" | "tool-call" | "tool-calls" | "tool_use" | "tool-use"] => {
+            "kind tool_use".to_string()
+        }
+        ["diff" | "patch"] => "kind diff".to_string(),
+        ["stderr" | "error" | "errors"] => "kind stderr".to_string(),
+        ["kind", rest @ ..] if !rest.is_empty() => format!("kind {}", rest.join(" ")),
+        [
+            "role" | "thread" | "native" | "session" | "search",
+            rest @ ..,
+        ] if !rest.is_empty() => {
+            format!(
+                "{} {}",
+                args.split_whitespace().next().unwrap_or_default(),
+                rest.join(" ")
+            )
+        }
+        [count] if count.parse::<usize>().is_ok() => (*count).to_string(),
+        _ => "full".to_string(),
+    }
+}
+
+fn truncate_tiffany_queue_preview(text: &str) -> String {
+    const MAX: usize = 160;
+    let trimmed = text.trim();
+    let mut out = trimmed.chars().take(MAX).collect::<String>();
+    if trimmed.chars().count() > MAX {
+        out.push('…');
+    }
+    out
+}
+
+fn push_tiffany_queue_preview_section(
+    lines: &mut Vec<Line<'static>>,
+    title: &'static str,
+    detail: &'static str,
+    items: &[String],
+) {
+    const LIMIT: usize = 8;
+    if items.is_empty() {
+        return;
+    }
+
+    lines.push(
+        vec![
+            "  ".into(),
+            title.fg(crate::tiffany_orchestrator::TIFFANY_BLUE).bold(),
+            " ".into(),
+            detail.dim(),
+        ]
+        .into(),
+    );
+
+    for (idx, item) in items.iter().take(LIMIT).enumerate() {
+        lines.push(
+            vec![
+                format!("{:>2}. ", idx + 1).dim(),
+                truncate_tiffany_queue_preview(item).into(),
+            ]
+            .into(),
+        );
+    }
+
+    let hidden = items.len().saturating_sub(LIMIT);
+    if hidden > 0 {
+        lines.push(
+            vec![
+                "... ".dim(),
+                format!("{hidden} more {title} item(s)").into(),
+            ]
+            .into(),
+        );
+    }
+}
+
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -230,6 +327,29 @@ impl ChatWidget {
             .send(AppEvent::TiffanyOrchestratorThreadCommand { args: args.into() });
     }
 
+    fn dispatch_tiffany_jobs_command(&mut self, args: impl Into<String>) {
+        if !self.tiffany_orchestrator_shell {
+            self.add_error_message(
+                "'/jobs' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`."
+                    .to_string(),
+            );
+            return;
+        }
+        self.app_event_tx
+            .send(AppEvent::TiffanyOrchestratorJobsCommand { args: args.into() });
+    }
+
+    fn dispatch_tiffany_process_command(&mut self, args: impl Into<String>) {
+        if !self.tiffany_orchestrator_shell {
+            self.add_error_message(format!(
+                "'/process' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{PROCESS_USAGE}"
+            ));
+            return;
+        }
+        let args = tiffany_process_history_args(&args.into());
+        self.dispatch_tiffany_history_command(args);
+    }
+
     fn dispatch_tiffany_continue_command(&mut self, args: impl Into<String>) {
         if !self.tiffany_orchestrator_shell {
             self.add_error_message(format!(
@@ -238,9 +358,7 @@ impl ChatWidget {
             return;
         }
         self.app_event_tx
-            .send(AppEvent::TiffanyOrchestratorContinueCommand {
-                args: args.into(),
-            });
+            .send(AppEvent::TiffanyOrchestratorContinueCommand { args: args.into() });
     }
 
     fn dispatch_tiffany_history_command(&mut self, args: impl Into<String>) {
@@ -253,6 +371,20 @@ impl ChatWidget {
         }
         self.app_event_tx
             .send(AppEvent::TiffanyOrchestratorHistoryCommand { args: args.into() });
+    }
+
+    fn dispatch_tiffany_approvals_command(&mut self, args: impl Into<String>) {
+        if !self.tiffany_orchestrator_shell {
+            self.add_error_message(
+                "'/approvals' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`."
+                    .to_string(),
+            );
+            return;
+        }
+        self.app_event_tx
+            .send(AppEvent::TiffanyOrchestratorHistoryCommand {
+                args: tiffany_approvals_history_args(&args.into()),
+            });
     }
 
     fn open_tiffany_provider_setup_prompt(&mut self, provider: Option<&str>) {
@@ -291,10 +423,13 @@ impl ChatWidget {
             return;
         }
 
-        let draft = role_setup_initial_draft(role);
+        let config = self.tiffany_orchestrator_config.as_ref();
+        let draft = role_setup_initial_draft(role, config);
+        let catalog = role_setup_catalog(config);
         let tx = self.app_event_tx.clone();
-        let view = RoleSetupView::new(
+        let view = RoleSetupView::with_catalog(
             draft,
+            catalog,
             Box::new(
                 move |draft: RoleSetupDraft| match role_setup_draft_args(&draft) {
                     Ok(args) => {
@@ -453,11 +588,15 @@ impl ChatWidget {
                 self.submit_user_message(INIT_PROMPT.to_string().into());
             }
             SlashCommand::Compact => {
-                self.clear_token_usage();
-                if !self.bottom_pane.is_task_running() {
-                    self.bottom_pane.set_task_running(/*running*/ true);
+                if self.tiffany_orchestrator_shell {
+                    self.dispatch_tiffany_history_command("compact");
+                } else {
+                    self.clear_token_usage();
+                    if !self.bottom_pane.is_task_running() {
+                        self.bottom_pane.set_task_running(/*running*/ true);
+                    }
+                    self.app_event_tx.compact();
                 }
-                self.app_event_tx.compact();
             }
             SlashCommand::Review => {
                 self.open_review_popup();
@@ -494,14 +633,29 @@ impl ChatWidget {
             SlashCommand::Roles => {
                 self.dispatch_tiffany_roles_command("list".to_string());
             }
+            SlashCommand::Queue => {
+                self.add_tiffany_queue_output("");
+            }
             SlashCommand::Thread => {
                 self.dispatch_tiffany_thread_command("list".to_string());
+            }
+            SlashCommand::Jobs => {
+                self.dispatch_tiffany_jobs_command("");
             }
             SlashCommand::History => {
                 self.dispatch_tiffany_history_command("");
             }
+            SlashCommand::Approvals => {
+                self.dispatch_tiffany_approvals_command("");
+            }
             SlashCommand::Continue => {
                 self.dispatch_tiffany_continue_command("");
+            }
+            SlashCommand::Process => {
+                self.dispatch_tiffany_process_command("");
+            }
+            SlashCommand::Outline => {
+                self.toggle_tiffany_process_detail();
             }
             SlashCommand::Role => {
                 self.open_tiffany_role_setup_prompt(None);
@@ -767,18 +921,15 @@ impl ChatWidget {
         };
         let queued = self.input_queue.queued_user_messages.len()
             + self.input_queue.rejected_steers_queue.len();
-        let bin = self
-            .tiffany_orchestrator_config
-            .as_ref()
-            .map(|config| config.bin.as_str())
-            .filter(|bin| !bin.is_empty())
-            .unwrap_or("orchestrator");
-        let runtime = crate::tiffany_orchestrator::runtime_status(bin);
+        let readiness = crate::tiffany_orchestrator::startup_readiness(
+            self.tiffany_orchestrator_config.as_ref(),
+        );
         let config = self
             .tiffany_orchestrator_config
             .as_ref()
-            .and_then(|config| config.config_path.as_deref())
-            .unwrap_or("default");
+            .and_then(orchestrator_config_path)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "default".to_string());
         let commands = tiffany_orchestrator_status_command_list();
 
         let mut lines: Vec<Line<'static>> = vec![
@@ -802,13 +953,35 @@ impl ChatWidget {
             .into(),
             vec![
                 "worker  ".dim(),
-                "registered roles route to Claude Code, Codex CLI, or compatible runtimes".into(),
+                "stable roles reuse native Claude Code, Codex, or Gemini sessions".into(),
             ]
             .into(),
-            runtime_status_line(&runtime),
-            vec!["config  ".dim(), config.to_string().into()].into(),
-            vec!["cmd     ".dim(), commands.into()].into(),
+            vec!["config  ".dim(), config.into()].into(),
         ];
+        lines.extend(crate::tiffany_orchestrator::startup_readiness_lines(
+            &readiness,
+        ));
+        lines.extend(crate::tiffany_orchestrator::startup_health_action_lines(
+            &readiness,
+        ));
+        lines.extend([
+            vec![
+                "thread  ".dim(),
+                "/thread shows role session reuse and native resume state".into(),
+            ]
+            .into(),
+            vec![
+                "history ".dim(),
+                "/history status compares session-db and local-json".into(),
+            ]
+            .into(),
+            vec![
+                "compact ".dim(),
+                "/history compact builds a readable handoff storyline".into(),
+            ]
+            .into(),
+            vec!["cmd     ".dim(), commands.into()].into(),
+        ]);
         if queued > 0 {
             lines.push(
                 vec![
@@ -820,6 +993,144 @@ impl ChatWidget {
             );
         }
         self.add_to_history(history_cell::PlainHistoryCell::new(lines));
+    }
+
+    fn add_tiffany_queue_output(&mut self, args: &str) {
+        if !self.tiffany_orchestrator_shell {
+            self.add_error_message(format!(
+                "'/queue' is available in tiffany-loop orchestrator mode. Start it with `tiffany-loop` or `./scripts/tiffany-dev`.\n{QUEUE_USAGE}"
+            ));
+            return;
+        }
+
+        let action = args.split_whitespace().next().unwrap_or("show");
+        let action = action.to_ascii_lowercase();
+        match action.as_str() {
+            "show" | "status" | "" => self.show_tiffany_queue_output(),
+            "clear" | "reset" => {
+                let cleared = self.input_queue.queued_user_messages.len()
+                    + self.input_queue.queued_user_message_history_records.len()
+                    + self.input_queue.rejected_steers_queue.len()
+                    + self.input_queue.rejected_steer_history_records.len();
+                self.input_queue.queued_user_messages.clear();
+                self.input_queue.queued_user_message_history_records.clear();
+                self.input_queue.rejected_steers_queue.clear();
+                self.input_queue.rejected_steer_history_records.clear();
+                self.refresh_pending_input_preview();
+                self.add_info_message(
+                    format!("Queue cleared. Removed {cleared} queued item(s)."),
+                    /*hint*/ None,
+                );
+            }
+            "pause" => {
+                self.input_queue.suppress_queue_autosend = true;
+                self.add_info_message(
+                    "Queue paused. Follow-up prompts will stay queued until /queue resume or /queue run."
+                        .to_string(),
+                    /*hint*/ None,
+                );
+            }
+            "resume" | "unpause" => {
+                self.input_queue.suppress_queue_autosend = false;
+                let ready = self.input_queue.queued_user_messages.len()
+                    + self.input_queue.rejected_steers_queue.len();
+                self.add_info_message(
+                    format!("Queue resumed. {ready} queued item(s) ready."),
+                    /*hint*/ None,
+                );
+                self.maybe_send_merged_tiffany_queued_input();
+            }
+            "run" | "start" | "go" => {
+                self.input_queue.suppress_queue_autosend = false;
+                if self.maybe_send_merged_tiffany_queued_input() {
+                    self.add_info_message(
+                        "Queue started. Queued prompts are being submitted.".to_string(),
+                        /*hint*/ None,
+                    );
+                } else {
+                    self.show_tiffany_queue_output();
+                }
+            }
+            _ => self.add_error_message(QUEUE_USAGE.to_string()),
+        }
+        self.request_redraw();
+    }
+
+    fn show_tiffany_queue_output(&mut self) {
+        let preview = self.input_queue.preview();
+        let queued = preview.queued_messages.len();
+        let rejected = preview.rejected_steers.len();
+        let pending = preview.pending_steers.len();
+        let paused = self.input_queue.suppress_queue_autosend;
+        let mut lines: Vec<Line<'static>> = vec![
+            vec![
+                "◆ ".fg(crate::tiffany_orchestrator::TIFFANY_BLUE).bold(),
+                "queue ".bold(),
+                if paused { "paused" } else { "ready" }.into(),
+            ]
+            .into(),
+            vec![
+                "items  ".dim(),
+                format!("{queued} queued · {rejected} retry-first · {pending} pending").into(),
+            ]
+            .into(),
+        ];
+
+        if queued + rejected + pending == 0 {
+            lines.push(vec!["state  ".dim(), "empty".into()].into());
+        } else {
+            push_tiffany_queue_preview_section(
+                &mut lines,
+                "retry-first",
+                "runs before queued prompts",
+                &preview.rejected_steers,
+            );
+            push_tiffany_queue_preview_section(
+                &mut lines,
+                "queued",
+                "normal follow-up prompts",
+                &preview.queued_messages,
+            );
+            push_tiffany_queue_preview_section(
+                &mut lines,
+                "pending",
+                "submitted, waiting for turn start/history",
+                &preview.pending_steers,
+            );
+        }
+        lines.push(
+            vec![
+                "cmd    ".dim(),
+                "/queue clear  /queue pause  /queue resume  /queue run".into(),
+            ]
+            .into(),
+        );
+        self.add_to_history(history_cell::PlainHistoryCell::new(lines));
+    }
+
+    fn toggle_tiffany_process_detail(&mut self) {
+        if !self.tiffany_orchestrator_shell {
+            self.add_error_message(
+                "'/o' is available in tiffany-loop orchestrator mode.".to_string(),
+            );
+            return;
+        }
+        self.tiffany_process_detail_expanded = !self.tiffany_process_detail_expanded;
+        let args = if self.tiffany_process_detail_expanded {
+            "full"
+        } else {
+            "compact"
+        };
+        let label = if self.tiffany_process_detail_expanded {
+            "expanded"
+        } else {
+            "folded"
+        };
+        self.add_info_message(
+            format!("Process detail {label}. Loading /history {args}."),
+            /*hint*/ None,
+        );
+        self.dispatch_tiffany_history_command(args);
     }
 
     /// Run an inline slash command.
@@ -1146,6 +1457,9 @@ impl ChatWidget {
                     self.dispatch_tiffany_roles_command(args);
                 }
             }
+            SlashCommand::Queue if !trimmed.is_empty() => {
+                self.add_tiffany_queue_output(trimmed);
+            }
             SlashCommand::Role if !trimmed.is_empty() => {
                 if let Some(role) = role_setup_prompt_role(trimmed) {
                     self.open_tiffany_role_setup_prompt(role);
@@ -1166,11 +1480,26 @@ impl ChatWidget {
             SlashCommand::Thread if !trimmed.is_empty() => {
                 self.dispatch_tiffany_thread_command(args);
             }
+            SlashCommand::Jobs if !trimmed.is_empty() => {
+                self.dispatch_tiffany_jobs_command(args);
+            }
             SlashCommand::History if !trimmed.is_empty() => {
                 self.dispatch_tiffany_history_command(args);
             }
+            SlashCommand::Approvals if !trimmed.is_empty() => {
+                self.dispatch_tiffany_approvals_command(args);
+            }
+            SlashCommand::Compact if self.tiffany_orchestrator_shell && !trimmed.is_empty() => {
+                self.dispatch_tiffany_history_command(format!("compact {args}"));
+            }
             SlashCommand::Continue if !trimmed.is_empty() => {
                 self.dispatch_tiffany_continue_command(args);
+            }
+            SlashCommand::Process if !trimmed.is_empty() => {
+                self.dispatch_tiffany_process_command(args);
+            }
+            SlashCommand::Outline if !trimmed.is_empty() => {
+                self.toggle_tiffany_process_detail();
             }
             SlashCommand::Side | SlashCommand::Btw if !trimmed.is_empty() => {
                 let Some(parent_thread_id) = self.thread_id else {
@@ -1391,12 +1720,24 @@ impl ChatWidget {
             | SlashCommand::Provider
             | SlashCommand::Role
             | SlashCommand::Roles
+            | SlashCommand::Queue
             | SlashCommand::Thread
+            | SlashCommand::Jobs
             | SlashCommand::History
+            | SlashCommand::Approvals
             | SlashCommand::Continue
+            | SlashCommand::Process
+            | SlashCommand::Outline
             | SlashCommand::Doctor
             | SlashCommand::Help
             | SlashCommand::TestApproval => QueueDrain::Continue,
+            SlashCommand::Compact => {
+                if self.tiffany_orchestrator_shell {
+                    QueueDrain::Continue
+                } else {
+                    QueueDrain::Stop
+                }
+            }
             SlashCommand::Feedback
             | SlashCommand::New
             | SlashCommand::Archive
@@ -1405,7 +1746,6 @@ impl ChatWidget {
             | SlashCommand::Resume
             | SlashCommand::Fork
             | SlashCommand::Init
-            | SlashCommand::Compact
             | SlashCommand::Review
             | SlashCommand::Model
             | SlashCommand::Personality
@@ -1515,6 +1855,9 @@ fn provider_setup_prompt_provider(args: &str) -> Option<Option<&str>> {
             | "base-url"
             | "url"
             | "set-endpoint"
+            | "delete"
+            | "remove"
+            | "rm"
     ) || parts.next().is_some()
     {
         return None;
@@ -1540,7 +1883,21 @@ fn role_setup_prompt_role(args: &str) -> Option<Option<&str>> {
 
     if matches!(
         first.to_ascii_lowercase().as_str(),
-        "list" | "show" | "route" | "use" | "snippet" | "save" | "set" | "add" | "register"
+        "list"
+            | "show"
+            | "route"
+            | "use"
+            | "snippet"
+            | "save"
+            | "set"
+            | "add"
+            | "register"
+            | "options"
+            | "opts"
+            | "models"
+            | "delete"
+            | "remove"
+            | "rm"
     ) || parts.next().is_some()
     {
         return None;
@@ -1603,11 +1960,17 @@ fn provider_setup_initial_draft(
     }
 }
 
-fn role_setup_initial_draft(role: Option<&str>) -> RoleSetupDraft {
+fn role_setup_initial_draft(
+    role: Option<&str>,
+    config: Option<&crate::tiffany_orchestrator::TiffanyOrchestratorConfig>,
+) -> RoleSetupDraft {
     let role = role
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("worker-codex");
+    if let Some(existing) = config.and_then(|config| read_role_setup(config, role)) {
+        return existing;
+    }
     let defaults = role_default_setup(role).unwrap_or(WORKER_CODEX_ROLE_DEFAULTS);
     RoleSetupDraft {
         role: role.to_string(),
@@ -1619,11 +1982,164 @@ fn role_setup_initial_draft(role: Option<&str>) -> RoleSetupDraft {
     }
 }
 
+fn role_setup_catalog(
+    config: Option<&crate::tiffany_orchestrator::TiffanyOrchestratorConfig>,
+) -> RoleSetupCatalog {
+    config.and_then(read_role_setup_catalog).unwrap_or_default()
+}
+
+fn read_role_setup_catalog(
+    config: &crate::tiffany_orchestrator::TiffanyOrchestratorConfig,
+) -> Option<RoleSetupCatalog> {
+    let path = orchestrator_config_path(config)?;
+    let raw = std::fs::read_to_string(path).ok()?;
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&raw).ok()?;
+    Some(role_setup_catalog_from_yaml(&yaml))
+}
+
+pub(super) fn role_setup_catalog_from_yaml(yaml: &serde_yaml::Value) -> RoleSetupCatalog {
+    let mut catalog = RoleSetupCatalog::default();
+
+    if let Some(providers) = yaml
+        .get("providers")
+        .and_then(serde_yaml::Value::as_mapping)
+    {
+        for (key, value) in providers {
+            let Some(provider) = key
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let hint = value
+                .as_mapping()
+                .map(|mapping| {
+                    let kind = yaml_mapping_string(mapping, "type")
+                        .unwrap_or_else(|| provider_default_kind(provider).to_string());
+                    match yaml_mapping_string(mapping, "base_url") {
+                        Some(url) if !url.trim().is_empty() => format!("{kind} · {}", url.trim()),
+                        _ => kind,
+                    }
+                })
+                .unwrap_or_else(|| provider_default_kind(provider).to_string());
+            catalog.providers.push(RoleSetupChoice::new(
+                provider.to_string(),
+                provider.to_string(),
+                hint,
+            ));
+        }
+    }
+
+    if let Some(runtimes) = yaml.get("runtimes").and_then(serde_yaml::Value::as_mapping) {
+        for (key, value) in runtimes {
+            let Some(runtime) = key
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let hint = value
+                .as_mapping()
+                .map(|mapping| {
+                    let kind = yaml_mapping_string(mapping, "type")
+                        .unwrap_or_else(|| "runtime".to_string());
+                    match yaml_mapping_string(mapping, "binary") {
+                        Some(binary) if !binary.trim().is_empty() => {
+                            format!("{kind} · {}", binary.trim())
+                        }
+                        _ => kind,
+                    }
+                })
+                .unwrap_or_else(|| "runtime".to_string());
+            catalog.runtimes.push(RoleSetupChoice::new(
+                runtime.to_string(),
+                runtime.to_string(),
+                hint,
+            ));
+        }
+    }
+
+    if let Some(models) = yaml.get("models").and_then(serde_yaml::Value::as_sequence) {
+        for item in models {
+            let Some(mapping) = item.as_mapping() else {
+                continue;
+            };
+            let Some(id) = yaml_mapping_string(mapping, "id")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let Some(provider) = yaml_mapping_string(mapping, "provider")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let name = yaml_mapping_string(mapping, "name")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| id.clone());
+            catalog.models.push(RoleSetupModelChoice::new(
+                provider,
+                id.clone(),
+                name,
+                format!("id {id}"),
+            ));
+        }
+    }
+
+    if let Some(roles) = yaml.get("roles").and_then(serde_yaml::Value::as_mapping) {
+        for (key, value) in roles {
+            let Some(role) = key
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let hint = value
+                .as_mapping()
+                .map(|mapping| {
+                    let model = yaml_mapping_string(mapping, "model")
+                        .unwrap_or_else(|| "model".to_string());
+                    let runtime = yaml_mapping_string(mapping, "runtime")
+                        .unwrap_or_else(|| "runtime".to_string());
+                    format!("{model} @ {runtime}")
+                })
+                .unwrap_or_else(|| "configured role".to_string());
+            catalog.roles.push(RoleSetupChoice::new(
+                role.to_string(),
+                role.to_string(),
+                hint,
+            ));
+        }
+    }
+
+    catalog
+}
+
 #[derive(Debug, Default)]
 struct RawProviderConfig {
     kind: Option<String>,
     api_key: Option<String>,
     base_url: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct RawModelConfig {
+    id: Option<String>,
+    provider: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct RawRoleConfig {
+    model: Option<String>,
+    runtime: Option<String>,
+    agent_teams: Option<bool>,
 }
 
 fn read_provider_config(
@@ -1643,6 +2159,66 @@ fn read_provider_config(
     })
 }
 
+fn read_role_setup(
+    config: &crate::tiffany_orchestrator::TiffanyOrchestratorConfig,
+    role: &str,
+) -> Option<RoleSetupDraft> {
+    let path = orchestrator_config_path(config)?;
+    let raw = std::fs::read_to_string(path).ok()?;
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&raw).ok()?;
+    let role_config = read_role_config_from_yaml(&yaml, role)?;
+    let model_id = role_config.model?;
+    let model = read_model_config_from_yaml(&yaml, &model_id).unwrap_or_else(|| RawModelConfig {
+        id: Some(model_id.clone()),
+        provider: None,
+        name: Some(model_id.clone()),
+    });
+    let provider = model.provider.unwrap_or_default();
+    let model_name = model.name.unwrap_or_else(|| model_id.clone());
+    let runtime = role_config.runtime.unwrap_or_default();
+    let teams = match role_config.agent_teams {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "auto",
+    };
+
+    Some(RoleSetupDraft {
+        role: role.to_string(),
+        provider,
+        model_id: model.id.unwrap_or(model_id),
+        model_name,
+        runtime,
+        teams: teams.to_string(),
+    })
+}
+
+fn read_role_config_from_yaml(yaml: &serde_yaml::Value, role: &str) -> Option<RawRoleConfig> {
+    let roles = yaml.get("roles")?.as_mapping()?;
+    let role_value = serde_yaml::Value::String(role.to_string());
+    let mapping = roles.get(&role_value)?.as_mapping()?;
+    Some(RawRoleConfig {
+        model: yaml_mapping_string(mapping, "model"),
+        runtime: yaml_mapping_string(mapping, "runtime"),
+        agent_teams: yaml_mapping_bool(mapping, "agent_teams"),
+    })
+}
+
+fn read_model_config_from_yaml(yaml: &serde_yaml::Value, model_id: &str) -> Option<RawModelConfig> {
+    let models = yaml.get("models")?.as_sequence()?;
+    for item in models {
+        let mapping = item.as_mapping()?;
+        let id = yaml_mapping_string(mapping, "id")?;
+        if id == model_id {
+            return Some(RawModelConfig {
+                id: Some(id),
+                provider: yaml_mapping_string(mapping, "provider"),
+                name: yaml_mapping_string(mapping, "name"),
+            });
+        }
+    }
+    None
+}
+
 fn orchestrator_config_path(
     config: &crate::tiffany_orchestrator::TiffanyOrchestratorConfig,
 ) -> Option<std::path::PathBuf> {
@@ -1656,39 +2232,17 @@ fn orchestrator_config_path(
     }
 }
 
-fn runtime_status_line(
-    status: &crate::tiffany_orchestrator::TiffanyOrchestratorRuntimeStatus,
-) -> Line<'static> {
-    if let Some(path) = &status.resolved {
-        vec![
-            "runtime ".dim(),
-            "ok".fg(crate::tiffany_orchestrator::TIFFANY_BLUE).bold(),
-            "  ".into(),
-            status.requested.clone().into(),
-            "  ".dim(),
-            path.clone().dim(),
-        ]
-        .into()
-    } else {
-        vec![
-            "runtime ".dim(),
-            "missing".fg(Color::Red).bold(),
-            "  ".into(),
-            status.requested.clone().into(),
-            "  run ".dim(),
-            "/doctor".bold(),
-            " or set ".dim(),
-            "TIFFANY_ORCHESTRATOR_BIN".bold(),
-        ]
-        .into()
-    }
-}
-
 fn yaml_mapping_string(mapping: &serde_yaml::Mapping, key: &str) -> Option<String> {
     mapping
         .get(serde_yaml::Value::String(key.to_string()))
         .and_then(serde_yaml::Value::as_str)
         .map(str::to_string)
+}
+
+fn yaml_mapping_bool(mapping: &serde_yaml::Mapping, key: &str) -> Option<bool> {
+    mapping
+        .get(serde_yaml::Value::String(key.to_string()))
+        .and_then(serde_yaml::Value::as_bool)
 }
 
 fn env_var_reference(value: &str) -> Option<String> {
@@ -1869,21 +2423,21 @@ pub(super) fn role_setup_draft_args(draft: &RoleSetupDraft) -> Result<String, St
     if role.is_empty() {
         return Err("role is required".to_string());
     }
-    if model_id.is_empty() {
-        return Err("model is required".to_string());
-    }
     if runtime.is_empty() {
         return Err("runtime is required".to_string());
     }
+    let can_derive_model_id = !provider.is_empty() && !model_name.is_empty();
+    if model_id.is_empty() && !can_derive_model_id {
+        return Err("provider and API model are required".to_string());
+    }
 
-    let mut args = vec![
-        "register".to_string(),
-        role.to_string(),
-        "--model".to_string(),
-        model_id.to_string(),
-        "--runtime".to_string(),
-        runtime.to_string(),
-    ];
+    let mut args = vec!["register".to_string(), role.to_string()];
+    if !can_derive_model_id {
+        args.push("--model".to_string());
+        args.push(model_id.to_string());
+    }
+    args.push("--runtime".to_string());
+    args.push(runtime.to_string());
     if !provider.is_empty() {
         args.push("--provider".to_string());
         args.push(provider.to_string());

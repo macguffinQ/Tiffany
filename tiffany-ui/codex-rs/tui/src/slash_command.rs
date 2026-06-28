@@ -44,9 +44,15 @@ pub enum SlashCommand {
     Provider,
     Role,
     Roles,
+    Queue,
     Thread,
+    Jobs,
     History,
+    Approvals,
     Continue,
+    Process,
+    #[strum(to_string = "o", serialize = "outline", serialize = "fold")]
+    Outline,
     Doctor,
     #[strum(to_string = "help", serialize = "commands", serialize = "h")]
     Help,
@@ -135,11 +141,16 @@ impl SlashCommand {
             SlashCommand::Provider => "configure tiffany-loop orchestrator providers",
             SlashCommand::Role => "register one tiffany-loop orchestrator role",
             SlashCommand::Roles => "inspect or register tiffany-loop orchestrator roles",
+            SlashCommand::Queue => "inspect or manage queued Tiffany follow-up prompts",
             SlashCommand::Thread => "inspect or clear stable worker thread sessions",
+            SlashCommand::Jobs => "inspect persisted Tiffany queue jobs",
             SlashCommand::History => {
                 "inspect, search, export, or graph native Tiffany conversation history"
             }
+            SlashCommand::Approvals => "show native worker approval requests",
             SlashCommand::Continue => "show or open a worker's native CLI session",
+            SlashCommand::Process => "show captured native worker process events",
+            SlashCommand::Outline => "fold or expand Tiffany process detail",
             SlashCommand::Doctor => "diagnose tiffany-loop orchestrator setup",
             SlashCommand::Help => "show Tiffany orchestrator commands",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
@@ -182,9 +193,15 @@ impl SlashCommand {
                 | SlashCommand::Provider
                 | SlashCommand::Role
                 | SlashCommand::Roles
+                | SlashCommand::Queue
                 | SlashCommand::Thread
+                | SlashCommand::Jobs
                 | SlashCommand::History
+                | SlashCommand::Approvals
+                | SlashCommand::Compact
                 | SlashCommand::Continue
+                | SlashCommand::Process
+                | SlashCommand::Outline
                 | SlashCommand::Doctor
                 | SlashCommand::Help
                 | SlashCommand::Ide
@@ -257,9 +274,14 @@ impl SlashCommand {
             | SlashCommand::Provider
             | SlashCommand::Role
             | SlashCommand::Roles
+            | SlashCommand::Queue
             | SlashCommand::Thread
+            | SlashCommand::Jobs
             | SlashCommand::History
+            | SlashCommand::Approvals
             | SlashCommand::Continue
+            | SlashCommand::Process
+            | SlashCommand::Outline
             | SlashCommand::Doctor
             | SlashCommand::Help
             | SlashCommand::Mcp
@@ -326,6 +348,9 @@ mod tests {
         assert_eq!(SlashCommand::from_str("roles"), Ok(SlashCommand::Roles));
         assert_eq!(SlashCommand::Roles.command(), "roles");
         assert!(SlashCommand::Roles.supports_inline_args());
+        assert_eq!(SlashCommand::from_str("queue"), Ok(SlashCommand::Queue));
+        assert_eq!(SlashCommand::Queue.command(), "queue");
+        assert!(SlashCommand::Queue.supports_inline_args());
         assert_eq!(SlashCommand::from_str("thread"), Ok(SlashCommand::Thread));
         assert_eq!(SlashCommand::Thread.command(), "thread");
         assert!(SlashCommand::Thread.supports_inline_args());
@@ -333,11 +358,25 @@ mod tests {
         assert_eq!(SlashCommand::History.command(), "history");
         assert!(SlashCommand::History.supports_inline_args());
         assert_eq!(
+            SlashCommand::from_str("approvals"),
+            Ok(SlashCommand::Approvals)
+        );
+        assert_eq!(SlashCommand::Approvals.command(), "approvals");
+        assert!(SlashCommand::Approvals.supports_inline_args());
+        assert_eq!(
             SlashCommand::from_str("continue"),
             Ok(SlashCommand::Continue)
         );
         assert_eq!(SlashCommand::Continue.command(), "continue");
         assert!(SlashCommand::Continue.supports_inline_args());
+        assert_eq!(SlashCommand::from_str("process"), Ok(SlashCommand::Process));
+        assert_eq!(SlashCommand::Process.command(), "process");
+        assert!(SlashCommand::Process.supports_inline_args());
+        assert_eq!(SlashCommand::from_str("o"), Ok(SlashCommand::Outline));
+        assert_eq!(SlashCommand::from_str("outline"), Ok(SlashCommand::Outline));
+        assert_eq!(SlashCommand::from_str("fold"), Ok(SlashCommand::Outline));
+        assert_eq!(SlashCommand::Outline.command(), "o");
+        assert!(SlashCommand::Outline.supports_inline_args());
     }
 
     #[test]
@@ -376,12 +415,20 @@ mod tests {
         assert!(SlashCommand::Role.supports_inline_args());
         assert!(SlashCommand::Roles.available_during_task());
         assert!(SlashCommand::Roles.supports_inline_args());
+        assert!(SlashCommand::Queue.available_during_task());
+        assert!(SlashCommand::Queue.supports_inline_args());
         assert!(SlashCommand::Thread.available_during_task());
         assert!(SlashCommand::Thread.supports_inline_args());
         assert!(SlashCommand::History.available_during_task());
         assert!(SlashCommand::History.supports_inline_args());
+        assert!(SlashCommand::Approvals.available_during_task());
+        assert!(SlashCommand::Approvals.supports_inline_args());
         assert!(SlashCommand::Continue.available_during_task());
         assert!(SlashCommand::Continue.supports_inline_args());
+        assert!(SlashCommand::Process.available_during_task());
+        assert!(SlashCommand::Process.supports_inline_args());
+        assert!(SlashCommand::Outline.available_during_task());
+        assert!(SlashCommand::Outline.supports_inline_args());
         assert!(SlashCommand::Doctor.available_during_task());
         assert!(SlashCommand::Doctor.supports_inline_args());
     }

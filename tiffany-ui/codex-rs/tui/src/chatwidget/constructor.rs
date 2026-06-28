@@ -183,6 +183,7 @@ impl ChatWidget {
             thread_id: None,
             tiffany_orchestrator_shell: false,
             tiffany_orchestrator_config: None,
+            tiffany_process_detail_expanded: false,
             dismissed_plan_mode_nudge_scopes: HashSet::new(),
             thread_name: None,
             thread_rename_block_message: None,
