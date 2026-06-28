@@ -44,6 +44,7 @@ use tiffany_bridge::native_history_kind_matches;
 use tiffany_bridge::parse_job_summaries;
 use tiffany_bridge::parse_jobs_header_counts;
 use tiffany_bridge::parse_jobs_retry_handoff;
+use tiffany_bridge::parse_native_cli_handoff;
 use tiffany_bridge::parse_prefixed_field;
 use tiffany_bridge::parse_provider_summaries;
 use tiffany_bridge::parse_recovered_jobs_failed_count;
@@ -5643,49 +5644,14 @@ fn continue_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
 }
 
 fn native_cli_command_from_thread_output(text: &str) -> Option<TiffanyNativeCliCommand> {
-    if !text.contains("Worker thread") {
-        return None;
-    }
-    let fields = parse_thread_fields(text);
-    let role = fields
-        .get("role")
-        .cloned()
-        .or_else(|| parse_worker_thread_title(text))
-        .unwrap_or_else(|| "worker".to_string());
-    let native_session = fields
-        .get("native session")
-        .and_then(|value| nonempty_trimmed(value))
-        .filter(|value| *value != "none")?
-        .to_string();
-    let command = fields
-        .get("native handoff")
-        .and_then(|value| nonempty_trimmed(value))
-        .or_else(|| {
-            fields
-                .get("native resume")
-                .and_then(|value| nonempty_trimmed(value))
-        })
-        .filter(|value| *value != "none")?
-        .to_string();
-    let worktree = fields
-        .get("worktree")
-        .and_then(|value| nonempty_trimmed(value))
-        .filter(|value| *value != "none")
-        .map(ToString::to_string);
-
+    let handoff = parse_native_cli_handoff(text)?;
     Some(TiffanyNativeCliCommand {
-        role,
-        runtime: fields
-            .get("runtime")
-            .and_then(|value| nonempty_trimmed(value))
-            .map(ToString::to_string),
-        worker_thread_id: fields
-            .get("tiffany thread")
-            .and_then(|value| nonempty_trimmed(value))
-            .map(ToString::to_string),
-        native_session,
-        command,
-        worktree,
+        role: handoff.role,
+        runtime: handoff.runtime,
+        worker_thread_id: handoff.worker_thread_id,
+        native_session: handoff.native_session,
+        command: handoff.command,
+        worktree: handoff.worktree,
     })
 }
 

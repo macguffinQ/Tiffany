@@ -73,6 +73,11 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   summary parsing, role/role-option summary parsing, thread list/detail field
   parsing, and worker-thread title parsing. `codex-tui` keeps Ratatui card and
   waterfall rendering local.
+- **F5+ native CLI handoff parsing slice ✅ implemented locally and verified.**
+  `tiffany-bridge/src/output_parse.rs` now owns parsing `/thread` detail output
+  into a native CLI handoff command, including native session id, runtime,
+  Tiffany worker thread id, command, and worktree. `codex-tui` adapts the bridge
+  result into its local return/transcript workflow.
 - **F8 ✅ implemented locally and verified.** Full `codex-tui --lib` now passes
   serially after stabilizing no-active-turn app-server paths, no-turn side-thread
   discard behavior, large-stack test wrappers, Tiffany snapshot drift, and

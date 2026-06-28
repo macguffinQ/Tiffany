@@ -401,3 +401,28 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue F5+ with another small pure helper slice, likely native-history render text shaping or native CLI command derivation if it can stay UI-free.
+
+## F5+ — native CLI handoff parsing extraction completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Extract native CLI handoff parsing into tiffany bridge`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge output_parse --quiet` — green, 8 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_cli_command --lib --quiet` — green, 4 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 36 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build --quiet` — green.
+  - `git diff --check` — green.
+- Decisions:
+  - Added `NativeCliHandoff` and `parse_native_cli_handoff` to `tiffany-bridge::output_parse`.
+  - Kept `TiffanyNativeCliCommand` local to `codex-tui`; the TUI now adapts bridge handoff output into its existing return/transcript workflow.
+  - Bridge parser prefers `native handoff` over `native resume`, preserves Tiffany worker thread id, and refuses `native session: none`.
+  - `tiffany_orchestrator.rs` is now 16,212 lines.
+  - No push and no release.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue F5+ with another pure helper slice; likely native CLI transcript event parsing is next, but only if it can be separated without pulling Ratatui or app-server state into the bridge.

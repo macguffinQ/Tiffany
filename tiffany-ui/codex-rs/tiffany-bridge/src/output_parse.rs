@@ -56,6 +56,16 @@ pub struct ThreadSummary {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeCliHandoff {
+    pub role: String,
+    pub runtime: Option<String>,
+    pub worker_thread_id: Option<String>,
+    pub native_session: String,
+    pub command: String,
+    pub worktree: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobSummary {
     pub id: String,
     pub status: String,
@@ -219,6 +229,53 @@ pub fn parse_worker_thread_title(text: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+pub fn parse_native_cli_handoff(text: &str) -> Option<NativeCliHandoff> {
+    if !text.contains("Worker thread") {
+        return None;
+    }
+    let fields = parse_thread_fields(text);
+    let role = fields
+        .get("role")
+        .cloned()
+        .or_else(|| parse_worker_thread_title(text))
+        .unwrap_or_else(|| "worker".to_string());
+    let native_session = fields
+        .get("native session")
+        .and_then(|value| nonempty_trimmed(value))
+        .filter(|value| *value != "none")?
+        .to_string();
+    let command = fields
+        .get("native handoff")
+        .and_then(|value| nonempty_trimmed(value))
+        .or_else(|| {
+            fields
+                .get("native resume")
+                .and_then(|value| nonempty_trimmed(value))
+        })
+        .filter(|value| *value != "none")?
+        .to_string();
+    let worktree = fields
+        .get("worktree")
+        .and_then(|value| nonempty_trimmed(value))
+        .filter(|value| *value != "none")
+        .map(ToString::to_string);
+
+    Some(NativeCliHandoff {
+        role,
+        runtime: fields
+            .get("runtime")
+            .and_then(|value| nonempty_trimmed(value))
+            .map(ToString::to_string),
+        worker_thread_id: fields
+            .get("tiffany thread")
+            .and_then(|value| nonempty_trimmed(value))
+            .map(ToString::to_string),
+        native_session,
+        command,
+        worktree,
+    })
 }
 
 fn parse_provider_detail_summary(text: &str) -> Option<ProviderSummary> {
@@ -1002,6 +1059,51 @@ mod tests {
         assert_eq!(
             fields.get("native handoff").map(String::as_str),
             Some("cd /tmp/project && codex resume native-1")
+        );
+    }
+
+    #[test]
+    fn parses_native_cli_handoff_from_thread_output() {
+        let handoff = parse_native_cli_handoff(
+            "Worker thread thread-title\n\
+             role: worker-codex\n\
+             runtime: codex\n\
+             Tiffany thread: tiffany-thread-1\n\
+             native session: native-1\n\
+             native resume: codex exec resume native-1\n\
+             native handoff: cd /tmp/project && codex resume native-1\n\
+             worktree: /tmp/project\n",
+        )
+        .expect("handoff");
+
+        assert_eq!(handoff.role, "worker-codex");
+        assert_eq!(handoff.runtime.as_deref(), Some("codex"));
+        assert_eq!(
+            handoff.worker_thread_id.as_deref(),
+            Some("tiffany-thread-1")
+        );
+        assert_eq!(handoff.native_session, "native-1");
+        assert_eq!(handoff.command, "cd /tmp/project && codex resume native-1");
+        assert_eq!(handoff.worktree.as_deref(), Some("/tmp/project"));
+        assert!(!handoff.command.contains("codex exec resume"));
+
+        let fallback = parse_native_cli_handoff(
+            "Worker thread worker-gemini\n\
+             runtime: gemini\n\
+             native session: latest\n\
+             native resume: gemini --resume latest\n",
+        )
+        .expect("resume fallback");
+        assert_eq!(fallback.role, "worker-gemini");
+        assert_eq!(fallback.command, "gemini --resume latest");
+
+        assert!(
+            parse_native_cli_handoff(
+                "Worker thread worker-cc\n\
+                 native session: none\n\
+                 native handoff: none\n",
+            )
+            .is_none()
         );
     }
 
