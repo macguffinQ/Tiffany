@@ -11,9 +11,8 @@ use crate::task_policy::is_conversational_task;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::stream::{self, BoxStream};
+use futures::stream::BoxStream;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -21,7 +20,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
-use super::StderrCapture;
+use super::{stream_cli_session_events, StderrCapture};
 
 pub struct ClaudeCodeAdapter {
     binary: String,
@@ -63,6 +62,10 @@ impl ClaudeCodeAdapter {
 impl WorkerAdapter for ClaudeCodeAdapter {
     fn name(&self) -> &str {
         "claude-code"
+    }
+
+    fn binary_hint(&self) -> Option<&str> {
+        Some(&self.binary)
     }
 
     async fn start(
@@ -154,8 +157,16 @@ impl WorkerAdapter for ClaudeCodeAdapter {
         // a lifetime tied to the spawned process. In practice this is a few KB
         // per worker spawn, and the OS reclaims on process exit.)
 
+        let provider_for_model = task.model_provider_hint.as_deref().and_then(|provider_id| {
+            self.providers
+                .get(provider_id)
+                .map(|provider| (provider_id, provider))
+        });
+        let setting_sources = claude_setting_sources_for_provider(provider_for_model);
+
         let mut cmd = Command::new(&self.binary);
         cmd.args(claude_worker_args(
+            setting_sources,
             &model,
             &worktree,
             task.cc_agent_hint.as_deref(),
@@ -172,10 +183,8 @@ impl WorkerAdapter for ClaudeCodeAdapter {
             cmd.env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1");
         }
 
-        if let Some(provider_id) = task.model_provider_hint.as_deref() {
-            if let Some(provider) = self.providers.get(provider_id) {
-                apply_claude_provider_env(&mut cmd, provider_id, provider, &model);
-            }
+        if let Some((provider_id, provider)) = provider_for_model {
+            apply_claude_provider_env(&mut cmd, provider_id, provider, &model);
         }
 
         // Log what we injected (helps debugging)
@@ -280,66 +289,12 @@ impl WorkerAdapter for ClaudeCodeAdapter {
     }
 
     fn stream_events<'a>(&self, session: &Session) -> BoxStream<'static, Result<Event>> {
-        let path: PathBuf = self.session_store.log_path(session.id);
-        let sess_id = session.id;
-        let task_id = session.task_id;
-        Box::pin(stream::unfold(
-            (path, 0u64, false),
-            move |(path, mut pos, done)| async move {
-                use tokio::io::AsyncSeekExt;
-                if done {
-                    return None;
-                }
-                // Open and seek to pos
-                let mut file = match tokio::fs::File::open(&path).await {
-                    Ok(f) => f,
-                    Err(_) => {
-                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                        return Some((
-                            Ok(Event {
-                                session_id: sess_id,
-                                task_id,
-                                ts: Utc::now(),
-                                kind: "heartbeat".into(),
-                                payload: serde_json::json!({}),
-                            }),
-                            (path, pos, done),
-                        ));
-                    }
-                };
-                if file.seek(std::io::SeekFrom::Start(pos)).await.is_err() {
-                    return None;
-                }
-                let mut buf = String::new();
-                use tokio::io::AsyncReadExt;
-                if file.read_to_string(&mut buf).await.is_err() {
-                    return None;
-                }
-                if buf.is_empty() {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    return Some((
-                        Ok(Event {
-                            session_id: sess_id,
-                            task_id,
-                            ts: Utc::now(),
-                            kind: "heartbeat".into(),
-                            payload: serde_json::json!({}),
-                        }),
-                        (path, pos, done),
-                    ));
-                }
-                pos += buf.len() as u64;
-                let line = buf.trim_end().lines().last().unwrap_or("").to_string();
-                let event = Event {
-                    session_id: sess_id,
-                    task_id,
-                    ts: Utc::now(),
-                    kind: agent_events::classify_json_line(&line),
-                    payload: serde_json::from_str(&line).unwrap_or(serde_json::Value::String(line)),
-                };
-                Some((Ok(event), (path, pos, done)))
-            },
-        ))
+        stream_cli_session_events(
+            self.session_store.log_path(session.id),
+            session.id,
+            session.task_id,
+            agent_events::classify_json_line,
+        )
     }
 
     async fn cancel(&self, _session: &Session) -> Result<()> {
@@ -366,6 +321,7 @@ impl WorkerAdapter for ClaudeCodeAdapter {
 }
 
 fn claude_worker_args(
+    setting_sources: &str,
     model: &str,
     worktree: &std::path::Path,
     cc_agent_hint: Option<&str>,
@@ -377,7 +333,7 @@ fn claude_worker_args(
     let mut args = vec![
         "--print".to_string(),
         "--setting-sources".to_string(),
-        "project,local".to_string(),
+        setting_sources.to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--model".to_string(),
@@ -410,6 +366,30 @@ fn claude_worker_args(
     }
     args.push(prompt.to_string());
     args
+}
+
+fn claude_setting_sources_for_provider(provider: Option<(&str, &ProviderConfig)>) -> &'static str {
+    match provider {
+        None => "user,project,local",
+        Some((provider_id, provider))
+            if claude_provider_uses_native_settings(provider_id, provider) =>
+        {
+            "user,project,local"
+        }
+        Some(_) => "project,local",
+    }
+}
+
+fn claude_provider_uses_native_settings(_provider_id: &str, provider: &ProviderConfig) -> bool {
+    provider.kind.eq_ignore_ascii_case("anthropic")
+        && provider
+            .api_key
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        && provider
+            .base_url
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
 }
 
 fn extract_claude_native_session_id(value: &serde_json::Value) -> Option<String> {
@@ -499,6 +479,7 @@ mod tests {
     #[test]
     fn claude_worker_args_include_cc_subagent_when_set() {
         let args = claude_worker_args(
+            "project,local",
             "sonnet",
             std::path::Path::new("/tmp/project"),
             Some("reviewer"),
@@ -525,6 +506,7 @@ mod tests {
     #[test]
     fn claude_worker_args_skip_empty_cc_subagent() {
         let args = claude_worker_args(
+            "project,local",
             "sonnet",
             std::path::Path::new("/tmp/project"),
             Some("  "),
@@ -566,5 +548,73 @@ mod tests {
 
         let missing = serde_json::json!({"type": "assistant"});
         assert!(extract_claude_native_session_id(&missing).is_none());
+    }
+
+    #[test]
+    fn claude_worker_args_use_requested_setting_sources() {
+        let args = claude_worker_args(
+            "user,project,local",
+            "sonnet",
+            std::path::Path::new("/tmp/project"),
+            None,
+            false,
+            None,
+            None,
+            "hi",
+        );
+
+        assert!(args
+            .windows(2)
+            .any(|pair| { pair[0] == "--setting-sources" && pair[1] == "user,project,local" }));
+    }
+
+    #[test]
+    fn claude_native_settings_are_used_when_provider_has_no_explicit_credentials() {
+        let provider = ProviderConfig {
+            kind: "anthropic".into(),
+            api_key: None,
+            base_url: None,
+        };
+
+        assert_eq!(
+            claude_setting_sources_for_provider(Some(("real-anthropic", &provider))),
+            "user,project,local"
+        );
+        assert_eq!(
+            claude_setting_sources_for_provider(None),
+            "user,project,local"
+        );
+    }
+
+    #[test]
+    fn claude_provider_isolation_is_used_for_explicit_provider_credentials() {
+        let with_key = ProviderConfig {
+            kind: "anthropic".into(),
+            api_key: Some("sk-test".into()),
+            base_url: None,
+        };
+        let with_base_url = ProviderConfig {
+            kind: "anthropic".into(),
+            api_key: None,
+            base_url: Some("https://example.invalid".into()),
+        };
+        let compatible = ProviderConfig {
+            kind: "openai".into(),
+            api_key: Some("sk-test".into()),
+            base_url: Some("https://api.minimaxi.com/v1".into()),
+        };
+
+        assert_eq!(
+            claude_setting_sources_for_provider(Some(("anthropic", &with_key))),
+            "project,local"
+        );
+        assert_eq!(
+            claude_setting_sources_for_provider(Some(("anthropic", &with_base_url))),
+            "project,local"
+        );
+        assert_eq!(
+            claude_setting_sources_for_provider(Some(("minimax", &compatible))),
+            "project,local"
+        );
     }
 }

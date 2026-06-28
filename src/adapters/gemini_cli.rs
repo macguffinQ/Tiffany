@@ -10,9 +10,8 @@ use crate::task_policy::is_conversational_task;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::stream::{self, BoxStream};
+use futures::stream::BoxStream;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -20,7 +19,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
-use super::StderrCapture;
+use super::{stream_cli_session_events, StderrCapture};
 
 pub struct GeminiCLIAdapter {
     binary: String,
@@ -52,6 +51,10 @@ impl GeminiCLIAdapter {
 impl WorkerAdapter for GeminiCLIAdapter {
     fn name(&self) -> &str {
         "gemini"
+    }
+
+    fn binary_hint(&self) -> Option<&str> {
+        Some(&self.binary)
     }
 
     async fn start(
@@ -148,6 +151,9 @@ impl WorkerAdapter for GeminiCLIAdapter {
         while let Ok(Some(line)) = reader.next_line().await {
             let payload = serde_json::from_str::<serde_json::Value>(&line)
                 .unwrap_or_else(|_| serde_json::Value::String(line.clone()));
+            if session.native_session_id.is_none() {
+                session.native_session_id = extract_gemini_native_session_id(&payload);
+            }
             let event = Event {
                 session_id: session.id,
                 task_id: task.id,
@@ -191,9 +197,6 @@ impl WorkerAdapter for GeminiCLIAdapter {
                 stderr_capture.error_suffix()
             );
         }
-        if session.native_session_id.is_none() {
-            session.native_session_id = Some("latest".to_string());
-        }
 
         Ok(crate::core::worker::WorkerHandle {
             session,
@@ -202,61 +205,12 @@ impl WorkerAdapter for GeminiCLIAdapter {
     }
 
     fn stream_events(&self, session: &Session) -> BoxStream<'static, Result<Event>> {
-        let path: PathBuf = self.session_store.log_path(session.id);
-        let sess_id = session.id;
-        let task_id = session.task_id;
-        Box::pin(stream::unfold(
-            (path, 0u64),
-            move |(path, mut pos)| async move {
-                use tokio::io::{AsyncReadExt, AsyncSeekExt};
-                let mut file = match tokio::fs::File::open(&path).await {
-                    Ok(f) => f,
-                    Err(_) => {
-                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                        return Some((
-                            Ok(Event {
-                                session_id: sess_id,
-                                task_id,
-                                ts: Utc::now(),
-                                kind: "heartbeat".into(),
-                                payload: serde_json::json!({}),
-                            }),
-                            (path, pos),
-                        ));
-                    }
-                };
-                if file.seek(std::io::SeekFrom::Start(pos)).await.is_err() {
-                    return None;
-                }
-                let mut buf = String::new();
-                if file.read_to_string(&mut buf).await.is_err() {
-                    return None;
-                }
-                if buf.is_empty() {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    return Some((
-                        Ok(Event {
-                            session_id: sess_id,
-                            task_id,
-                            ts: Utc::now(),
-                            kind: "heartbeat".into(),
-                            payload: serde_json::json!({}),
-                        }),
-                        (path, pos),
-                    ));
-                }
-                pos += buf.len() as u64;
-                let line = buf.trim_end().lines().last().unwrap_or("").to_string();
-                let event = Event {
-                    session_id: sess_id,
-                    task_id,
-                    ts: Utc::now(),
-                    kind: agent_events::classify_json_line(&line),
-                    payload: serde_json::from_str(&line).unwrap_or(serde_json::Value::String(line)),
-                };
-                Some((Ok(event), (path, pos)))
-            },
-        ))
+        stream_cli_session_events(
+            self.session_store.log_path(session.id),
+            session.id,
+            session.task_id,
+            agent_events::classify_json_line,
+        )
     }
 
     async fn cancel(&self, _session: &Session) -> Result<()> {
@@ -303,6 +257,37 @@ fn gemini_command(
     }
     cmd.arg(prompt);
     cmd
+}
+
+fn extract_gemini_native_session_id(value: &serde_json::Value) -> Option<String> {
+    find_string_field(value, &["session_id", "sessionId"]).filter(|id| !id.trim().is_empty())
+}
+
+fn find_string_field(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in keys {
+                if let Some(text) = map.get(*key).and_then(|value| value.as_str()) {
+                    return Some(text.to_string());
+                }
+            }
+            for child in map.values() {
+                if let Some(found) = find_string_field(child, keys) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                if let Some(found) = find_string_field(child, keys) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 fn apply_gemini_provider_env(cmd: &mut Command, provider: &ProviderConfig) {
@@ -358,7 +343,7 @@ mod tests {
             "gemini",
             "gemini-2.5-pro",
             std::path::Path::new("/tmp/repo"),
-            Some("latest"),
+            Some("d2f88206-a6ed-4612-bc7e-ac77f3fae1ab"),
             "continue the work",
         );
         let args = cmd
@@ -367,9 +352,34 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
 
-        assert!(args
-            .windows(2)
-            .any(|pair| pair[0] == "--resume" && pair[1] == "latest"));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--resume"
+                    && pair[1] == "d2f88206-a6ed-4612-bc7e-ac77f3fae1ab")
+        );
         assert_eq!(args.last().map(String::as_str), Some("continue the work"));
+    }
+
+    #[test]
+    fn extracts_gemini_native_session_id_from_stream_init() {
+        let top_level = serde_json::json!({
+            "type": "init",
+            "session_id": "d2f88206-a6ed-4612-bc7e-ac77f3fae1ab",
+            "model": "gemini-2.5-pro"
+        });
+        assert_eq!(
+            extract_gemini_native_session_id(&top_level).as_deref(),
+            Some("d2f88206-a6ed-4612-bc7e-ac77f3fae1ab")
+        );
+
+        let nested = serde_json::json!({
+            "session": {
+                "sessionId": "nested-gemini-session"
+            }
+        });
+        assert_eq!(
+            extract_gemini_native_session_id(&nested).as_deref(),
+            Some("nested-gemini-session")
+        );
     }
 }

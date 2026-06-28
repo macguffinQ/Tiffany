@@ -31,6 +31,7 @@ pub trait SessionReader: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct WorkerThread {
     pub id: Uuid,
+    pub scope: String,
     pub role: String,
     pub runtime: String,
     pub agent: String,
@@ -85,6 +86,25 @@ pub struct NativeImportReport {
     pub events: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TuiJob {
+    pub id: Uuid,
+    pub prompt: String,
+    pub status: String,
+    pub route: Option<String>,
+    pub role: Option<String>,
+    pub task_id: Option<Uuid>,
+    pub session_id: Option<Uuid>,
+    pub worker_thread_id: Option<Uuid>,
+    pub native_session_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub result: Option<String>,
+    pub error: Option<String>,
+}
+
 /// Cross-process guard for one worker thread.
 ///
 /// The terminal UI starts a fresh orchestrator subprocess for each prompt. An
@@ -132,7 +152,8 @@ impl SessionStore {
             );
             CREATE TABLE IF NOT EXISTS worker_threads (
                 id TEXT PRIMARY KEY,
-                role TEXT NOT NULL UNIQUE,
+                scope TEXT NOT NULL DEFAULT 'global',
+                role TEXT NOT NULL,
                 runtime TEXT NOT NULL,
                 agent TEXT NOT NULL,
                 model TEXT NOT NULL,
@@ -141,7 +162,8 @@ impl SessionStore {
                 native_session_id TEXT,
                 last_session_id TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                UNIQUE(scope, role)
             );
             CREATE TABLE IF NOT EXISTS native_conversations (
                 id TEXT PRIMARY KEY,
@@ -180,10 +202,31 @@ impl SessionStore {
             CREATE INDEX IF NOT EXISTS idx_native_turns_captured ON native_turns(captured_at_unix DESC);
             CREATE INDEX IF NOT EXISTS idx_native_events_worker_role ON native_events(worker_role);
             CREATE INDEX IF NOT EXISTS idx_native_events_worker_thread ON native_events(worker_thread_id);
+            CREATE TABLE IF NOT EXISTS tui_jobs (
+                id TEXT PRIMARY KEY,
+                prompt TEXT NOT NULL,
+                status TEXT NOT NULL,
+                route TEXT,
+                role TEXT,
+                task_id TEXT,
+                session_id TEXT,
+                worker_thread_id TEXT,
+                native_session_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                ended_at TEXT,
+                result TEXT,
+                error TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_tui_jobs_status_updated ON tui_jobs(status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_tui_jobs_updated ON tui_jobs(updated_at DESC);
             "#,
         )?;
+        migrate_worker_threads_table(&db)?;
         migrate_sessions_table(&db)?;
         migrate_native_events_table(&db)?;
+        migrate_tui_jobs_table(&db)?;
         Ok(Self {
             inner: Arc::new(SessionStoreInner {
                 log_dir: log_dir.to_path_buf(),
@@ -274,20 +317,35 @@ impl SessionStore {
         model: &str,
         provider: Option<&str>,
     ) -> Result<WorkerThread> {
+        let scope = current_worker_thread_scope();
+        self.get_or_create_worker_thread_scoped(&scope, role, runtime, agent, model, provider)
+    }
+
+    pub fn get_or_create_worker_thread_scoped(
+        &self,
+        scope: &str,
+        role: &str,
+        runtime: &str,
+        agent: &str,
+        model: &str,
+        provider: Option<&str>,
+    ) -> Result<WorkerThread> {
         let db = self.inner.db.lock().unwrap();
-        let existing = select_worker_thread_by_role(&db, role)?;
+        let scope = normalize_worker_thread_scope(scope);
+        let existing = select_worker_thread_by_role(&db, &scope, role)?;
         let now = Utc::now();
         if let Some(mut thread) = existing {
             let provider_changed = thread.provider.as_deref() != provider;
             let runtime_changed = thread.runtime != runtime;
-            if runtime_changed || provider_changed || thread.agent != agent || thread.model != model
-            {
+            let agent_changed = thread.agent != agent;
+            let model_changed = thread.model != model;
+            if runtime_changed || provider_changed || agent_changed || model_changed {
                 thread.runtime = runtime.to_string();
                 thread.agent = agent.to_string();
                 thread.model = model.to_string();
                 thread.provider = provider.map(str::to_string);
                 thread.updated_at = now;
-                if runtime_changed || provider_changed {
+                if runtime_changed || provider_changed || agent_changed || model_changed {
                     thread.native_session_id = None;
                 }
                 update_worker_thread_row(&db, &thread)?;
@@ -297,6 +355,7 @@ impl SessionStore {
 
         let thread = WorkerThread {
             id: Uuid::new_v4(),
+            scope,
             role: role.to_string(),
             runtime: runtime.to_string(),
             agent: agent.to_string(),
@@ -310,10 +369,11 @@ impl SessionStore {
         };
         db.execute(
             r#"INSERT INTO worker_threads
-            (id, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)"#,
+            (id, scope, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"#,
             params![
                 thread.id.to_string(),
+                thread.scope.as_str(),
                 thread.role.as_str(),
                 thread.runtime.as_str(),
                 thread.agent.as_str(),
@@ -358,8 +418,32 @@ impl SessionStore {
     }
 
     pub fn worker_thread_by_role(&self, role: &str) -> Result<Option<WorkerThread>> {
+        let scope = current_worker_thread_scope();
+        self.worker_thread_by_role_scoped(&scope, role)
+    }
+
+    pub fn worker_thread_by_role_scoped(
+        &self,
+        scope: &str,
+        role: &str,
+    ) -> Result<Option<WorkerThread>> {
         let db = self.inner.db.lock().unwrap();
-        select_worker_thread_by_role(&db, role)
+        select_worker_thread_by_role(&db, &normalize_worker_thread_scope(scope), role)
+    }
+
+    pub fn worker_threads_in_current_scope_family(&self) -> Result<Vec<WorkerThread>> {
+        let scope = current_worker_thread_scope();
+        self.worker_threads_in_scope_family(&scope)
+    }
+
+    pub fn worker_threads_in_scope_family(&self, scope: &str) -> Result<Vec<WorkerThread>> {
+        let family = worker_thread_scope_family(scope);
+        let db = self.inner.db.lock().unwrap();
+        let threads = select_all_worker_threads(&db)?
+            .into_iter()
+            .filter(|thread| worker_thread_scope_family(&thread.scope) == family)
+            .collect();
+        Ok(threads)
     }
 
     pub fn worker_thread_by_id(&self, thread_id: Uuid) -> Result<Option<WorkerThread>> {
@@ -368,8 +452,13 @@ impl SessionStore {
     }
 
     pub fn list_worker_threads(&self) -> Result<Vec<WorkerThread>> {
+        let scope = current_worker_thread_scope();
+        self.list_worker_threads_scoped(&scope)
+    }
+
+    pub fn list_worker_threads_scoped(&self, scope: &str) -> Result<Vec<WorkerThread>> {
         let db = self.inner.db.lock().unwrap();
-        select_worker_threads(&db)
+        select_worker_threads(&db, &normalize_worker_thread_scope(scope))
     }
 
     pub async fn acquire_worker_thread_lease(&self, thread_id: Uuid) -> Result<WorkerThreadLease> {
@@ -406,6 +495,225 @@ impl SessionStore {
             params![Utc::now().to_rfc3339(), thread_id.to_string()],
         )?;
         Ok(())
+    }
+
+    pub fn create_tui_job(
+        &self,
+        prompt: &str,
+        status: &str,
+        route: Option<&str>,
+        role: Option<&str>,
+    ) -> Result<TuiJob> {
+        let now = Utc::now();
+        let job = TuiJob {
+            id: Uuid::new_v4(),
+            prompt: prompt.to_string(),
+            status: status.to_string(),
+            route: route.map(str::to_string),
+            role: role.map(str::to_string),
+            task_id: None,
+            session_id: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            created_at: now,
+            updated_at: now,
+            started_at: (status == "running").then_some(now),
+            ended_at: None,
+            result: None,
+            error: None,
+        };
+        let db = self.inner.db.lock().unwrap();
+        insert_or_replace_tui_job(&db, &job)?;
+        Ok(job)
+    }
+
+    pub fn set_tui_job_status(
+        &self,
+        id: Uuid,
+        status: &str,
+        result: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let db = self.inner.db.lock().unwrap();
+        let now = Utc::now();
+        let ended_at = if matches!(
+            status,
+            "done" | "failed" | "cancelled" | "removed" | "skipped"
+        ) {
+            Some(now.to_rfc3339())
+        } else {
+            None
+        };
+        db.execute(
+            r#"UPDATE tui_jobs
+               SET status = ?,
+                   updated_at = ?,
+                   started_at = CASE WHEN ? = 'running' AND started_at IS NULL THEN ? ELSE started_at END,
+                   ended_at = COALESCE(?, ended_at),
+                   result = COALESCE(?, result),
+                   error = COALESCE(?, error)
+               WHERE id = ?"#,
+            params![
+                status,
+                now.to_rfc3339(),
+                status,
+                now.to_rfc3339(),
+                ended_at,
+                result,
+                error,
+                id.to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_tui_job_prompt(&self, id: Uuid, prompt: &str) -> Result<()> {
+        let db = self.inner.db.lock().unwrap();
+        db.execute(
+            "UPDATE tui_jobs SET prompt = ?, updated_at = ? WHERE id = ?",
+            params![prompt, Utc::now().to_rfc3339(), id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn attach_tui_job_session(
+        &self,
+        id: Uuid,
+        session_id: Option<Uuid>,
+        native_session_id: Option<&str>,
+    ) -> Result<()> {
+        let db = self.inner.db.lock().unwrap();
+        let session = session_id
+            .map(|session_id| select_session_by_id(&db, session_id))
+            .transpose()?
+            .flatten();
+        let session_id = session.as_ref().map(|session| session.id.to_string());
+        let task_id = session.as_ref().map(|session| session.task_id.to_string());
+        let worker_thread_id = session
+            .as_ref()
+            .and_then(|session| session.worker_thread_id)
+            .map(|id| id.to_string());
+        let native_session_id = native_session_id.map(str::to_string).or_else(|| {
+            session
+                .as_ref()
+                .and_then(|session| session.native_session_id.clone())
+        });
+        db.execute(
+            r#"UPDATE tui_jobs
+               SET session_id = COALESCE(?, session_id),
+                   task_id = COALESCE(?, task_id),
+                   worker_thread_id = COALESCE(?, worker_thread_id),
+                   native_session_id = COALESCE(?, native_session_id),
+                   updated_at = ?
+               WHERE id = ?"#,
+            params![
+                session_id,
+                task_id,
+                worker_thread_id,
+                native_session_id.as_deref(),
+                Utc::now().to_rfc3339(),
+                id.to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn attach_tui_job_worker(
+        &self,
+        id: Uuid,
+        task_id: Option<Uuid>,
+        role: Option<&str>,
+        worker_thread_id: Option<Uuid>,
+        native_session_id: Option<&str>,
+    ) -> Result<()> {
+        let db = self.inner.db.lock().unwrap();
+        db.execute(
+            r#"UPDATE tui_jobs
+               SET task_id = COALESCE(?, task_id),
+                   role = COALESCE(role, ?),
+                   worker_thread_id = COALESCE(?, worker_thread_id),
+                   native_session_id = COALESCE(?, native_session_id),
+                   updated_at = ?
+               WHERE id = ?"#,
+            params![
+                task_id.map(|id| id.to_string()),
+                role,
+                worker_thread_id.map(|id| id.to_string()),
+                native_session_id,
+                Utc::now().to_rfc3339(),
+                id.to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn attach_tui_job_completed_task(
+        &self,
+        id: Uuid,
+        task_id: Uuid,
+        role: Option<&str>,
+    ) -> Result<()> {
+        let db = self.inner.db.lock().unwrap();
+        let session = select_session_by_task_id(&db, task_id)?;
+        let session_id = session.as_ref().map(|session| session.id.to_string());
+        let worker_thread_id = session
+            .as_ref()
+            .and_then(|session| session.worker_thread_id)
+            .map(|id| id.to_string());
+        let native_session_id = session
+            .as_ref()
+            .and_then(|session| session.native_session_id.as_deref());
+        db.execute(
+            r#"UPDATE tui_jobs
+               SET task_id = COALESCE(?, task_id),
+                   role = COALESCE(role, ?),
+                   session_id = COALESCE(?, session_id),
+                   worker_thread_id = COALESCE(?, worker_thread_id),
+                   native_session_id = COALESCE(?, native_session_id),
+                   updated_at = ?
+               WHERE id = ?"#,
+            params![
+                task_id.to_string(),
+                role,
+                session_id,
+                worker_thread_id,
+                native_session_id,
+                Utc::now().to_rfc3339(),
+                id.to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_tui_job(&self, id: Uuid) -> Result<Option<TuiJob>> {
+        let db = self.inner.db.lock().unwrap();
+        select_tui_job_by_id(&db, id)
+    }
+
+    pub fn find_tui_jobs_by_id_prefix(&self, prefix: &str, limit: usize) -> Result<Vec<TuiJob>> {
+        let prefix = prefix.trim();
+        if prefix.is_empty() || !prefix.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-') {
+            return Ok(Vec::new());
+        }
+        let db = self.inner.db.lock().unwrap();
+        select_tui_jobs_by_id_prefix(&db, prefix, limit)
+    }
+
+    pub fn list_tui_jobs(&self, limit: usize) -> Result<Vec<TuiJob>> {
+        let db = self.inner.db.lock().unwrap();
+        select_tui_jobs(&db, limit)
+    }
+
+    pub fn list_active_tui_jobs(&self) -> Result<Vec<TuiJob>> {
+        let db = self.inner.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id, prompt, status, route, role, task_id, session_id, worker_thread_id, native_session_id, created_at, updated_at, started_at, ended_at, result, error
+             FROM tui_jobs WHERE status IN ('queued', 'running') ORDER BY created_at ASC",
+        )?;
+        let rows = stmt
+            .query_map([], row_to_tui_job)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     pub fn get_many(&self, ids: &[Uuid]) -> Result<Vec<Session>> {
@@ -513,6 +821,89 @@ impl SessionStore {
             conversations: 1,
             turns: conversation.turns.len(),
             events: event_count,
+        })
+    }
+
+    pub fn append_native_turn(
+        &self,
+        conversation_id: &str,
+        cwd: &str,
+        user_prompt: &str,
+        result: &str,
+        captured_at_unix: u64,
+        events: &[NativeEvent],
+    ) -> Result<NativeImportReport> {
+        let db = self.inner.db.lock().unwrap();
+        let tx = db.unchecked_transaction()?;
+        let existing = tx
+            .query_row(
+                "SELECT id, created_at_unix FROM native_conversations WHERE cwd = ?",
+                params![cwd],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        let (conversation_id, created_at_unix) = existing
+            .map(|(id, created)| (id, created.max(0) as u64))
+            .unwrap_or_else(|| (conversation_id.to_string(), captured_at_unix));
+        tx.execute(
+            r#"INSERT INTO native_conversations (id, cwd, created_at_unix, updated_at_unix)
+               VALUES (?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                   cwd=excluded.cwd,
+                   updated_at_unix=excluded.updated_at_unix"#,
+            params![
+                conversation_id.as_str(),
+                cwd,
+                created_at_unix as i64,
+                captured_at_unix as i64,
+            ],
+        )?;
+        let turn_index = tx.query_row(
+            "SELECT COALESCE(MAX(turn_index) + 1, 0) FROM native_turns WHERE conversation_id = ?",
+            params![conversation_id.as_str()],
+            |row| row.get::<_, i64>(0),
+        )?;
+        tx.execute(
+            r#"INSERT INTO native_turns
+               (conversation_id, turn_index, user_prompt, result, captured_at_unix)
+               VALUES (?,?,?,?,?)"#,
+            params![
+                conversation_id.as_str(),
+                turn_index,
+                user_prompt,
+                result,
+                captured_at_unix as i64,
+            ],
+        )?;
+        for (idx, event) in events.iter().enumerate() {
+            tx.execute(
+                r#"INSERT INTO native_events
+                   (conversation_id, turn_index, event_index, role, status, title, kind, content, agent, worker_role, model, provider, task_id, worker_thread_id, native_session_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"#,
+                params![
+                    conversation_id.as_str(),
+                    turn_index,
+                    idx as i64,
+                    event.role.as_str(),
+                    event.status.as_str(),
+                    event.title.as_str(),
+                    event.kind.as_deref(),
+                    event.content.as_deref(),
+                    event.agent.as_deref(),
+                    event.worker_role.as_deref(),
+                    event.model.as_deref(),
+                    event.provider.as_deref(),
+                    event.task_id.as_deref(),
+                    event.worker_thread_id.as_deref(),
+                    event.native_session_id.as_deref(),
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(NativeImportReport {
+            conversations: 1,
+            turns: 1,
+            events: events.len(),
         })
     }
 
@@ -699,6 +1090,79 @@ impl Drop for WorkerThreadLease {
     }
 }
 
+fn migrate_worker_threads_table(db: &Connection) -> Result<()> {
+    if !table_has_column(db, "worker_threads", "scope")? {
+        db.execute(
+            "ALTER TABLE worker_threads ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'",
+            [],
+        )?;
+    }
+    if worker_threads_table_needs_rebuild(db)? {
+        db.execute_batch(
+            r#"
+            ALTER TABLE worker_threads RENAME TO worker_threads_old;
+            CREATE TABLE worker_threads (
+                id TEXT PRIMARY KEY,
+                scope TEXT NOT NULL DEFAULT 'global',
+                role TEXT NOT NULL,
+                runtime TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                model TEXT NOT NULL,
+                provider TEXT,
+                worktree_path TEXT,
+                native_session_id TEXT,
+                last_session_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(scope, role)
+            );
+            INSERT OR REPLACE INTO worker_threads
+                (id, scope, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at)
+            SELECT
+                id,
+                COALESCE(NULLIF(scope, ''), 'global'),
+                role,
+                runtime,
+                agent,
+                model,
+                provider,
+                worktree_path,
+                native_session_id,
+                last_session_id,
+                created_at,
+                updated_at
+            FROM worker_threads_old;
+            DROP TABLE worker_threads_old;
+            "#,
+        )?;
+    }
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_threads_scope_role ON worker_threads(scope, role)",
+        [],
+    )?;
+    Ok(())
+}
+
+fn worker_threads_table_needs_rebuild(db: &Connection) -> Result<bool> {
+    let sql: Option<String> = db
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'worker_threads'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(sql) = sql else {
+        return Ok(false);
+    };
+    let normalized = sql
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(normalized.contains("role text not null unique")
+        || !normalized.contains("unique(scope, role)"))
+}
+
 fn migrate_sessions_table(db: &Connection) -> Result<()> {
     for (column, definition) in [
         ("worker_thread_id", "TEXT"),
@@ -729,6 +1193,30 @@ fn migrate_native_events_table(db: &Connection) -> Result<()> {
         }
         db.execute(
             &format!("ALTER TABLE native_events ADD COLUMN {column} {definition}"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn migrate_tui_jobs_table(db: &Connection) -> Result<()> {
+    for (column, definition) in [
+        ("route", "TEXT"),
+        ("role", "TEXT"),
+        ("task_id", "TEXT"),
+        ("session_id", "TEXT"),
+        ("worker_thread_id", "TEXT"),
+        ("native_session_id", "TEXT"),
+        ("started_at", "TEXT"),
+        ("ended_at", "TEXT"),
+        ("result", "TEXT"),
+        ("error", "TEXT"),
+    ] {
+        if table_has_column(db, "tui_jobs", column)? {
+            continue;
+        }
+        db.execute(
+            &format!("ALTER TABLE tui_jobs ADD COLUMN {column} {definition}"),
             [],
         )?;
     }
@@ -794,6 +1282,129 @@ fn select_native_events(
     Ok(rows)
 }
 
+fn insert_or_replace_tui_job(db: &Connection, job: &TuiJob) -> Result<()> {
+    db.execute(
+        r#"INSERT OR REPLACE INTO tui_jobs
+           (id, prompt, status, route, role, task_id, session_id, worker_thread_id, native_session_id, created_at, updated_at, started_at, ended_at, result, error)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"#,
+        params![
+            job.id.to_string(),
+            job.prompt.as_str(),
+            job.status.as_str(),
+            job.route.as_deref(),
+            job.role.as_deref(),
+            job.task_id.map(|id| id.to_string()),
+            job.session_id.map(|id| id.to_string()),
+            job.worker_thread_id.map(|id| id.to_string()),
+            job.native_session_id.as_deref(),
+            job.created_at.to_rfc3339(),
+            job.updated_at.to_rfc3339(),
+            job.started_at.map(|ts| ts.to_rfc3339()),
+            job.ended_at.map(|ts| ts.to_rfc3339()),
+            job.result.as_deref(),
+            job.error.as_deref(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn select_tui_job_by_id(db: &Connection, id: Uuid) -> Result<Option<TuiJob>> {
+    db.query_row(
+        "SELECT id, prompt, status, route, role, task_id, session_id, worker_thread_id, native_session_id, created_at, updated_at, started_at, ended_at, result, error
+         FROM tui_jobs WHERE id = ?",
+        params![id.to_string()],
+        row_to_tui_job,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn select_tui_jobs_by_id_prefix(
+    db: &Connection,
+    prefix: &str,
+    limit: usize,
+) -> Result<Vec<TuiJob>> {
+    let mut stmt = db.prepare(
+        "SELECT id, prompt, status, route, role, task_id, session_id, worker_thread_id, native_session_id, created_at, updated_at, started_at, ended_at, result, error
+         FROM tui_jobs WHERE id LIKE ? ORDER BY updated_at DESC LIMIT ?",
+    )?;
+    let rows = stmt
+        .query_map(params![format!("{prefix}%"), limit as i64], row_to_tui_job)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn select_tui_jobs(db: &Connection, limit: usize) -> Result<Vec<TuiJob>> {
+    let mut stmt = db.prepare(
+        "SELECT id, prompt, status, route, role, task_id, session_id, worker_thread_id, native_session_id, created_at, updated_at, started_at, ended_at, result, error
+         FROM tui_jobs ORDER BY updated_at DESC LIMIT ?",
+    )?;
+    let rows = stmt
+        .query_map(params![limit as i64], row_to_tui_job)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn row_to_tui_job(row: &rusqlite::Row) -> rusqlite::Result<TuiJob> {
+    let id: String = row.get(0)?;
+    let task_id: Option<String> = row.get(5)?;
+    let session_id: Option<String> = row.get(6)?;
+    let worker_thread_id: Option<String> = row.get(7)?;
+    Ok(TuiJob {
+        id: Uuid::parse_str(&id).map_err(|_e| rusqlite::Error::InvalidQuery)?,
+        prompt: row.get(1)?,
+        status: row.get(2)?,
+        route: row.get(3)?,
+        role: row.get(4)?,
+        task_id: parse_optional_uuid(task_id),
+        session_id: session_id.and_then(|id| Uuid::parse_str(&id).ok()),
+        worker_thread_id: parse_optional_uuid(worker_thread_id),
+        native_session_id: row.get(8)?,
+        created_at: parse_rfc3339_row(row.get::<_, String>(9)?)?,
+        updated_at: parse_rfc3339_row(row.get::<_, String>(10)?)?,
+        started_at: parse_optional_rfc3339_row(row.get(11)?)?,
+        ended_at: parse_optional_rfc3339_row(row.get(12)?)?,
+        result: row.get(13)?,
+        error: row.get(14)?,
+    })
+}
+
+fn parse_optional_uuid(raw: Option<String>) -> Option<Uuid> {
+    raw.and_then(|id| Uuid::parse_str(&id).ok())
+}
+
+fn select_session_by_id(db: &Connection, id: Uuid) -> Result<Option<Session>> {
+    db.query_row(
+        "SELECT id, task_id, agent, role, model, started_at, ended_at, parent_session_ids, worker_thread_id, native_session_id, worktree_path, token_in, token_out, cost_usd, files_touched
+         FROM sessions WHERE id = ?",
+        params![id.to_string()],
+        SessionStore::row_to_session,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn select_session_by_task_id(db: &Connection, task_id: Uuid) -> Result<Option<Session>> {
+    db.query_row(
+        "SELECT id, task_id, agent, role, model, started_at, ended_at, parent_session_ids, worker_thread_id, native_session_id, worktree_path, token_in, token_out, cost_usd, files_touched
+         FROM sessions WHERE task_id = ? ORDER BY started_at DESC LIMIT 1",
+        params![task_id.to_string()],
+        SessionStore::row_to_session,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn parse_rfc3339_row(raw: String) -> rusqlite::Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(&raw)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|_e| rusqlite::Error::InvalidQuery)
+}
+
+fn parse_optional_rfc3339_row(raw: Option<String>) -> rusqlite::Result<Option<DateTime<Utc>>> {
+    raw.map(parse_rfc3339_row).transpose()
+}
+
 fn table_has_column(db: &Connection, table: &str, column: &str) -> Result<bool> {
     let mut stmt = db.prepare(&format!("PRAGMA table_info({table})"))?;
     let mut rows = stmt.query([])?;
@@ -806,12 +1417,16 @@ fn table_has_column(db: &Connection, table: &str, column: &str) -> Result<bool> 
     Ok(false)
 }
 
-fn select_worker_thread_by_role(db: &Connection, role: &str) -> Result<Option<WorkerThread>> {
+fn select_worker_thread_by_role(
+    db: &Connection,
+    scope: &str,
+    role: &str,
+) -> Result<Option<WorkerThread>> {
     let mut stmt = db.prepare(
-        "SELECT id, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at
-         FROM worker_threads WHERE role = ?",
+        "SELECT id, scope, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at
+         FROM worker_threads WHERE scope = ? AND role = ?",
     )?;
-    let mut rows = stmt.query(params![role])?;
+    let mut rows = stmt.query(params![scope, role])?;
     if let Some(row) = rows.next()? {
         return Ok(Some(row_to_worker_thread(row)?));
     }
@@ -820,7 +1435,7 @@ fn select_worker_thread_by_role(db: &Connection, role: &str) -> Result<Option<Wo
 
 fn select_worker_thread_by_id(db: &Connection, id: Uuid) -> Result<Option<WorkerThread>> {
     let mut stmt = db.prepare(
-        "SELECT id, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at
+        "SELECT id, scope, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at
          FROM worker_threads WHERE id = ?",
     )?;
     let mut rows = stmt.query(params![id.to_string()])?;
@@ -830,9 +1445,20 @@ fn select_worker_thread_by_id(db: &Connection, id: Uuid) -> Result<Option<Worker
     Ok(None)
 }
 
-fn select_worker_threads(db: &Connection) -> Result<Vec<WorkerThread>> {
+fn select_worker_threads(db: &Connection, scope: &str) -> Result<Vec<WorkerThread>> {
     let mut stmt = db.prepare(
-        "SELECT id, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at
+        "SELECT id, scope, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at
+         FROM worker_threads WHERE scope = ? ORDER BY updated_at DESC, role ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![scope], row_to_worker_thread)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn select_all_worker_threads(db: &Connection) -> Result<Vec<WorkerThread>> {
+    let mut stmt = db.prepare(
+        "SELECT id, scope, role, runtime, agent, model, provider, worktree_path, native_session_id, last_session_id, created_at, updated_at
          FROM worker_threads ORDER BY updated_at DESC, role ASC",
     )?;
     let rows = stmt
@@ -844,9 +1470,10 @@ fn select_worker_threads(db: &Connection) -> Result<Vec<WorkerThread>> {
 fn update_worker_thread_row(db: &Connection, thread: &WorkerThread) -> Result<()> {
     db.execute(
         r#"UPDATE worker_threads
-        SET runtime = ?, agent = ?, model = ?, provider = ?, worktree_path = ?, native_session_id = ?, last_session_id = ?, updated_at = ?
+        SET scope = ?, runtime = ?, agent = ?, model = ?, provider = ?, worktree_path = ?, native_session_id = ?, last_session_id = ?, updated_at = ?
         WHERE id = ?"#,
         params![
+            thread.scope.as_str(),
             thread.runtime.as_str(),
             thread.agent.as_str(),
             thread.model.as_str(),
@@ -866,19 +1493,21 @@ fn update_worker_thread_row(db: &Connection, thread: &WorkerThread) -> Result<()
 
 fn row_to_worker_thread(row: &rusqlite::Row) -> rusqlite::Result<WorkerThread> {
     let id: String = row.get(0)?;
-    let role: String = row.get(1)?;
-    let runtime: String = row.get(2)?;
-    let agent: String = row.get(3)?;
-    let model: String = row.get(4)?;
-    let provider: Option<String> = row.get(5)?;
-    let worktree_path: Option<String> = row.get(6)?;
-    let native_session_id: Option<String> = row.get(7)?;
-    let last_session_id: Option<String> = row.get(8)?;
-    let created_at: String = row.get(9)?;
-    let updated_at: String = row.get(10)?;
+    let scope: String = row.get(1)?;
+    let role: String = row.get(2)?;
+    let runtime: String = row.get(3)?;
+    let agent: String = row.get(4)?;
+    let model: String = row.get(5)?;
+    let provider: Option<String> = row.get(6)?;
+    let worktree_path: Option<String> = row.get(7)?;
+    let native_session_id: Option<String> = row.get(8)?;
+    let last_session_id: Option<String> = row.get(9)?;
+    let created_at: String = row.get(10)?;
+    let updated_at: String = row.get(11)?;
 
     Ok(WorkerThread {
         id: Uuid::parse_str(&id).map_err(|_e| rusqlite::Error::InvalidQuery)?,
+        scope,
         role,
         runtime,
         agent,
@@ -894,6 +1523,47 @@ fn row_to_worker_thread(row: &rusqlite::Row) -> rusqlite::Result<WorkerThread> {
             .map_err(|_e| rusqlite::Error::InvalidQuery)?
             .with_timezone(&Utc),
     })
+}
+
+fn current_worker_thread_scope() -> String {
+    let env_scope = std::env::var("TIFFANY_WORKER_SCOPE").ok();
+    worker_thread_scope_from_env_or_cwd(env_scope.as_deref(), std::env::current_dir().ok())
+}
+
+fn worker_thread_scope_from_env_or_cwd(env_scope: Option<&str>, cwd: Option<PathBuf>) -> String {
+    if let Some(scope) = env_scope
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())
+        .map(normalize_worker_thread_scope)
+    {
+        return scope;
+    }
+
+    cwd.map(|cwd| {
+        cwd.canonicalize()
+            .unwrap_or(cwd)
+            .to_string_lossy()
+            .into_owned()
+    })
+    .map(|cwd| format!("cwd:{cwd}"))
+    .unwrap_or_else(|| "global".to_string())
+}
+
+fn normalize_worker_thread_scope(scope: &str) -> String {
+    let scope = scope.trim();
+    if scope.is_empty() {
+        "global".to_string()
+    } else {
+        scope.to_string()
+    }
+}
+
+fn worker_thread_scope_family(scope: &str) -> String {
+    let scope = normalize_worker_thread_scope(scope);
+    scope
+        .rsplit_once(":session:")
+        .map(|(family, _session)| family.to_string())
+        .unwrap_or(scope)
 }
 
 #[async_trait::async_trait]
@@ -916,6 +1586,20 @@ mod tests {
         let store =
             SessionStore::open(&tmp.path().join("logs"), &tmp.path().join("db.sqlite")).unwrap();
         (tmp, store)
+    }
+
+    #[test]
+    fn worker_thread_scope_prefers_env_override() {
+        let cwd = PathBuf::from("/tmp/tiffany-project");
+
+        assert_eq!(
+            worker_thread_scope_from_env_or_cwd(Some("  tui:session:/tmp/project  "), Some(cwd)),
+            "tui:session:/tmp/project"
+        );
+        assert_eq!(
+            worker_thread_scope_from_env_or_cwd(Some("  "), None),
+            "global"
+        );
     }
 
     #[test]
@@ -998,6 +1682,212 @@ mod tests {
     }
 
     #[test]
+    fn tui_jobs_persist_status_prompt_and_recent_listing() {
+        let (_tmp, store) = test_store();
+
+        let queued = store
+            .create_tui_job(
+                "first queued prompt",
+                "queued",
+                Some("direct-answer"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+        let running = store
+            .create_tui_job(
+                "running prompt",
+                "running",
+                Some("single-worker"),
+                Some("worker-codex"),
+            )
+            .unwrap();
+
+        store
+            .update_tui_job_prompt(queued.id, "edited queued prompt")
+            .unwrap();
+        store
+            .set_tui_job_status(queued.id, "removed", None, Some("removed from queue"))
+            .unwrap();
+        let task_id = Uuid::new_v4();
+        let worker_thread_id = Uuid::new_v4();
+        store
+            .attach_tui_job_worker(
+                running.id,
+                Some(task_id),
+                Some("worker-codex"),
+                Some(worker_thread_id),
+                Some("native-1"),
+            )
+            .unwrap();
+        let mut session = Session::new(task_id, "worker-codex", Role::Worker);
+        session.worker_thread_id = Some(worker_thread_id);
+        session.native_session_id = Some("native-1".to_string());
+        store.finalize(&session).unwrap();
+        store
+            .attach_tui_job_completed_task(running.id, task_id, Some("worker-codex"))
+            .unwrap();
+        store
+            .set_tui_job_status(running.id, "done", Some("done text"), None)
+            .unwrap();
+
+        let queued = store.get_tui_job(queued.id).unwrap().unwrap();
+        let running = store.get_tui_job(running.id).unwrap().unwrap();
+        let recent = store.list_tui_jobs(10).unwrap();
+
+        assert_eq!(queued.prompt, "edited queued prompt");
+        assert_eq!(queued.status, "removed");
+        assert_eq!(queued.error.as_deref(), Some("removed from queue"));
+        assert!(queued.ended_at.is_some());
+        assert_eq!(running.status, "done");
+        assert_eq!(running.task_id, Some(task_id));
+        assert_eq!(running.session_id, Some(session.id));
+        assert_eq!(running.worker_thread_id, Some(worker_thread_id));
+        assert_eq!(running.native_session_id.as_deref(), Some("native-1"));
+        assert_eq!(running.result.as_deref(), Some("done text"));
+        assert_eq!(store.list_active_tui_jobs().unwrap(), Vec::new());
+        assert_eq!(recent.len(), 2);
+    }
+
+    #[test]
+    fn worker_threads_are_scoped_by_conversation_context() {
+        let (_tmp, store) = test_store();
+
+        let first = store
+            .get_or_create_worker_thread_scoped(
+                "cwd:/tmp/project-a",
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        let same_scope = store
+            .get_or_create_worker_thread_scoped(
+                "cwd:/tmp/project-a",
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        let other_scope = store
+            .get_or_create_worker_thread_scoped(
+                "cwd:/tmp/project-b",
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+
+        assert_eq!(first.id, same_scope.id);
+        assert_ne!(first.id, other_scope.id);
+        assert_eq!(first.scope, "cwd:/tmp/project-a");
+        assert_eq!(other_scope.scope, "cwd:/tmp/project-b");
+
+        store
+            .update_worker_thread_after_session(first.id, Some("native-a"), Uuid::new_v4(), None)
+            .unwrap();
+        store
+            .update_worker_thread_after_session(
+                other_scope.id,
+                Some("native-b"),
+                Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .worker_thread_by_role_scoped("cwd:/tmp/project-a", "worker-cc")
+                .unwrap()
+                .unwrap()
+                .native_session_id
+                .as_deref(),
+            Some("native-a")
+        );
+        assert_eq!(
+            store
+                .worker_thread_by_role_scoped("cwd:/tmp/project-b", "worker-cc")
+                .unwrap()
+                .unwrap()
+                .native_session_id
+                .as_deref(),
+            Some("native-b")
+        );
+
+        let scoped = store
+            .list_worker_threads_scoped("cwd:/tmp/project-a")
+            .unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].id, first.id);
+    }
+
+    #[test]
+    fn worker_threads_can_be_found_across_same_tui_scope_family() {
+        let (_tmp, store) = test_store();
+
+        let first_session = store
+            .get_or_create_worker_thread_scoped(
+                "tui:/tmp/project-a:session:first",
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        store
+            .update_worker_thread_after_session(
+                first_session.id,
+                Some("native-first"),
+                Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+        let second_session = store
+            .get_or_create_worker_thread_scoped(
+                "tui:/tmp/project-a:session:second",
+                "worker-codex",
+                "codex",
+                "codex",
+                "gpt-4o",
+                Some("openai"),
+            )
+            .unwrap();
+        let other_project = store
+            .get_or_create_worker_thread_scoped(
+                "tui:/tmp/project-b:session:first",
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+
+        let family = store
+            .worker_threads_in_scope_family("tui:/tmp/project-a:session:current")
+            .unwrap();
+        let ids = family.iter().map(|thread| thread.id).collect::<Vec<_>>();
+
+        assert!(ids.contains(&first_session.id));
+        assert!(ids.contains(&second_session.id));
+        assert!(!ids.contains(&other_project.id));
+        assert_eq!(
+            worker_thread_scope_family("tui:/tmp/project-a:session:current"),
+            "tui:/tmp/project-a"
+        );
+        assert_eq!(
+            worker_thread_scope_family("cwd:/tmp/project-a"),
+            "cwd:/tmp/project-a"
+        );
+    }
+
+    #[test]
     fn worker_thread_native_session_can_be_cleared() {
         let (_tmp, store) = test_store();
         let thread = store
@@ -1024,6 +1914,88 @@ mod tests {
         assert_eq!(updated.id, thread.id);
         assert!(updated.native_session_id.is_none());
         assert!(updated.last_session_id.is_some());
+    }
+
+    #[test]
+    fn worker_thread_clears_native_session_when_runtime_provider_agent_or_model_changes() {
+        let (_tmp, store) = test_store();
+        let thread = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "sonnet",
+                Some("anthropic"),
+            )
+            .unwrap();
+        let first_session_id = Uuid::new_v4();
+        store
+            .update_worker_thread_after_session(thread.id, Some("native-1"), first_session_id, None)
+            .unwrap();
+
+        let model_changed = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "opus",
+                Some("anthropic"),
+            )
+            .unwrap();
+        assert_eq!(model_changed.id, thread.id);
+        assert!(
+            model_changed.native_session_id.is_none(),
+            "model changes must not resume a native CLI session created under another model"
+        );
+        assert_eq!(model_changed.last_session_id, Some(first_session_id));
+
+        let second_session_id = Uuid::new_v4();
+        store
+            .update_worker_thread_after_session(
+                thread.id,
+                Some("native-2"),
+                second_session_id,
+                None,
+            )
+            .unwrap();
+        let provider_changed = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude-code",
+                "opus",
+                Some("minimax"),
+            )
+            .unwrap();
+        assert_eq!(provider_changed.id, thread.id);
+        assert!(provider_changed.native_session_id.is_none());
+        assert_eq!(provider_changed.last_session_id, Some(second_session_id));
+
+        let third_session_id = Uuid::new_v4();
+        store
+            .update_worker_thread_after_session(thread.id, Some("native-3"), third_session_id, None)
+            .unwrap();
+        let agent_changed = store
+            .get_or_create_worker_thread(
+                "worker-cc",
+                "claude-code",
+                "claude",
+                "opus",
+                Some("minimax"),
+            )
+            .unwrap();
+        assert_eq!(agent_changed.id, thread.id);
+        assert!(agent_changed.native_session_id.is_none());
+        assert_eq!(agent_changed.last_session_id, Some(third_session_id));
+
+        store
+            .update_worker_thread_after_session(thread.id, Some("native-4"), Uuid::new_v4(), None)
+            .unwrap();
+        let runtime_changed = store
+            .get_or_create_worker_thread("worker-cc", "codex", "codex", "gpt-5", Some("openai"))
+            .unwrap();
+        assert_eq!(runtime_changed.id, thread.id);
+        assert!(runtime_changed.native_session_id.is_none());
     }
 
     #[test]
@@ -1133,5 +2105,96 @@ mod tests {
         );
         assert_eq!(loaded, conversation);
         assert_eq!(listed, vec![conversation]);
+    }
+
+    #[test]
+    fn native_turn_append_preserves_existing_turns() {
+        let (_tmp, store) = test_store();
+        let first_events = vec![NativeEvent {
+            event_index: 99,
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            title: "worker answer · worker-cc".to_string(),
+            kind: Some("answer".to_string()),
+            content: Some("first answer".to_string()),
+            agent: Some("claude-code".to_string()),
+            worker_role: Some("worker-cc".to_string()),
+            model: Some("claude-sonnet".to_string()),
+            provider: Some("anthropic".to_string()),
+            task_id: Some("task-1".to_string()),
+            worker_thread_id: Some("thread-1".to_string()),
+            native_session_id: Some("native-1".to_string()),
+        }];
+        let second_events = vec![NativeEvent {
+            event_index: 99,
+            role: "worker".to_string(),
+            status: "output".to_string(),
+            title: "worker answer · worker-codex".to_string(),
+            kind: Some("answer".to_string()),
+            content: Some("second answer".to_string()),
+            agent: Some("codex".to_string()),
+            worker_role: Some("worker-codex".to_string()),
+            model: Some("gpt-5".to_string()),
+            provider: Some("openai".to_string()),
+            task_id: Some("task-2".to_string()),
+            worker_thread_id: Some("thread-2".to_string()),
+            native_session_id: Some("native-2".to_string()),
+        }];
+
+        let first = store
+            .append_native_turn(
+                "tiffany-native-test",
+                "/tmp/project",
+                "first prompt",
+                "first answer",
+                10,
+                &first_events,
+            )
+            .expect("append first turn");
+        let second = store
+            .append_native_turn(
+                "ignored-new-id",
+                "/tmp/project",
+                "second prompt",
+                "second answer",
+                20,
+                &second_events,
+            )
+            .expect("append second turn");
+        let loaded = store
+            .native_conversation_by_cwd("/tmp/project")
+            .expect("load native")
+            .expect("native conversation");
+
+        assert_eq!(
+            first,
+            NativeImportReport {
+                conversations: 1,
+                turns: 1,
+                events: 1
+            }
+        );
+        assert_eq!(
+            second,
+            NativeImportReport {
+                conversations: 1,
+                turns: 1,
+                events: 1
+            }
+        );
+        assert_eq!(loaded.id, "tiffany-native-test");
+        assert_eq!(loaded.created_at_unix, 10);
+        assert_eq!(loaded.updated_at_unix, 20);
+        assert_eq!(loaded.turns.len(), 2);
+        assert_eq!(loaded.turns[0].turn_index, 0);
+        assert_eq!(loaded.turns[0].user_prompt, "first prompt");
+        assert_eq!(loaded.turns[0].events[0].event_index, 0);
+        assert_eq!(loaded.turns[1].turn_index, 1);
+        assert_eq!(loaded.turns[1].user_prompt, "second prompt");
+        assert_eq!(loaded.turns[1].events[0].event_index, 0);
+        assert_eq!(
+            loaded.turns[1].events[0].worker_role.as_deref(),
+            Some("worker-codex")
+        );
     }
 }

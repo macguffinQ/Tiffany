@@ -23,6 +23,11 @@ pub trait WorkerAdapter: Send + Sync {
     /// Stable identifier (e.g. "claude-code", "codex", "direct").
     fn name(&self) -> &str;
 
+    /// Configured executable for native subprocess workers, when available.
+    fn binary_hint(&self) -> Option<&str> {
+        None
+    }
+
     /// Start a worker for `task`. Returns a WorkerHandle (session + kill fn).
     /// The actual work happens in the background; events stream via `stream_events`.
     /// The caller can .kill() to abort the subprocess immediately.

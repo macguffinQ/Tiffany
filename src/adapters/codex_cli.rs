@@ -10,9 +10,8 @@ use crate::task_policy::is_conversational_task;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::stream::{self, BoxStream};
+use futures::stream::BoxStream;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -20,7 +19,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
-use super::StderrCapture;
+use super::{stream_cli_session_events, StderrCapture};
 
 pub struct CodexCLIAdapter {
     binary: String,
@@ -52,6 +51,10 @@ impl CodexCLIAdapter {
 impl WorkerAdapter for CodexCLIAdapter {
     fn name(&self) -> &str {
         "codex"
+    }
+
+    fn binary_hint(&self) -> Option<&str> {
+        Some(&self.binary)
     }
 
     async fn start(
@@ -110,6 +113,7 @@ impl WorkerAdapter for CodexCLIAdapter {
         append_codex_resume_args(&mut cmd, task.native_session_id.as_deref());
         cmd.arg(&full_prompt)
             .kill_on_drop(true)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -207,62 +211,12 @@ impl WorkerAdapter for CodexCLIAdapter {
     }
 
     fn stream_events<'a>(&self, session: &Session) -> BoxStream<'static, Result<Event>> {
-        // Same tail-and-emit-heartbeat pattern as CC adapter.
-        let path: PathBuf = self.session_store.log_path(session.id);
-        let sess_id = session.id;
-        let task_id = session.task_id;
-        Box::pin(stream::unfold(
-            (path, 0u64),
-            move |(path, mut pos)| async move {
-                use tokio::io::{AsyncReadExt, AsyncSeekExt};
-                let mut file = match tokio::fs::File::open(&path).await {
-                    Ok(f) => f,
-                    Err(_) => {
-                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                        return Some((
-                            Ok(Event {
-                                session_id: sess_id,
-                                task_id,
-                                ts: Utc::now(),
-                                kind: "heartbeat".into(),
-                                payload: serde_json::json!({}),
-                            }),
-                            (path, pos),
-                        ));
-                    }
-                };
-                if file.seek(std::io::SeekFrom::Start(pos)).await.is_err() {
-                    return None;
-                }
-                let mut buf = String::new();
-                if file.read_to_string(&mut buf).await.is_err() {
-                    return None;
-                }
-                if buf.is_empty() {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    return Some((
-                        Ok(Event {
-                            session_id: sess_id,
-                            task_id,
-                            ts: Utc::now(),
-                            kind: "heartbeat".into(),
-                            payload: serde_json::json!({}),
-                        }),
-                        (path, pos),
-                    ));
-                }
-                pos += buf.len() as u64;
-                let line = buf.trim_end().lines().last().unwrap_or("").to_string();
-                let event = Event {
-                    session_id: sess_id,
-                    task_id,
-                    ts: Utc::now(),
-                    kind: agent_events::classify_json_line(&line),
-                    payload: serde_json::from_str(&line).unwrap_or(serde_json::Value::String(line)),
-                };
-                Some((Ok(event), (path, pos)))
-            },
-        ))
+        stream_cli_session_events(
+            self.session_store.log_path(session.id),
+            session.id,
+            session.task_id,
+            agent_events::classify_json_line,
+        )
     }
 
     async fn cancel(&self, _session: &Session) -> Result<()> {
@@ -292,6 +246,7 @@ fn codex_exec_command(binary: &str, model: &str, worktree: &std::path::Path) -> 
     let mut cmd = Command::new(binary);
     cmd.arg("exec")
         .arg("--json")
+        .arg("--ignore-user-config")
         .arg("--model")
         .arg(model)
         .arg("--cd")
@@ -346,20 +301,23 @@ fn apply_codex_provider_config(cmd: &mut Command, provider_id: &str, provider: &
     if kind != "openai" && kind != "ollama" {
         return;
     }
+    let base_url = provider
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     cmd.arg("-c").arg(format!(
         "model_provider={}",
-        toml_string_literal(provider_id)
+        toml_string_literal(if kind == "openai" && base_url.is_none() {
+            "openai"
+        } else {
+            provider_id
+        })
     ));
-    if provider_id == "openai" {
-        if let Some(base_url) = provider
-            .base_url
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            cmd.arg("-c").arg(format!(
-                "openai_base_url={}",
-                toml_string_literal(base_url.trim())
-            ));
+    if provider_id == "openai" || (kind == "openai" && base_url.is_none()) {
+        if let Some(base_url) = base_url {
+            cmd.arg("-c")
+                .arg(format!("openai_base_url={}", toml_string_literal(base_url)));
         }
         if let Some(api_key) = provider
             .api_key
@@ -382,14 +340,10 @@ fn apply_codex_provider_config(cmd: &mut Command, provider_id: &str, provider: &
             "{prefix}.wire_api={}",
             toml_string_literal("responses")
         ));
-    if let Some(base_url) = provider
-        .base_url
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
+    if let Some(base_url) = base_url {
         cmd.arg("-c").arg(format!(
             "{prefix}.base_url={}",
-            toml_string_literal(base_url.trim())
+            toml_string_literal(base_url)
         ));
     }
     if let Some(api_key) = provider
@@ -455,6 +409,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(args.iter().any(|arg| arg == "--cd"));
+        assert!(args.iter().any(|arg| arg == "--ignore-user-config"));
         assert!(args.iter().any(|arg| arg == "--skip-git-repo-check"));
         assert!(!args.iter().any(|arg| arg == "--cwd"));
         assert!(args
@@ -507,6 +462,99 @@ mod tests {
             "prompt must be passed to `codex exec resume <session> <prompt>`"
         );
         assert_eq!(args.last().map(String::as_str), Some("continue the work"));
+    }
+
+    #[test]
+    fn codex_exec_command_injects_tiffany_provider_without_user_config() {
+        let mut cmd = codex_exec_command("codex", "MiniMax-M3", std::path::Path::new("/tmp/repo"));
+        apply_codex_provider_config(
+            &mut cmd,
+            "minimax",
+            &ProviderConfig {
+                kind: "openai".to_string(),
+                base_url: Some("https://api.minimaxi.com/v1".to_string()),
+                api_key: Some("sk-test-secret".to_string()),
+            },
+        );
+
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let envs = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|value| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect::<HashMap<_, _>>();
+
+        assert!(args.iter().any(|arg| arg == "--ignore-user-config"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-c" && pair[1] == "model_provider=\"minimax\""));
+        assert!(args.windows(2).any(|pair| {
+            pair[0] == "-c"
+                && pair[1] == "model_providers.minimax.base_url=\"https://api.minimaxi.com/v1\""
+        }));
+        assert!(args.windows(2).any(|pair| {
+            pair[0] == "-c"
+                && pair[1] == "model_providers.minimax.env_key=\"TIFFANY_MINIMAX_API_KEY\""
+        }));
+        assert_eq!(
+            envs.get("TIFFANY_MINIMAX_API_KEY").map(String::as_str),
+            Some("sk-test-secret")
+        );
+        assert!(!envs.contains_key("OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn codex_exec_command_maps_openai_kind_without_base_url_to_builtin_provider() {
+        let mut cmd = codex_exec_command("codex", "gpt-5-codex", std::path::Path::new("/tmp/repo"));
+        apply_codex_provider_config(
+            &mut cmd,
+            "real-openai",
+            &ProviderConfig {
+                kind: "openai".to_string(),
+                base_url: None,
+                api_key: Some("sk-openai-test".to_string()),
+            },
+        );
+
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let envs = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|value| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect::<HashMap<_, _>>();
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-c" && pair[1] == "model_provider=\"openai\""));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.contains("model_providers.real-openai")));
+        assert_eq!(
+            envs.get("OPENAI_API_KEY").map(String::as_str),
+            Some("sk-openai-test")
+        );
     }
 
     #[test]
