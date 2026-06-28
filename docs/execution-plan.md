@@ -24,13 +24,22 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   growing with every commit, so structural extraction comes first. There is no
   release imminent (no push, pre-`v0.2`), so the binary-discovery failure mode
   is not urgent for installed users right now. **Do F4 next.**
-- **F3 direction is now decided: Option A** — single binary via `tiffany-cli`
+- **F3 direction is locked (user-confirmed 2026-06-28): Option A** — single binary via `tiffany-cli`
   gaining a path dep on the outer `orchestrator` lib plus `argv[0]` dispatch.
   This executes the locked Product Contract. You MAY run F3 Step 0 recon in
   parallel with F4 (report in `docs/codex-log.md` how the TUI reaches the
   runtime today: subprocess spawn vs lib call). Do NOT start the merge itself
   until recon is logged; if recon finds Option A infeasible, stop and report
   rather than forcing it.
+- **F3 build-cost caveat (user judgment 2026-06-28):** linking the Codex TUI
+  into the single root binary will raise compile cost noticeably. The trade is
+  accepted — it kills the real install failure class ("event bridge failed",
+  "can't find orchestrator"). But it makes slimming mandatory afterward:
+  structure the merge so the TUI is a feature-gated dependency from day one
+  (declare it `optional = true` behind a default feature, so a runtime-only slim
+  build can be exposed later without restructuring — see queued F7), and F4+
+  bridge extraction must continue to lean the TUI crate. This reinforces
+  F4-first: leaning the crate before the merge shrinks the build-cost hit.
 
 Toolchain note for every task: cargo lives at `/Users/allendred/.cargo/bin/cargo`
 (not on the default PATH), toolchain `+1.95.0`. Fast validation gate to run
@@ -87,7 +96,7 @@ beyond the scaffold until F2 lands.
   files/seams, and seeds a Non-Owned Vendored Edit Log (with a forward entry for
   F4 bridge wiring). Verified by Claude; no changes needed.
 
-## F3 — Single multi-call binary — Option A chosen; recon-gated, do F4 first
+## F3 — Single multi-call binary — Option A confirmed; recon-gated, do F4 first
 
 - **Reality (from probe):** the three command names are NOT one binary today.
   - `orchestrator` ← top-level package `tiffany-loop`, `[[bin]]` → `src/main.rs`
@@ -111,6 +120,16 @@ beyond the scaffold until F2 lands.
 - **Option B (fallback, smaller, contradicts the contract):** keep two binaries,
   add a robust resolver (known install location / PATH probe with an exact
   repair message), and amend the Product Contract to drop "one binary."
+- **Value (concrete):** eliminates the installed-user failure class — symptoms
+  like "event bridge failed" and "can't find orchestrator" — by removing the
+  cross-binary discovery/coexistence problem entirely. This is the M0 win.
+- **Cost & mandatory follow-up (user judgment):** linking the full Codex TUI
+  into the single root binary raises compile cost noticeably. The trade is
+  accepted because it kills the install failure class, but slimming becomes
+  mandatory afterward — via feature-gating the TUI (see queued F7) and/or ongoing
+  F4+ bridge extraction. Design the merge so the TUI is a feature-gated
+  dependency from the start (`optional = true`, default feature); retrofitting
+  that later is expensive.
 - **Step 0 (do now, in parallel with F4; needs no decision):** recon — determine
   how the TUI reaches the runtime today (subprocess spawn of `orchestrator`, or a
   lib call into the `orchestrator` lib). Write the finding to `docs/codex-log.md`.
@@ -185,5 +204,9 @@ beyond the scaffold until F2 lands.
   deleted.
 - F6: prune vendored `codex-rs` crates that Tiffany does not use (per the
   pruning goal in the Upstream Fork Strategy), guided by `UPSTREAM.md`.
+- F7: feature-gate the Codex TUI behind a cargo feature so a runtime-only slim
+  build of the single binary exists (scripting/CI/headless), paying down the
+  build-cost debt F3 introduces. Depends on F3; cheap if F3 declares the TUI dep
+  `optional = true` from the start.
 - Then M1 (provider/role polish), M2 (waterfall de-dup), M3 (real-runtime
   handoff — now a required gate), M4 (queue/jobs UI), M6 (pipeline efficacy).
