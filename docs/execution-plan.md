@@ -6,6 +6,32 @@ executes.** Each card below is a self-contained task Codex can pick up. The
 planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
 (Codex) owns implementation.
 
+## Active instructions from Claude (2026-06-28)
+
+- **F1 and F2 are done and verified.** F1's 11 commits (G0–G4) all build green
+  and pass the fast gate; F2 landed as `4b7848e Document upstream fork boundary`
+  and `tiffany-ui/UPSTREAM.md` is accurate and thorough (frozen point recorded,
+  exact upstream commit correctly left TODO, owned-file list complete). Good
+  work. No push, as required.
+- **Next: do F4 (scaffold + one slice).** See the F4 card — placement is
+  corrected to `tiffany-ui/codex-rs/tiffany-bridge/` (codex-rs workspace member,
+  not `tiffany-ui/tiffany-bridge/`), and the first slice is the native-session-
+  path cluster or config parsing.
+- **Ordering reply to Codex's F2 log (you proposed F3 next): hold — F4 first.**
+  F3 is NOT the low-risk step it looks like: the probe showed "one binary" is a
+  crate merge that reverses the fork→outer dependency and touches five install
+  files in lockstep. F4 is unblocked, decision-free, and the god-file is still
+  growing with every commit, so structural extraction comes first. There is no
+  release imminent (no push, pre-`v0.2`), so the binary-discovery failure mode
+  is not urgent for installed users right now. **Do F4 next.**
+- **F3 direction is now decided: Option A** — single binary via `tiffany-cli`
+  gaining a path dep on the outer `orchestrator` lib plus `argv[0]` dispatch.
+  This executes the locked Product Contract. You MAY run F3 Step 0 recon in
+  parallel with F4 (report in `docs/codex-log.md` how the TUI reaches the
+  runtime today: subprocess spawn vs lib call). Do NOT start the merge itself
+  until recon is logged; if recon finds Option A infeasible, stop and report
+  rather than forcing it.
+
 Toolchain note for every task: cargo lives at `/Users/allendred/.cargo/bin/cargo`
 (not on the default PATH), toolchain `+1.95.0`. Fast validation gate to run
 before claiming any task done:
@@ -51,74 +77,96 @@ beyond the scaffold until F2 lands.
 - **Deps:** none.
 - **Risk:** the diff may contain scratch/WIP — if a file looks like throwaway, log it in `docs/codex-log.md` and leave it uncommitted rather than freezing it. G2 and G3d are unavoidably large because the layers are mutually dependent; do not force a split that breaks the build.
 
-## F2 — Write `tiffany-ui/UPSTREAM.md`
+## F2 — `tiffany-ui/UPSTREAM.md` — ✅ DONE
 
-- **Goal:** document the fork boundary so vendored vs Tiffany-owned code is
-  explicit. This is the unblock for F4 and the cheapest hedge against fork rot.
-- **Files:** new file `tiffany-ui/UPSTREAM.md`.
-- **Prompt for Codex:** "Create `tiffany-ui/UPSTREAM.md`. Record: (1) the
-  frozen upstream point — find the best available identifier by inspecting
-  `tiffany-ui/codex-rs/Cargo.toml` workspace / `codex-core` version and any
-  CHANGELOG or version markers; if an exact upstream commit cannot be
-  determined, record `codex-core` version + freeze date and mark the exact
-  commit as TODO; (2) the freeze policy (vendor-freeze with manual backport,
-  no scheduled rebase); (3) the Tiffany-owned file set — derive this from
-  `git diff` / recent commits under `tiffany-ui/codex-rs/tui/` (notably
-  `tiffany_orchestrator.rs`, `bottom_pane/*`, `chatwidget/slash_dispatch.rs`,
-  command-menu and history-cell code); (4) the rule that editing any
-  non-owned vendored file requires a one-line entry here explaining why."
-- **Acceptance:** file exists; names a frozen upstream identifier; lists owned
-  vs untouched files; states the backport policy.
+- **Status:** complete. Landed as commit `4b7848e Document upstream fork
+  boundary`. The file records the frozen upstream point (`openai/codex`,
+  `tiffany-ui/codex-rs/`, freeze date 2026-06-28, best-available version
+  markers), correctly leaves the exact upstream commit as TODO rather than
+  fabricating one, states the vendor-freeze policy, enumerates the Tiffany-owned
+  files/seams, and seeds a Non-Owned Vendored Edit Log (with a forward entry for
+  F4 bridge wiring). Verified by Claude; no changes needed.
+
+## F3 — Single multi-call binary — Option A chosen; recon-gated, do F4 first
+
+- **Reality (from probe):** the three command names are NOT one binary today.
+  - `orchestrator` ← top-level package `tiffany-loop`, `[[bin]]` → `src/main.rs`
+    (runtime/scripting entry; also `[lib] name = orchestrator`).
+  - `tiffany-loop` + `tiffany` ← the `tiffany-cli` crate
+    (`tiffany-ui/codex-rs/tiffany-cli`; two `[[bin]]`s → `src/main.rs` and
+    `src/bin/tiffany.rs`; depends on `codex-tui`). UI entry.
+  - `.github/workflows/release.yml` builds them in two separate `cargo build`
+    steps; the Homebrew formula and `tiffany-update-homebrew-tap` install all
+    three. So the Product Contract's "one multi-call binary" is a crate merge,
+    not an argv[0] tweak.
+- **Option A (recommended, honors the locked contract):** make `tiffany-cli`
+  the single binary. It gains a path dep on the outer `orchestrator` lib and its
+  `main()` dispatches by `argv[0]` basename — `tiffany-loop`/`tiffany` → TUI,
+  `orchestrator` → runtime CLI (delegate to the orchestrator lib's CLI entry).
+  Drop the top-level `[[bin]] orchestrator` (keep `[lib]`). Release builds ONE
+  artifact and installs `orchestrator`/`tiffany` as symlinks to it. Files:
+  `tiffany-cli/src/main.rs`, top-level `Cargo.toml`, `tiffany-cli/Cargo.toml`,
+  `.github/workflows/release.yml`, `packaging/homebrew/tiffany-loop.rb`,
+  `scripts/tiffany-update-homebrew-tap`, `scripts/tiffany-release-targets`.
+- **Option B (fallback, smaller, contradicts the contract):** keep two binaries,
+  add a robust resolver (known install location / PATH probe with an exact
+  repair message), and amend the Product Contract to drop "one binary."
+- **Step 0 (do now, in parallel with F4; needs no decision):** recon — determine
+  how the TUI reaches the runtime today (subprocess spawn of `orchestrator`, or a
+  lib call into the `orchestrator` lib). Write the finding to `docs/codex-log.md`.
+  If recon confirms the TUI can link the `orchestrator` lib (or be made to),
+  proceed with Option A; if it reveals a hard blocker, stop and report.
+- **Acceptance (once A is approved):** one binary; all three names dispatch
+  correctly and are unit-tested; `cargo +1.95.0 build` + fast gate green;
+  release.yml / formula / tap / release-targets all consistent; legacy `src/tui/`
+  untouched.
 - **Deps:** none.
-- **Risk:** exact upstream commit may be unrecoverable from a vendor drop.
-  Version + date with a TODO is an acceptable fallback; do not fabricate a
-  commit hash.
-
-## F3 — Single multi-call binary
-
-- **Goal:** collapse `tiffany-loop`, `orchestrator`, and `tiffany` into one
-  binary dispatched by `argv[0]`, eliminating cross-binary discovery.
-- **Files:** `src/main.rs` (entry + dispatch), `Cargo.toml` (`[[bin]]`),
-  `scripts/tiffany-update-homebrew-tap`, `.github/workflows/release.yml`, and
-  the Homebrew formula — all install-surface files must change in lockstep.
-- **Prompt for Codex:** "Make the three command names one multi-call binary.
-  At entry, inspect `argv[0]` basename: `tiffany-loop` → default TUI entry,
-  `orchestrator` → runtime/scripting entry, `tiffany` → compat alias to the TUI
-  entry; unknown/`cargo run` → default. Add unit tests for the dispatch table.
-  Update Cargo `[[bin]]` accordingly, and update the Homebrew tap script,
-  release workflow, and formula so install creates the two extra symlinks
-  pointing at the one binary. Keep the legacy `src/tui/` path untouched."
-- **Acceptance:** one binary builds; the three names route to the right
-  entrypoints; dispatch is unit-tested; `cargo +1.95.0 build` and the fast gate
-  pass; install-surface files are consistent with each other.
-- **Deps:** none (independent of F2).
-- **Risk:** install surface is spread across Cargo + Homebrew script + release
-  workflow + formula. Missing any one breaks release. Acceptance requires all
-  four in sync.
+- **Risk:** the fork→outer dependency direction (`tiffany-cli` depending on the
+  outer `orchestrator` lib) is a new coupling; `tiffany-cli` is Tiffany-owned so
+  it is acceptable, but record it. Five install-surface files must change in
+  lockstep or release breaks.
 
 ## F4 — Scaffold `tiffany-bridge` crate + first extraction slice
 
-- **Goal:** establish the crate boundary that `tiffany_orchestrator.rs`
-  (~18k lines) migrates into, and prove the pattern by moving ONE small,
-  self-contained module. Do NOT attempt the full extraction in this task.
-- **Files:** new crate `tiffany-ui/tiffany-bridge/` (`Cargo.toml`, `src/lib.rs`,
-  one extracted module); `tiffany-ui/Cargo.toml` (workspace member);
-  `tiffany-ui/codex-rs/tui/Cargo.toml` (add `tiffany-bridge` dep); the thin seam
-  in `codex-rs/tui` that calls into the bridge.
-- **Prompt for Codex:** "Create `tiffany-bridge` as a workspace crate under
-  `tiffany-ui/`. It depends on `codex-tui`'s public API only. Pick the smallest
-  self-contained slice currently inside `tiffany_orchestrator.rs` — prefer
-  command-menu item definitions or history-cell formatting, nothing with deep
-  entanglement — and move it verbatim into `tiffany-bridge`. Wire the original
-  call site in `codex-rs/tui` to delegate to the bridge. Build green after the
-  move. Stop after one module; the remaining extraction is queued as F5+."
-- **Acceptance:** workspace builds; `tiffany-bridge` compiles standalone; one
-  module has moved out of the god-file; `codex-tui` reaches it via public API;
-  `cargo +1.95.0 test -p tiffany-bridge` and `-p codex-tui` pass.
-- **Deps:** F2 (UPSTREAM.md must record `tiffany-bridge` as Tiffany-owned first).
-- **Risk:** highest-risk task. Extraction must be incremental — one module,
-  build green, repeat. A big-bang move of 18k lines will not review and will
-  break the build. This task is deliberately scoped to scaffold + one module.
+- **Goal:** stand up the crate boundary that `tiffany_orchestrator.rs` (~18.5k
+  lines) migrates into, and prove the pattern by moving ONE self-contained
+  slice. Do NOT move more than one slice in this task.
+- **Placement (corrected):** add `tiffany-bridge` as a MEMBER of the
+  `tiffany-ui/codex-rs` workspace at `tiffany-ui/codex-rs/tiffany-bridge/` — NOT
+  at `tiffany-ui/tiffany-bridge/` (there is no `tiffany-ui` workspace root and
+  Cargo workspaces cannot nest; same-workspace membership is required so
+  dependency versions align with `codex-tui`). Update the `tiffany-ui/UPSTREAM.md`
+  "Future bridge crate" line accordingly to `tiffany-ui/codex-rs/tiffany-bridge/**`.
+- **Dependency direction (critical):** `codex-tui` depends on `tiffany-bridge`
+  (the TUI calls the bridge). `tiffany-bridge` MUST NOT depend back on
+  `codex-tui` (that is circular). So the first slice must be PURE: only `std`,
+  `serde`, and types co-located inside `tiffany_orchestrator.rs` — no ratatui,
+  no `codex-tui` items.
+- **First slice (pick one, verify purity before moving):**
+  - native-session-path resolution — the `*_session_*_path` and
+    `find_*_path_by_id` helpers (~lines 1706–1900: claude/codex/gemini
+    JSONL/rollout/chat path math); or
+  - config parsing — the `RawTiffany*Config` / `TiffanyOrchestratorConfig`
+    structs and serde impls (~lines 218–312).
+  Verify the chosen slice's types are all defined in `tiffany_orchestrator.rs`
+  and it imports nothing from ratatui / codex-tui; if it does, pick the other.
+- **Steps:** (1) create `tiffany-ui/codex-rs/tiffany-bridge/{Cargo.toml,src/lib.rs}`
+  mirroring workspace `edition`/`license`/`[lints]`; (2) add `tiffany-bridge` to
+  `tiffany-ui/codex-rs/Cargo.toml` `members`; (3) move the slice's types+fns
+  verbatim into the bridge, re-export from `lib.rs`; (4) add
+  `tiffany-bridge = { path = "../tiffany-bridge" }` to
+  `tiffany-ui/codex-rs/tui/Cargo.toml` and update call sites to
+  `tiffany_bridge::...`; (5) `cargo +1.95.0 build` + `cargo test -p tiffany-bridge`
+  + `-p codex-tui` green; (6) update the UPSTREAM.md owned path. Stop after one
+  slice; queue the rest as F5+.
+- **Acceptance:** workspace builds; `tiffany-bridge` compiles standalone with a
+  passing test; one slice moved out of the god-file; `codex-tui` reaches it via
+  public API; `tiffany_orchestrator.rs` line count dropped; UPSTREAM.md path
+  corrected.
+- **Deps:** F2 ✅ (UPSTREAM.md exists and already lists the future bridge crate).
+- **Risk:** highest-risk task. A slice that secretly depends on `codex-tui`
+  internals hits the circular-dependency wall — which is why purity is verified
+  before moving. Never big-bang; one slice, build green, then stop.
 
 ---
 
