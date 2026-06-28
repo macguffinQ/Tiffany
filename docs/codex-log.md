@@ -878,3 +878,25 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M4 with persisted queue/job status visibility, or switch to M2 worker waterfall grouping/raw-debug separation.
+
+## M4 jobs cancel result made explicit — 2026-06-29
+
+- Commits:
+  - this commit: `Clarify jobs cancel results`
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_cancel --lib --quiet` — green, 2 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_ --lib --quiet` — green, 13 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - `/jobs cancel <id>` now gets the same explicit top-level result treatment as `/jobs retry` and `/jobs recover`.
+  - Successful cancel output starts with `cancelled · <id>` and points back to `/jobs` to refresh persisted status.
+  - No-op cancel output such as `already failed` points users to `/jobs retry <id>` before the normal failed-job card.
+  - Existing status cards, actions, and humanized model/provider/runtime errors remain visible below the result line.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M4 by improving `/jobs` failed-job repair hints, or switch back to M2 waterfall grouping/raw-debug separation.

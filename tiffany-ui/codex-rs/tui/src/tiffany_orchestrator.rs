@@ -4195,6 +4195,14 @@ fn concise_jobs_success(
         }
         return Some(lines);
     }
+    if is_jobs_cancel_command(command_args)
+        && let Some(mut lines) = jobs_cancel_result_lines(&stdout)
+    {
+        if let Some(summary) = jobs_summary_lines(&stdout) {
+            lines.extend(summary);
+        }
+        return Some(lines);
+    }
     if is_jobs_recover_command(command_args)
         && let Some(mut lines) = jobs_recover_result_lines(&stdout)
     {
@@ -4211,9 +4219,46 @@ fn is_jobs_retry_command(command_args: &[String]) -> bool {
         && command_args.get(1).map(String::as_str) == Some("retry")
 }
 
+fn is_jobs_cancel_command(command_args: &[String]) -> bool {
+    command_args.first().map(String::as_str) == Some("jobs")
+        && command_args.get(1).map(String::as_str) == Some("cancel")
+}
+
 fn is_jobs_recover_command(command_args: &[String]) -> bool {
     command_args.first().map(String::as_str) == Some("jobs")
         && command_args.get(1).map(String::as_str) == Some("recover")
+}
+
+fn jobs_cancel_result_lines(text: &str) -> Option<Vec<Line<'static>>> {
+    let header = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let rest = header.strip_prefix("Job ")?;
+    let (job_id, detail) = rest.split_once(' ')?;
+    let message = if detail == "cancelled" {
+        format!("cancelled · {job_id}")
+    } else if let Some(status) = detail.strip_prefix("already ") {
+        format!("already {status} · {job_id}")
+    } else {
+        return None;
+    };
+
+    let mut lines = vec![status_line("✓", TIFFANY_BLUE, "jobs", &message)];
+    if detail == "cancelled" {
+        lines.push(next_line("/jobs", "refresh persisted jobs"));
+    } else if detail.contains("failed") {
+        lines.push(next_line(
+            &format!("/jobs retry {job_id}"),
+            "retry this failed job",
+        ));
+    } else {
+        lines.push(next_line(
+            &format!("/jobs show {job_id}"),
+            "inspect saved job details",
+        ));
+    }
+    Some(lines)
 }
 
 fn jobs_recover_result_lines(text: &str) -> Option<Vec<Line<'static>>> {
@@ -9923,6 +9968,49 @@ mod tests {
         assert!(text.contains("✗ worker-cc"));
         assert!(text.contains("error  model not found"));
         assert!(!text.contains("retry prompt:"));
+    }
+
+    #[test]
+    fn jobs_cancel_output_surfaces_action_result_before_cards() {
+        let output = std::process::Output {
+            status: test_exit_status(0),
+            stdout: "Job abcd1234 cancelled\n\nJobs\n  active: 0  shown: 1\n\n○ abcd1234 cancelled queued follow-up\n  timing created 5m ago · updated just now  flow direct-answer  role worker-cc  error cancelled by user from jobs\n"
+                .as_bytes()
+                .to_vec(),
+            stderr: Vec::new(),
+        };
+
+        let lines = concise_jobs_success(&strings(&["jobs", "cancel", "abcd1234"]), &output)
+            .expect("jobs cancel summary");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("✓ jobs  cancelled · abcd1234"));
+        assert!(text.contains("next  /jobs  refresh persisted jobs"));
+        assert!(text.contains("○ worker-cc"));
+        assert!(text.contains("state  saved with status cancelled"));
+        assert!(text.contains("actions /jobs show abcd1234"));
+        assert!(text.contains("/jobs retry abcd1234"));
+    }
+
+    #[test]
+    fn jobs_cancel_noop_points_failed_jobs_to_retry() {
+        let output = std::process::Output {
+            status: test_exit_status(0),
+            stdout: "Job abcd1234 already failed\n\nJobs\n  active: 0  shown: 1\n\n✗ abcd1234 failed    failed prompt\n  timing created 2m ago  flow single-worker  role worker-codex  error model unavailable\n"
+                .as_bytes()
+                .to_vec(),
+            stderr: Vec::new(),
+        };
+
+        let lines = concise_jobs_success(&strings(&["jobs", "cancel", "abcd1234"]), &output)
+            .expect("jobs cancel noop summary");
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("✓ jobs  already failed · abcd1234"));
+        assert!(text.contains("next  /jobs retry abcd1234  retry this failed job"));
+        assert!(text.contains("✗ worker-codex"));
+        assert!(text.contains("state  needs attention; retry with /jobs retry abcd1234"));
+        assert!(text.contains("error  model unavailable"));
     }
 
     #[test]
