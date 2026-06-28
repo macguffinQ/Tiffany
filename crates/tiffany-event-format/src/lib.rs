@@ -1499,12 +1499,8 @@ fn known_runtime_output_kind(kind: &str) -> Option<String> {
 fn normalize_agent_status_display(display: &str) -> String {
     let trimmed = strip_claude_context_note(display.trim());
     let lower = trimmed.to_ascii_lowercase();
-    if looks_like_codex_exec_argument_mismatch(&lower) {
-        return concat!(
-            "Codex CLI compatibility issue: upgrade Codex CLI or use a runtime ",
-            "that supports `codex exec --cd`"
-        )
-        .to_string();
+    if let Some(label) = codex_exec_compatibility_label(&lower) {
+        return label.to_string();
     }
     if let Some(path) = lower
         .starts_with("file created successfully at:")
@@ -1532,6 +1528,18 @@ fn looks_like_codex_exec_argument_mismatch(lower: &str) -> bool {
         || lower.contains("unknown option")
         || lower.contains("unrecognized option"))
         && (lower.contains("--cwd") || lower.contains("--cd"))
+}
+
+fn codex_exec_compatibility_label(lower: &str) -> Option<&'static str> {
+    let unsupported = lower.contains("codex exec --cd unsupported")
+        || (lower.contains("exec --cd") && lower.contains("unsupported"));
+    if looks_like_codex_exec_argument_mismatch(lower) || unsupported {
+        return Some(concat!(
+            "Codex CLI compatibility issue: upgrade Codex CLI or use a runtime ",
+            "that supports `codex exec --cd`"
+        ));
+    }
+    None
 }
 
 fn strip_claude_context_note(text: &str) -> &str {
@@ -1855,6 +1863,7 @@ pub fn control_fallback_display(
 ) -> ControlFallbackDisplay {
     let role_label = control_role_label(role);
     let reason = humanize_jsonish(reason, max);
+    let reason = normalize_control_reason_display(&reason);
     let reason = reason.trim();
     let message = message.trim();
 
@@ -1874,6 +1883,15 @@ pub fn control_fallback_display(
         role_label,
         summary,
     }
+}
+
+fn normalize_control_reason_display(reason: &str) -> String {
+    let trimmed = reason.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(label) = codex_exec_compatibility_label(&lower) {
+        return label.to_string();
+    }
+    trimmed.to_string()
 }
 
 fn control_role_label(role: &str) -> &'static str {
@@ -4627,8 +4645,9 @@ mod tests {
         assert_eq!(critic.role_label, "critic");
         assert_eq!(
             critic.summary,
-            "critique unavailable; continuing with current plan · codex exec --cd unsupported"
+            "critique unavailable; continuing with current plan · Codex CLI compatibility issue: upgrade Codex CLI or use a runtime that supports `codex exec --cd`"
         );
+        assert!(!critic.summary.contains("unsupported"));
     }
 
     #[test]

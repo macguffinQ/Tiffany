@@ -753,3 +753,25 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M2 with more raw/debug separation and then move to M1 role/provider/session display polish once the common waterfall noise paths are covered.
+
+## M2 control fallback compatibility text humanized — 2026-06-29
+
+- Commits:
+  - this commit: `Humanize control fallback compatibility text`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format formats_control_fallbacks_for_user_visible_surfaces --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop acp_progress_text_shows_control_fallback_as_status --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop formats_control_fallback_warning_without_fake_issue_count --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format humanizes --quiet` — green, 12 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Extended the shared control-fallback formatter so `codex exec --cd unsupported` renders as the same user-facing Codex CLI compatibility message used by normal stderr waterfall output.
+  - Updated ACP and session-display expectations so all visible control fallback surfaces avoid the raw `unsupported` implementation phrase.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M2 with raw/debug-only trace separation, then reassess whether M1 provider/role polish should become the next active slice.

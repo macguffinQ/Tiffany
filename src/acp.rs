@@ -2909,8 +2909,9 @@ mod tests {
 
         assert_eq!(
             text,
-            "critic fallback: critique unavailable; continuing with current plan · codex exec --cd unsupported."
+            "critic fallback: critique unavailable; continuing with current plan · Codex CLI compatibility issue: upgrade Codex CLI or use a runtime that supports `codex exec --cd`."
         );
+        assert!(!text.contains("unsupported"));
 
         let text = progress_text(
             &RunProgress::ControlFallback {

@@ -1424,8 +1424,9 @@ mod tests {
 
         let line = format_session_event(&critic);
         assert!(line.contains(
-            "critic critique unavailable; continuing with current plan · codex exec --cd unsupported"
+            "critic critique unavailable; continuing with current plan · Codex CLI compatibility issue: upgrade Codex CLI or use a runtime that supports `codex exec --cd`"
         ));
+        assert!(!line.contains("unsupported"));
         assert!(!line.contains("plan needs changes"));
         assert!(!line.contains("0 issue"));
     }
