@@ -713,3 +713,22 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M2 with remaining normal-view cleanup: raw/debug-only trace separation, reviewer issue display completeness, and duplicate worker answer/result stream handling.
+
+## M2 reviewer unavailable status humanized — 2026-06-29
+
+- Commits:
+  - this commit: `Humanize reviewer unavailable status`
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui reviewer_status_lines_track_worker_review_lifecycle --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Added a TUI control-status reason label so reviewer-unavailable statuses no longer expose protocol phrasing like `no JSON found in CLI response` or parser internals like `expected value at line 1 column 1` in the normal waterfall.
+  - Normal view now says `returned plain text`; raw diagnostics remain available through process/doctor paths.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M2 by tightening raw/debug-only trace separation and verifying reviewer issue/suggestion detail stays visible when it changes the result.

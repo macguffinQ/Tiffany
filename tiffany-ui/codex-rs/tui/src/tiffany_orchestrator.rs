@@ -6876,7 +6876,7 @@ fn reviewer_lifecycle_title(event: &TiffanyProgressEvent) -> String {
     if event.status == "skipped"
         && let Some(reason) = event.reason.as_deref().and_then(nonempty_trimmed)
     {
-        parts.push(reason.to_string());
+        parts.push(control_reason_label(reason));
     }
     if matches!(event.status.as_str(), "warning" | "failed")
         && let Some(issues) = event.issues
@@ -6887,7 +6887,7 @@ fn reviewer_lifecycle_title(event: &TiffanyProgressEvent) -> String {
         && event.message.starts_with("review unavailable")
         && let Some(reason) = event.reason.as_deref().and_then(nonempty_trimmed)
     {
-        parts.push(reason.to_string());
+        parts.push(control_reason_label(reason));
     }
     parts.join(" · ")
 }
@@ -6984,6 +6984,24 @@ fn normalize_event_message(message: &str) -> String {
         &message.replace(" - ", " · "),
         CONTROL_SUMMARY_MAX_CHARS,
     )
+}
+
+fn control_reason_label(reason: &str) -> String {
+    let lower = reason.to_ascii_lowercase();
+    let label = if lower.contains("no json found")
+        || lower.contains("expected value at line")
+        || lower.contains("invalid json")
+        || lower.contains("malformed json")
+    {
+        "returned plain text"
+    } else if lower.contains("parse failed") || lower.contains("parse error") {
+        "could not parse structured response"
+    } else if lower.contains("no sub_tasks") || lower.contains("returned no sub_tasks") {
+        "planner returned no worker runs"
+    } else {
+        reason
+    };
+    event_format::humanize_user_visible_text(label, CONTROL_SUMMARY_MAX_CHARS)
 }
 
 fn format_duration_ms(duration_ms: u64) -> String {
@@ -12257,8 +12275,18 @@ mod tests {
         };
         assert_eq!(
             line_text(&waterfall_status_line(&unavailable)),
-            "⚠ review  unavailable · 12345678 · no JSON found in CLI response"
+            "⚠ review  unavailable · 12345678 · returned plain text"
         );
+
+        let malformed = TiffanyProgressEvent {
+            reason: Some("expected value at line 1 column 1".to_string()),
+            ..unavailable
+        };
+        let text = line_text(&waterfall_status_line(&malformed));
+        assert_eq!(text, "⚠ review  unavailable · 12345678 · returned plain text");
+        assert!(!text.contains("JSON"));
+        assert!(!text.contains("CLI response"));
+        assert!(!text.contains("expected value"));
     }
 
     #[test]
