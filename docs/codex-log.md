@@ -376,3 +376,28 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue F5+ with another pure helper slice, likely provider/role/thread output parsers or native-history render text shaping.
+
+## F5+ — provider/role/thread output parsing extraction completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Extract role provider thread parsers into tiffany bridge`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge output_parse --quiet` — green, 7 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui summary_lines --lib --quiet` — green, 17 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 35 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build --quiet` — green.
+  - `git diff --check` — green.
+- Decisions:
+  - Extended `tiffany-bridge/src/output_parse.rs` to own provider summaries, role summaries, role-option summaries, thread list rows, thread detail fields, and worker-thread title parsing.
+  - `codex-tui` now imports those bridge structs/functions and keeps only Ratatui card/waterfall rendering plus native CLI command assembly local.
+  - Added bridge-level tests for provider, role, role-option, thread list, and thread field parsing while preserving the existing TUI summary-line tests.
+  - `tiffany_orchestrator.rs` is now 16,246 lines.
+  - No push and no release.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue F5+ with another small pure helper slice, likely native-history render text shaping or native CLI command derivation if it can stay UI-free.

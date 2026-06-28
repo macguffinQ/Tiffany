@@ -1,9 +1,58 @@
+use std::collections::HashMap;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoleProfileRow {
     pub role: String,
     pub model: String,
     pub runtime: String,
     pub agent_teams: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleSummary {
+    pub name: String,
+    pub model: String,
+    pub display_model: Option<String>,
+    pub provider: Option<String>,
+    pub api_model: Option<String>,
+    pub runtime: String,
+    pub teams: bool,
+    pub health: Option<String>,
+    pub thread: Option<String>,
+    pub native: Option<String>,
+    pub last: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleOptionSummary {
+    pub model: String,
+    pub provider: String,
+    pub api_model: String,
+    pub runtimes: String,
+    pub teams: String,
+    pub roles: String,
+    pub health: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderSummary {
+    pub name: String,
+    pub kind: String,
+    pub auth: String,
+    pub endpoint: String,
+    pub models: Option<String>,
+    pub roles: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreadSummary {
+    pub role: String,
+    pub active: bool,
+    pub runtime: String,
+    pub model: String,
+    pub thread: Option<String>,
+    pub native: Option<String>,
+    pub last: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +113,459 @@ pub fn parse_prefixed_field<'a>(text: &'a str, prefix: &str) -> Option<&'a str> 
     text.lines()
         .find_map(|line| line.trim().strip_prefix(prefix).map(str::trim))
         .filter(|value| !value.is_empty())
+}
+
+pub fn parse_provider_summaries(text: &str) -> Vec<ProviderSummary> {
+    if let Some(provider) = parse_provider_detail_summary(text) {
+        return vec![provider];
+    }
+
+    let mut providers = Vec::new();
+    let mut in_config_providers = false;
+    let mut in_missing_providers = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("Missing providers referenced by models:") {
+            in_config_providers = false;
+            in_missing_providers = true;
+            continue;
+        }
+        if in_missing_providers {
+            if trimmed.starts_with("Actions:")
+                || trimmed.starts_with("Health:")
+                || trimmed.starts_with("Providers:")
+                || trimmed.starts_with("Provider ")
+            {
+                in_missing_providers = false;
+            } else if let Some(provider) = parse_missing_provider_row(trimmed) {
+                providers.push(provider);
+                continue;
+            } else {
+                continue;
+            }
+        }
+        if trimmed.starts_with("Providers (") && trimmed.ends_with(':') {
+            in_config_providers = true;
+            continue;
+        }
+        if in_config_providers {
+            if trimmed.starts_with("Models (")
+                || trimmed.starts_with("Roles (")
+                || trimmed.starts_with("Tag overrides")
+                || trimmed.starts_with("───")
+            {
+                in_config_providers = false;
+                continue;
+            }
+            if let Some(provider) = parse_config_show_provider(trimmed) {
+                providers.push(provider);
+            }
+            continue;
+        }
+        if let Some(provider) = parse_provider_registry_row(trimmed) {
+            providers.push(provider);
+            continue;
+        }
+        if let Some(provider) = parse_provider_table_row(trimmed) {
+            providers.push(provider);
+        }
+    }
+
+    providers
+}
+
+pub fn parse_role_summaries(text: &str) -> Vec<RoleSummary> {
+    text.lines()
+        .filter_map(parse_role_summary_line)
+        .collect::<Vec<_>>()
+}
+
+pub fn parse_role_option_summaries(text: &str) -> Vec<RoleOptionSummary> {
+    text.lines()
+        .filter_map(parse_role_option_summary_line)
+        .collect::<Vec<_>>()
+}
+
+pub fn parse_thread_list_summaries(text: &str) -> Vec<ThreadSummary> {
+    text.lines()
+        .filter_map(parse_thread_list_line)
+        .collect::<Vec<_>>()
+}
+
+pub fn parse_thread_fields(text: &str) -> HashMap<String, String> {
+    let mut fields = HashMap::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let value = value.trim();
+        if !key.is_empty() && !value.is_empty() {
+            fields.insert(key, value.to_string());
+        }
+    }
+    fields
+}
+
+pub fn parse_worker_thread_title(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("Worker thread "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn parse_provider_detail_summary(text: &str) -> Option<ProviderSummary> {
+    let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    let header = lines.next()?;
+    let name = header
+        .strip_prefix("Provider ")
+        .filter(|name| !name.eq_ignore_ascii_case("registry"))
+        .filter(|name| !matches!(*name, "setup" | "delete"))?
+        .trim();
+    if name.is_empty() || name.contains(':') {
+        return None;
+    }
+
+    let mut kind = None;
+    let mut auth = None;
+    let mut endpoint = None;
+    let mut models = None;
+    let mut roles = None;
+
+    for line in lines {
+        if let Some(value) = colon_value(line, "type") {
+            kind = Some(value.to_string());
+        } else if let Some(value) = colon_value(line, "auth") {
+            auth = Some(value.to_string());
+        } else if let Some(value) = colon_value(line, "endpoint") {
+            endpoint = Some(value.to_string());
+        } else if let Some(value) = colon_value(line, "models") {
+            models = Some(value.to_string());
+        } else if let Some(value) = colon_value(line, "roles") {
+            roles = Some(value.to_string());
+        }
+    }
+
+    Some(ProviderSummary {
+        name: name.to_string(),
+        kind: kind?,
+        auth: auth.unwrap_or_else(|| "-".to_string()),
+        endpoint: endpoint.unwrap_or_else(|| "-".to_string()),
+        models,
+        roles,
+    })
+}
+
+fn colon_value<'a>(line: &'a str, label: &str) -> Option<&'a str> {
+    let (key, value) = line.split_once(':')?;
+    if key.trim() == label {
+        Some(value.trim())
+    } else {
+        None
+    }
+}
+
+fn parse_missing_provider_row(line: &str) -> Option<ProviderSummary> {
+    let name = line.strip_prefix('⚠')?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(ProviderSummary {
+        name: name.to_string(),
+        kind: "missing".to_string(),
+        auth: "missing".to_string(),
+        endpoint: "-".to_string(),
+        models: None,
+        roles: None,
+    })
+}
+
+fn parse_provider_registry_row(line: &str) -> Option<ProviderSummary> {
+    let rest = line
+        .strip_prefix('✓')
+        .or_else(|| line.strip_prefix('⚠'))
+        .or_else(|| line.strip_prefix('●'))?
+        .trim();
+    let parts = rest.split_whitespace().collect::<Vec<_>>();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let mut auth = None;
+    let mut endpoint = None;
+    let mut models = None;
+    let mut roles = None;
+    for part in parts.iter().skip(2) {
+        if let Some(value) = part.strip_prefix("auth=") {
+            auth = Some(value.to_string());
+        } else if let Some(value) = part.strip_prefix("endpoint=") {
+            endpoint = Some(value.to_string());
+        } else if let Some(value) = part.strip_prefix("models=") {
+            models = Some(value.to_string());
+        } else if let Some(value) = part.strip_prefix("roles=") {
+            roles = Some(value.to_string());
+        }
+    }
+
+    Some(ProviderSummary {
+        name: parts[0].to_string(),
+        kind: parts[1].to_string(),
+        auth: auth.unwrap_or_else(|| "-".to_string()),
+        endpoint: endpoint.unwrap_or_else(|| "-".to_string()),
+        models,
+        roles,
+    })
+}
+
+fn parse_provider_table_row(line: &str) -> Option<ProviderSummary> {
+    if line.starts_with("Providers ")
+        || line.starts_with("Provider registry")
+        || line.starts_with("Provider ")
+        || line.starts_with("provider ")
+        || line.starts_with("configured:")
+        || line.starts_with("Providers:")
+        || line.starts_with("Model bindings:")
+        || line.starts_with("Missing providers")
+        || line.starts_with("Actions:")
+        || line.starts_with("Health:")
+        || line.starts_with("===")
+        || line.starts_with("config file:")
+        || line.starts_with("No providers configured")
+        || line.starts_with("Create one with:")
+    {
+        return None;
+    }
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    if parts.len() < 4 {
+        return None;
+    }
+    if parts[0] == "-" {
+        return None;
+    }
+    Some(ProviderSummary {
+        name: parts[0].to_string(),
+        kind: parts[1].to_string(),
+        auth: parts[2].to_string(),
+        endpoint: parts[3].to_string(),
+        models: parts.get(4).map(|value| (*value).to_string()),
+        roles: parts.get(5).map(|value| (*value).to_string()),
+    })
+}
+
+fn parse_config_show_provider(line: &str) -> Option<ProviderSummary> {
+    let line = line.strip_prefix("- ")?;
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    let name = parts.first()?.to_string();
+    let kind = parts
+        .iter()
+        .find_map(|part| part.strip_prefix("type="))
+        .unwrap_or("unknown")
+        .to_string();
+    let auth = parts
+        .iter()
+        .position(|part| part.starts_with("api_key="))
+        .map(|idx| {
+            let first = parts[idx].trim_start_matches("api_key=");
+            if first == "✓" && parts.get(idx + 1) == Some(&"set") {
+                "set".to_string()
+            } else {
+                first.to_string()
+            }
+        })
+        .unwrap_or_else(|| "-".to_string());
+    let endpoint = parts
+        .iter()
+        .find_map(|part| {
+            part.strip_prefix("base_url=")
+                .or_else(|| part.strip_prefix("endpoint="))
+        })
+        .unwrap_or("-")
+        .to_string();
+    Some(ProviderSummary {
+        name,
+        kind,
+        auth,
+        endpoint,
+        models: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("models="))
+            .map(ToString::to_string),
+        roles: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("roles="))
+            .map(ToString::to_string),
+    })
+}
+
+fn parse_role_option_summary_line(line: &str) -> Option<RoleOptionSummary> {
+    let trimmed = line.trim();
+    let trimmed = trimmed
+        .strip_prefix('✓')
+        .or_else(|| trimmed.strip_prefix('⚠'))?
+        .trim();
+    let mut parts = trimmed.split_whitespace();
+    let model = parts.next()?.to_string();
+    let mut provider = None;
+    let mut api_model = None;
+    let mut runtimes = None;
+    let mut teams = None;
+    let mut roles = None;
+    let mut health = None;
+    for part in parts {
+        if let Some(value) = part.strip_prefix("provider=") {
+            provider = Some(value.to_string());
+        } else if let Some(value) = part.strip_prefix("api_model=") {
+            api_model = Some(value.to_string());
+        } else if let Some(value) = part.strip_prefix("runtimes=") {
+            runtimes = Some(value.to_string());
+        } else if let Some(value) = part.strip_prefix("teams=") {
+            teams = Some(value.to_string());
+        } else if let Some(value) = part.strip_prefix("roles=") {
+            roles = Some(value.to_string());
+        } else if let Some(value) = part.strip_prefix("health=") {
+            health = Some(value.to_string());
+        }
+    }
+    Some(RoleOptionSummary {
+        model,
+        provider: provider?,
+        api_model: api_model?,
+        runtimes: runtimes.unwrap_or_else(|| "-".to_string()),
+        teams: teams.unwrap_or_else(|| "off".to_string()),
+        roles: roles.unwrap_or_else(|| "-".to_string()),
+        health: health.unwrap_or_else(|| "unknown".to_string()),
+    })
+}
+
+fn parse_role_summary_line(line: &str) -> Option<RoleSummary> {
+    let trimmed = line.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("Registered roles")
+        || trimmed.starts_with("Register:")
+        || trimmed.starts_with("Roles (")
+    {
+        return None;
+    }
+    let trimmed = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+    let normalized = trimmed.replace('→', " ");
+    let parts = normalized.split_whitespace().collect::<Vec<_>>();
+    let name = parts.first()?.to_string();
+    let model = parts
+        .iter()
+        .find_map(|part| part.strip_prefix("model="))?
+        .to_string();
+    let display_model = parts
+        .iter()
+        .find_map(|part| {
+            part.strip_prefix('(')
+                .and_then(|value| value.strip_suffix(')'))
+        })
+        .map(ToString::to_string);
+    let runtime = parts
+        .iter()
+        .find_map(|part| part.strip_prefix("runtime="))
+        .unwrap_or("runtime")
+        .to_string();
+    let teams = parts
+        .iter()
+        .any(|part| *part == "[agent_teams]" || part.strip_prefix("teams=") == Some("true"));
+
+    Some(RoleSummary {
+        name,
+        model,
+        display_model,
+        provider: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("provider="))
+            .map(ToString::to_string),
+        api_model: parts
+            .iter()
+            .find_map(|part| {
+                part.strip_prefix("api_model=")
+                    .or_else(|| part.strip_prefix("model_name="))
+            })
+            .map(ToString::to_string),
+        runtime,
+        teams,
+        health: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("health="))
+            .map(ToString::to_string),
+        thread: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("thread="))
+            .map(ToString::to_string),
+        native: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("native="))
+            .map(ToString::to_string),
+        last: parts
+            .iter()
+            .find_map(|part| part.strip_prefix("last="))
+            .map(ToString::to_string),
+    })
+}
+
+fn parse_thread_list_line(line: &str) -> Option<ThreadSummary> {
+    let trimmed = line.trim();
+    let active = if let Some(rest) = trimmed.strip_prefix("● ") {
+        (true, rest)
+    } else if let Some(rest) = trimmed.strip_prefix("○ ") {
+        (false, rest)
+    } else {
+        return None;
+    };
+    let (active, rest) = active;
+    let parts = rest.split_whitespace().collect::<Vec<_>>();
+    let role = parts.first()?.to_string();
+    let joined = parts.get(1..).unwrap_or(&[]).join(" ");
+    if !active {
+        let detail = joined
+            .split(" · ")
+            .next()
+            .unwrap_or("not configured")
+            .trim()
+            .to_string();
+        return Some(ThreadSummary {
+            role,
+            active,
+            runtime: detail,
+            model: String::new(),
+            thread: None,
+            native: None,
+            last: None,
+        });
+    }
+
+    let segments = joined.split(" · ").map(str::trim).collect::<Vec<_>>();
+    let runtime = segments.first().copied().unwrap_or("runtime").to_string();
+    let model = segments.get(1).copied().unwrap_or("model").to_string();
+    Some(ThreadSummary {
+        role,
+        active,
+        runtime,
+        model,
+        thread: segment_value(&segments, "thread"),
+        native: segment_value(&segments, "native"),
+        last: segment_value(&segments, "last"),
+    })
+}
+
+fn segment_value(segments: &[&str], prefix: &str) -> Option<String> {
+    let needle = format!("{prefix} ");
+    segments
+        .iter()
+        .find_map(|segment| segment.strip_prefix(&needle))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 pub fn retry_prompt_from_jobs_retry_output(text: &str) -> Option<String> {
@@ -406,6 +908,101 @@ mod tests {
         assert_eq!(rows[0].agent_teams, "false");
         assert_eq!(rows[1].role, "worker-cc");
         assert_eq!(rows[1].agent_teams, "true");
+    }
+
+    #[test]
+    fn parses_provider_outputs() {
+        let providers = parse_provider_summaries(
+            "Providers (2):\n\
+             - anthropic type=anthropic api_key=✓ set base_url=https://api.anthropic.com models=2 roles=3\n\
+             - minimax type=openai-compatible api_key=MINIMAX_API_KEY endpoint=https://api.minimax.io models=1 roles=1\n\
+             Models (3):\n",
+        );
+
+        assert_eq!(providers.len(), 2);
+        assert_eq!(providers[0].name, "anthropic");
+        assert_eq!(providers[0].kind, "anthropic");
+        assert_eq!(providers[0].auth, "set");
+        assert_eq!(providers[0].endpoint, "https://api.anthropic.com");
+        assert_eq!(providers[0].models.as_deref(), Some("2"));
+        assert_eq!(providers[0].roles.as_deref(), Some("3"));
+        assert_eq!(providers[1].auth, "MINIMAX_API_KEY");
+
+        let detail = parse_provider_summaries(
+            "Provider anthropic\n\
+             type: anthropic\n\
+             auth: ANTHROPIC_API_KEY\n\
+             endpoint: https://api.anthropic.com\n\
+             models: 2\n\
+             roles: planner,worker-cc\n",
+        );
+        assert_eq!(detail.len(), 1);
+        assert_eq!(detail[0].name, "anthropic");
+        assert_eq!(detail[0].roles.as_deref(), Some("planner,worker-cc"));
+    }
+
+    #[test]
+    fn parses_role_outputs() {
+        let roles = parse_role_summaries(
+            "Registered roles\n\
+             planner -> model=sonnet (claude-sonnet-4-6) provider=anthropic api_model=claude-sonnet-4-6 runtime=claude-code health=ready thread=thread-1 native=native-1 last=session-1\n\
+             worker-cc -> model=minimax-m3 provider=minimax model_name=MiniMax-M3 runtime=claude-code teams=true health=missing-key\n",
+        );
+
+        assert_eq!(roles.len(), 2);
+        assert_eq!(roles[0].name, "planner");
+        assert_eq!(roles[0].display_model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(roles[0].thread.as_deref(), Some("thread-1"));
+        assert_eq!(roles[1].api_model.as_deref(), Some("MiniMax-M3"));
+        assert!(roles[1].teams);
+        assert_eq!(roles[1].health.as_deref(), Some("missing-key"));
+
+        let options = parse_role_option_summaries(
+            "Role options\n\
+             ✓ sonnet provider=anthropic api_model=claude-sonnet-4-6 runtimes=claude-code teams=on roles=planner,reviewer health=ready\n\
+             ⚠ minimax-m3 provider=minimax api_model=MiniMax-M3 roles=worker-cc health=missing-key\n",
+        );
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].teams, "on");
+        assert_eq!(options[1].runtimes, "-");
+        assert_eq!(options[1].health, "missing-key");
+    }
+
+    #[test]
+    fn parses_thread_outputs() {
+        let threads = parse_thread_list_summaries(
+            "Worker threads\n\
+             Roles:\n\
+               ○ worker-cc          no worker thread yet\n\
+               ● worker-codex       codex · openai/gpt-4o · thread thread-1 · native native-1 · last session-1\n",
+        );
+
+        assert_eq!(threads.len(), 2);
+        assert_eq!(threads[0].role, "worker-cc");
+        assert!(!threads[0].active);
+        assert_eq!(threads[0].runtime, "no worker thread yet");
+        assert!(threads[1].active);
+        assert_eq!(threads[1].runtime, "codex");
+        assert_eq!(threads[1].model, "openai/gpt-4o");
+        assert_eq!(threads[1].thread.as_deref(), Some("thread-1"));
+        assert_eq!(threads[1].native.as_deref(), Some("native-1"));
+        assert_eq!(threads[1].last.as_deref(), Some("session-1"));
+
+        let detail = "Worker thread thread-1\n\
+             role: worker-codex\n\
+             runtime: codex\n\
+             native session: native-1\n\
+             native handoff: cd /tmp/project && codex resume native-1\n";
+        let fields = parse_thread_fields(detail);
+        assert_eq!(
+            parse_worker_thread_title(detail).as_deref(),
+            Some("thread-1")
+        );
+        assert_eq!(fields.get("role").map(String::as_str), Some("worker-codex"));
+        assert_eq!(
+            fields.get("native handoff").map(String::as_str),
+            Some("cd /tmp/project && codex resume native-1")
+        );
     }
 
     #[test]

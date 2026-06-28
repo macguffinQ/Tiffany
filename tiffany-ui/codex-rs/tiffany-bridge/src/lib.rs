@@ -25,10 +25,13 @@ pub use native_session::{
     native_session_command_is_gemini, native_session_path_in_home,
 };
 pub use output_parse::{
-    JobSummary, JobsRetryHandoff, RoleProfileRow, job_actions, job_state_summary,
-    parse_job_summaries, parse_jobs_header_counts, parse_jobs_retry_handoff, parse_prefixed_field,
-    parse_recovered_jobs_failed_count, parse_recovered_jobs_ids, parse_role_profile_rows,
-    retry_prompt_from_jobs_retry_output, unescape_retry_prompt_from_cli,
+    JobSummary, JobsRetryHandoff, ProviderSummary, RoleOptionSummary, RoleProfileRow, RoleSummary,
+    ThreadSummary, job_actions, job_state_summary, parse_job_summaries, parse_jobs_header_counts,
+    parse_jobs_retry_handoff, parse_prefixed_field, parse_provider_summaries,
+    parse_recovered_jobs_failed_count, parse_recovered_jobs_ids, parse_role_option_summaries,
+    parse_role_profile_rows, parse_role_summaries, parse_thread_fields,
+    parse_thread_list_summaries, parse_worker_thread_title, retry_prompt_from_jobs_retry_output,
+    unescape_retry_prompt_from_cli,
 };
 pub use visible_output::{
     PendingVisibleOutput, VisibleOutputEvent, format_tiffany_summary_style,

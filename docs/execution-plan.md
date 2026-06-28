@@ -68,6 +68,11 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   A new `tiffany-bridge/src/output_parse.rs` owns pure role-profile row parsing,
   jobs retry prompt/handoff parsing, recovered-job detail parsing, and persisted
   job summary/action shaping. `codex-tui` keeps Ratatui line styling local.
+- **F5+ provider/role/thread output parsing slice ✅ implemented locally and
+  verified.** `tiffany-bridge/src/output_parse.rs` now also owns provider
+  summary parsing, role/role-option summary parsing, thread list/detail field
+  parsing, and worker-thread title parsing. `codex-tui` keeps Ratatui card and
+  waterfall rendering local.
 - **F8 ✅ implemented locally and verified.** Full `codex-tui --lib` now passes
   serially after stabilizing no-active-turn app-server paths, no-turn side-thread
   discard behavior, large-stack test wrappers, Tiffany snapshot drift, and
