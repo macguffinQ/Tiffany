@@ -92,3 +92,6 @@ Format: `YYYY-MM-DD - path - reason`.
   `Cargo.toml` - F3 single multi-call binary wires the Tiffany-owned CLI to the
   outer orchestrator library; root `rusqlite` now tracks the vendored codex-rs
   `libsqlite3-sys` line to avoid native-link skew.
+- 2026-06-28 - `tiffany-ui/codex-rs/Cargo.lock` - F5+ visible-output bridge
+  extraction records the new Tiffany-owned `tiffany-bridge` dependency on the
+  shared `tiffany-event-format` crate.

@@ -17,6 +17,8 @@ use serde::Serialize;
 use tiffany_bridge::ConfigSummary as TiffanyConfigSummary;
 use tiffany_bridge::NativeSessionCommand as TiffanyBridgeNativeSessionCommand;
 use tiffany_bridge::NativeSessionRuntime as TiffanyNativeTranscriptRuntime;
+use tiffany_bridge::PendingVisibleOutput as TiffanyBridgePendingVisibleOutput;
+use tiffany_bridge::VisibleOutputEvent as TiffanyBridgeVisibleOutputEvent;
 use tiffany_bridge::WorkerReadinessStatus as TiffanyWorkerReadinessStatus;
 use tiffany_event_format as event_format;
 use tokio::io::AsyncBufReadExt;
@@ -9666,34 +9668,10 @@ fn output_title(event: &TiffanyProgressEvent) -> String {
 }
 
 fn worker_output_suffix(event: &TiffanyProgressEvent) -> &'static str {
-    if event
-        .recovery
-        .as_deref()
-        .and_then(nonempty_trimmed)
-        .is_some()
-    {
-        return "session recovery";
-    }
-    let Some(raw) = event.content.as_deref() else {
-        return "output";
-    };
-    if looks_like_native_session_recovery(raw) {
-        return "session recovery";
-    }
-    match worker_visible_output_kind_for_event(event, raw) {
-        Some(event_format::VisibleAgentOutputKind::Final) => "final",
-        Some(event_format::VisibleAgentOutputKind::Answer) => "answer",
-        Some(event_format::VisibleAgentOutputKind::Question) => "question",
-        Some(event_format::VisibleAgentOutputKind::Approval) => "approval",
-        Some(event_format::VisibleAgentOutputKind::ToolCall) => "tool call",
-        Some(event_format::VisibleAgentOutputKind::ToolResult) => "tool result",
-        Some(event_format::VisibleAgentOutputKind::Diff) => "diff",
-        Some(event_format::VisibleAgentOutputKind::Patch) => "patch",
-        Some(event_format::VisibleAgentOutputKind::FileUpdate) => "file update",
-        Some(event_format::VisibleAgentOutputKind::Stderr) => "stderr",
-        Some(event_format::VisibleAgentOutputKind::Actionable) => "alert",
-        Some(event_format::VisibleAgentOutputKind::Normal) | None => "output",
-    }
+    tiffany_bridge::visible_output_suffix(
+        &bridge_visible_output_event(event),
+        CONTROL_SUMMARY_MAX_CHARS,
+    )
 }
 
 fn worker_visible_output_kind(
@@ -9707,42 +9685,60 @@ fn worker_visible_output_kind_for_event(
     event: &TiffanyProgressEvent,
     raw: &str,
 ) -> Option<event_format::VisibleAgentOutputKind> {
-    let raw_kind = worker_visible_output_kind_from_raw(raw);
-    if matches!(
-        raw_kind,
-        Some(event_format::VisibleAgentOutputKind::Question)
-            | Some(event_format::VisibleAgentOutputKind::Approval)
-    ) {
-        return raw_kind;
-    }
-    if raw_kind.is_some_and(is_artifact_output_kind) {
-        return raw_kind;
-    }
-    event
-        .event_kind
-        .as_deref()
-        .and_then(event_format::visible_agent_output_kind_for_event_kind)
-        .or(raw_kind)
-}
-
-fn is_artifact_output_kind(kind: event_format::VisibleAgentOutputKind) -> bool {
-    matches!(
-        kind,
-        event_format::VisibleAgentOutputKind::Diff
-            | event_format::VisibleAgentOutputKind::Patch
-            | event_format::VisibleAgentOutputKind::FileUpdate
+    tiffany_bridge::visible_output_kind_for_event(
+        &bridge_visible_output_event(event),
+        raw,
+        CONTROL_SUMMARY_MAX_CHARS,
     )
 }
 
 fn worker_visible_output_kind_from_raw(raw: &str) -> Option<event_format::VisibleAgentOutputKind> {
-    event_format::visible_agent_output(raw, CONTROL_SUMMARY_MAX_CHARS).map(|view| view.kind)
+    tiffany_bridge::visible_output_kind_for_event(
+        &TiffanyBridgeVisibleOutputEvent {
+            role: "worker",
+            status: "output",
+            agent: None,
+            worker_role: None,
+            task_id: None,
+            event_kind: None,
+            recovery: None,
+            content: Some(raw),
+        },
+        raw,
+        CONTROL_SUMMARY_MAX_CHARS,
+    )
 }
 
 fn looks_like_native_session_recovery(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    (lower.contains("native session busy") || lower.contains("native session missing"))
-        && (lower.contains("retrying once") || lower.contains("retry "))
-        && (lower.contains("same native session") || lower.contains("cleared saved session"))
+    tiffany_bridge::looks_like_native_session_recovery(content)
+}
+
+fn bridge_visible_output_event(
+    event: &TiffanyProgressEvent,
+) -> TiffanyBridgeVisibleOutputEvent<'_> {
+    TiffanyBridgeVisibleOutputEvent {
+        role: &event.role,
+        status: &event.status,
+        agent: event.agent.as_deref(),
+        worker_role: event.worker_role.as_deref(),
+        task_id: event.task_id.as_deref(),
+        event_kind: event.event_kind.as_deref(),
+        recovery: event.recovery.as_deref(),
+        content: event.content.as_deref(),
+    }
+}
+
+fn bridge_pending_visible_output<'a>(
+    event: &'a TiffanyProgressEvent,
+    content: &'a str,
+) -> TiffanyBridgePendingVisibleOutput<'a> {
+    TiffanyBridgePendingVisibleOutput {
+        role: &event.role,
+        agent: event.agent.as_deref(),
+        worker_role: event.worker_role.as_deref(),
+        task_id: event.task_id.as_deref(),
+        content,
+    }
 }
 
 fn output_label(event: &TiffanyProgressEvent) -> String {
@@ -9981,39 +9977,11 @@ fn format_duration_ms(duration_ms: u64) -> String {
 }
 
 fn visible_content(event: &TiffanyProgressEvent) -> Option<String> {
-    let content = event.content.as_deref()?.trim();
-    if content.is_empty() {
-        return None;
-    }
-
-    let display = if event.role == "worker" {
-        event_format::visible_agent_output(content, visible_content_max(event))
-            .map(|view| view.display)?
-    } else {
-        event_format::clean_visible_agent_output(content, visible_content_max(event))?
-    };
-    let display = strip_redundant_role_prefix(&event.role, &display);
-    let display = format_tiffany_summary_style(&event.role, &display);
-    if is_low_value_output(&display) {
-        return None;
-    }
-    (!display.trim().is_empty()).then_some(display)
-}
-
-fn strip_redundant_role_prefix(role: &str, content: &str) -> String {
-    if !matches!(role, "planner" | "critic" | "reviewer") {
-        return content.trim().to_string();
-    }
-    let trimmed = content.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    let role = role.to_ascii_lowercase();
-    for separator in [": ", " - ", " — "] {
-        let prefix = format!("{role}{separator}");
-        if lower.starts_with(&prefix) {
-            return trimmed[prefix.len()..].trim_start().to_string();
-        }
-    }
-    trimmed.to_string()
+    tiffany_bridge::visible_output_content(
+        &bridge_visible_output_event(event),
+        FULL_MESSAGE_STREAM_MAX_CHARS,
+        CONTROL_SUMMARY_MAX_CHARS,
+    )
 }
 
 fn is_low_value_output(text: &str) -> bool {
@@ -10139,8 +10107,7 @@ fn remember_better_text(slot: &mut Option<String>, candidate: String) {
 }
 
 fn normalized_output_key(content: &str) -> String {
-    event_format::normalized_output_key(content, FULL_MESSAGE_STREAM_MAX_CHARS)
-        .unwrap_or_else(|| content.split_whitespace().collect::<Vec<_>>().join(" "))
+    tiffany_bridge::normalized_visible_output_key(content, FULL_MESSAGE_STREAM_MAX_CHARS)
 }
 
 fn output_seen_key(
@@ -10148,102 +10115,22 @@ fn output_seen_key(
     content: &str,
     pending_tool_call: Option<&(TiffanyProgressEvent, String)>,
 ) -> String {
-    let scope = output_scope(event);
-    let mut key = normalized_output_key(content);
-    if is_tool_result_output(event)
-        && let Some((tool_event, tool_content)) = pending_tool_call
-        && same_worker_tool_sequence(tool_event, event)
-    {
-        key = format!("after:{}=>{key}", normalized_output_key(tool_content));
-    }
-    format!("{scope}:{key}")
+    let pending = pending_tool_call
+        .map(|(tool_event, tool_content)| bridge_pending_visible_output(tool_event, tool_content));
+    tiffany_bridge::visible_output_seen_key(
+        &bridge_visible_output_event(event),
+        content,
+        pending.as_ref(),
+        FULL_MESSAGE_STREAM_MAX_CHARS,
+        CONTROL_SUMMARY_MAX_CHARS,
+    )
 }
 
-fn visible_content_max(event: &TiffanyProgressEvent) -> usize {
-    if event.role == "worker" {
-        FULL_MESSAGE_STREAM_MAX_CHARS
-    } else {
-        CONTROL_SUMMARY_MAX_CHARS
-    }
-}
-
+#[cfg(test)]
 fn output_scope(event: &TiffanyProgressEvent) -> String {
-    let mut scope = event.role.clone();
-    if let Some(agent) = event.agent.as_deref().filter(|agent| !agent.is_empty()) {
-        scope.push(':');
-        scope.push_str(agent);
-    }
-    if let Some(task_id) = short_task_id(event.task_id.as_deref()) {
-        scope.push(':');
-        scope.push_str(task_id);
-    }
-    if let Some(kind) = output_dedupe_event_kind(event) {
-        scope.push(':');
-        scope.push_str(kind);
-    }
-    if let Some(recovery) = event.recovery.as_deref().and_then(nonempty_trimmed) {
-        scope.push(':');
-        scope.push_str(recovery);
-    }
-    scope
-}
-
-fn output_dedupe_event_kind(event: &TiffanyProgressEvent) -> Option<&str> {
-    if event.role == "worker"
-        && event
-            .recovery
-            .as_deref()
-            .and_then(nonempty_trimmed)
-            .is_some()
-    {
-        return Some("session_recovery");
-    }
-    let kind = event
-        .event_kind
-        .as_deref()
-        .map(str::trim)
-        .filter(|kind| !kind.is_empty())?;
-    if event.role == "worker" {
-        let output_kind = event
-            .content
-            .as_deref()
-            .and_then(|raw| worker_visible_output_kind_for_event(event, raw));
-        if matches!(
-            output_kind,
-            Some(event_format::VisibleAgentOutputKind::Question)
-                | Some(event_format::VisibleAgentOutputKind::Approval)
-                | Some(event_format::VisibleAgentOutputKind::ToolCall)
-                | Some(event_format::VisibleAgentOutputKind::ToolResult)
-                | Some(event_format::VisibleAgentOutputKind::FileUpdate)
-        ) || is_answer_like_event_kind(kind)
-        {
-            return output_kind.and_then(output_scope_kind_label);
-        }
-    }
-    Some(kind)
-}
-
-fn output_scope_kind_label(kind: event_format::VisibleAgentOutputKind) -> Option<&'static str> {
-    match kind {
-        event_format::VisibleAgentOutputKind::Answer
-        | event_format::VisibleAgentOutputKind::Normal
-        | event_format::VisibleAgentOutputKind::Final => None,
-        event_format::VisibleAgentOutputKind::Question => Some("question"),
-        event_format::VisibleAgentOutputKind::Approval => Some("approval"),
-        event_format::VisibleAgentOutputKind::ToolCall => Some("tool"),
-        event_format::VisibleAgentOutputKind::ToolResult => Some("tool_result"),
-        event_format::VisibleAgentOutputKind::Diff => Some("diff"),
-        event_format::VisibleAgentOutputKind::Patch => Some("patch"),
-        event_format::VisibleAgentOutputKind::FileUpdate => Some("file"),
-        event_format::VisibleAgentOutputKind::Stderr => Some("stderr"),
-        event_format::VisibleAgentOutputKind::Actionable => Some("alert"),
-    }
-}
-
-fn is_answer_like_event_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "assistant" | "result" | "final" | "final_answer" | "turn_complete" | "message"
+    tiffany_bridge::visible_output_scope(
+        &bridge_visible_output_event(event),
+        CONTROL_SUMMARY_MAX_CHARS,
     )
 }
 
@@ -10297,126 +10184,6 @@ fn role_output_has_actionable_detail(lines: &[&str]) -> bool {
             "issue:" | "issues:" | "suggestion:" | "suggestions:"
         )
     })
-}
-
-fn format_tiffany_summary_style(role: &str, content: &str) -> String {
-    let mut lines = content.lines();
-    let Some(first) = lines.next() else {
-        return String::new();
-    };
-    let first = restyle_summary_first_line(first);
-    let rest = lines.collect::<Vec<_>>();
-    if role == "planner" {
-        return compact_plan_summary(&first, &rest);
-    }
-    if rest.is_empty() {
-        first
-    } else {
-        format!("{}\n{}", first, rest.join("\n"))
-    }
-}
-
-#[derive(Debug)]
-struct CompactPlanTask {
-    number: String,
-    prompt: String,
-    agent: Option<String>,
-}
-
-fn compact_plan_summary(first: &str, rest: &[&str]) -> String {
-    if !first
-        .trim_start()
-        .to_ascii_lowercase()
-        .starts_with("plan ready")
-    {
-        return if rest.is_empty() {
-            first.to_string()
-        } else {
-            format!("{}\n{}", first, rest.join("\n"))
-        };
-    }
-
-    let mut tasks: Vec<CompactPlanTask> = Vec::new();
-    let mut more_line: Option<String> = None;
-    let mut passthrough: Vec<String> = Vec::new();
-    for line in rest {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some((number, prompt)) = parse_plan_task_line(trimmed) {
-            tasks.push(CompactPlanTask {
-                number,
-                prompt,
-                agent: None,
-            });
-            continue;
-        }
-        if let Some(agent) = trimmed.strip_prefix("agent: ") {
-            if let Some(task) = tasks.last_mut() {
-                task.agent = Some(agent.trim().to_string());
-            } else {
-                passthrough.push(trimmed.to_string());
-            }
-            continue;
-        }
-        if trimmed.starts_with('…') && trimmed.contains("more") {
-            more_line = Some(trimmed.to_string());
-            continue;
-        }
-        passthrough.push(trimmed.to_string());
-    }
-
-    if tasks.is_empty() {
-        return if rest.is_empty() {
-            first.to_string()
-        } else {
-            format!("{}\n{}", first, rest.join("\n"))
-        };
-    }
-
-    let mut out = vec![first.to_string()];
-    let visible_count = tasks.len().min(3);
-    for task in tasks.iter().take(visible_count) {
-        let mut line = format!("  {}. {}", task.number, truncate_text(&task.prompt, 96));
-        if let Some(agent) = task.agent.as_deref().filter(|agent| !agent.is_empty()) {
-            line.push_str(" · ");
-            line.push_str(&truncate_text(agent, 48));
-        }
-        out.push(line);
-    }
-
-    let hidden_count = tasks.len().saturating_sub(visible_count);
-    if hidden_count > 0 {
-        out.push(format!("  … {hidden_count} more"));
-    } else if let Some(more_line) = more_line {
-        out.push(format!("  {more_line}"));
-    }
-    out.extend(
-        passthrough
-            .into_iter()
-            .take(2)
-            .map(|line| format!("  {line}")),
-    );
-    out.join("\n")
-}
-
-fn parse_plan_task_line(line: &str) -> Option<(String, String)> {
-    let (number, prompt) = line.split_once(". ")?;
-    if number.is_empty() || !number.chars().all(|ch| ch.is_ascii_digit()) {
-        return None;
-    }
-    Some((number.to_string(), prompt.trim().to_string()))
-}
-
-fn restyle_summary_first_line(line: &str) -> String {
-    for prefix in ["plan ready", "approved", "needs changes"] {
-        let needle = format!("{prefix}: ");
-        if let Some(rest) = line.strip_prefix(&needle) {
-            return format!("{prefix} - {rest}");
-        }
-    }
-    line.to_string()
 }
 
 fn is_ignorable_stdout_noise(line: &str) -> bool {

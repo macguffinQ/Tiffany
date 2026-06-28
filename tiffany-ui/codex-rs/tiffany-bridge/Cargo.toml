@@ -16,6 +16,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
+tiffany-event-format = { path = "../../../crates/tiffany-event-format" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 mod native_session;
+mod visible_output;
 
 pub use native_session::{
     NativeSessionCommand, NativeSessionPath, NativeSessionRuntime, claude_session_jsonl_path,
@@ -9,6 +10,12 @@ pub use native_session::{
     gemini_project_hash, gemini_session_json_path_in_home, gemini_session_message_count,
     native_session_command_is_claude, native_session_command_is_codex,
     native_session_command_is_gemini, native_session_path_in_home,
+};
+pub use visible_output::{
+    PendingVisibleOutput, VisibleOutputEvent, format_tiffany_summary_style,
+    looks_like_native_session_recovery, normalized_visible_output_key, visible_output_content,
+    visible_output_kind_for_event, visible_output_kind_scope_label, visible_output_scope,
+    visible_output_seen_key, visible_output_suffix,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -50,9 +50,13 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   runtime-only no-TUI smoke script, wired it into release preflight and script
   helper checks, documented it in both READMEs, and cleaned the no-default warning
   path.
-- **Next:** with F7 done, the next highest-value implementation slice is F5+
-  visible-output formatting extraction, followed by F8 full `codex-tui --lib`
-  stability work.
+- **F5+ visible-output formatting slice ✅ implemented locally and verified.**
+  A new `tiffany-bridge/src/visible_output.rs` owns visible content cleanup,
+  worker output kind selection, dedupe scope/key calculation, and compact plan
+  summary shaping. `codex-tui` now adapts `TiffanyProgressEvent` into the bridge
+  view and keeps Ratatui rendering local.
+- **Next:** continue F5+ extraction with another small pure slice, or switch to
+  F8 full `codex-tui --lib` stability work before CI depends on it.
 - **Tech debt noted (not blocking):** a full `cargo test -p codex-tui --lib` run
   hangs / has snapshot drift unrelated to F4 — Codex killed a stuck run and
   cleaned `.snap.new`. Track as queued F8 before it bites CI. Targeted fast-gate
@@ -244,7 +248,8 @@ beyond the scaffold until F2 lands.
 
 - F5+: continue `tiffany_orchestrator.rs` extraction into `tiffany-bridge`,
   one module per task, build green each time, until the god-file is empty and
-  deleted.
+  deleted. Completed slices: config summary, native session paths, visible
+  output formatting/dedupe.
 - F6: prune vendored `codex-rs` crates that Tiffany does not use (per the
   pruning goal in the Upstream Fork Strategy), guided by `UPSTREAM.md`.
 - F7 ✅ done locally: the Codex TUI is behind the default `tui` feature and

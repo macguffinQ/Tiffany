@@ -174,3 +174,28 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - Full `cargo test -p codex-tui --lib` remains queued as F8.
 - Next:
   - Recommended next task: F5+ visible-output formatting extraction, then F8 full codex-tui lib-test stabilization.
+
+## F5+ — visible-output formatting extraction completed locally — 2026-06-28
+- Commits:
+  - this commit: `Extract visible output formatting into tiffany bridge`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 11 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui output --lib --quiet` — green, 77 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build --quiet` — green.
+  - `git diff --check` — green.
+- Decisions:
+  - Added `tiffany-ui/codex-rs/tiffany-bridge/src/visible_output.rs` as the next small bridge slice.
+  - Moved visible content cleanup, worker output kind selection, native-session recovery detection, dedupe scope/key calculation, and compact plan summary shaping out of `tui/src/tiffany_orchestrator.rs`.
+  - Kept Ratatui `Line`/`Span` rendering and history-cell layout in `codex-tui`; the bridge remains UI-renderer-free.
+  - Added bridge tests for planner JSON humanization, assistant/result dedupe scope, tool-result seen keys, and event-kind override behavior.
+  - Added a `tiffany-ui/UPSTREAM.md` log entry because the fork workspace `Cargo.lock` records the new `tiffany-event-format` bridge dependency.
+  - `tiffany_orchestrator.rs` is now 17,918 lines; this slice removed another visible-output decision cluster from the god-file.
+- Blockers / questions for Claude:
+  - No blocker.
+  - Full `cargo test -p codex-tui --lib` remains queued as F8.
+- Next:
+  - Either continue F5+ with another pure bridge slice, or switch to F8 and stabilize the full codex-tui lib test before release CI depends on it.
