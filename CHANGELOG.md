@@ -37,6 +37,61 @@ All notable changes to this project will be documented in this file.
 - Added the native Tiffany `/thread` command and the matching
   `orchestrator thread list|show|clear` CLI surface so Claude Code native
   session recovery works without switching to the legacy terminal chat.
+- Added a release target manifest and preflight check so GitHub Release,
+  Homebrew, post-release checks, and docs agree that macOS Apple Silicon has
+  prebuilt archives while Intel Mac, Linux, and Windows remain source-install
+  targets for now.
+- Native Tiffany orchestrator mode now streams worker answer/final chunks
+  through Codex's active assistant message cell, while tool calls/results,
+  stderr, diffs, and approvals stay in the waterfall process view.
+- Worker native-history persistence now reuses the shared Claude/Codex/Gemini
+  event-kind classifier, preserving `final`, `answer`, tool, diff, patch, file
+  update, approval, and stderr kinds instead of degrading final events to
+  generic output.
+- Expanded the release workflow and release-target manifest to publish native
+  macOS Apple Silicon, Intel Mac, Linux x86_64, Linux ARM64, and Windows x86_64
+  archives, with Homebrew selecting the matching macOS/Linux archive before
+  falling back to source builds.
+- Added a legacy TUI shim boundary check so root `src/tui/codex_*` modules stay
+  confined to the compatibility fallback while new UI work remains in the
+  tiffany-loop fork.
+- Fixed native Claude/Codex/Gemini session event replay so one log read can
+  emit every buffered line instead of dropping all but the last event.
+- Improved persisted Tiffany jobs so failed jobs point directly to retry actions
+  and completed native jobs can continue from a worker session's native
+  Claude/Codex/Gemini handle.
+- Native Tiffany `/jobs` cards now translate backend next-action hints into
+  TUI commands such as `/jobs retry`, `/continue open`, and `/history session`
+  instead of showing raw `orchestrator ...` command strings.
+- Native Tiffany orchestration failure pages now reuse the shared
+  Claude/Codex/Gemini failure classifier, so model and provider-auth failures
+  surface explicit `fix ...` actions instead of only showing an exit status.
+- The Gemini worker adapter now captures the real `session_id` from
+  `gemini --output-format stream-json` and resumes that exact native session
+  instead of falling back to the unsafe `latest` handle.
+- Increased the opt-in real native runtime check timeout to 120 seconds per
+  command so slower Claude/Codex/Gemini resumes do not fail the smoke test
+  before producing output.
+- Native Tiffany `/jobs recover` now renders a clear recovery result before
+  the refreshed job cards, including retry actions for stale jobs that were
+  marked failed.
+- Native Tiffany `/provider <name>` now opens a provider detail view through
+  `orchestrator config provider show <name>`, matching the visible TUI command
+  hints and showing model plus role bindings.
+- Native Tiffany `/roles` cards now surface worker thread, native session, and
+  last Tiffany session readiness inline, so role binding and handoff state are
+  visible from one view.
+- Expanded `docs/engineering-plan.md` into the product engineering roadmap with
+  architecture, milestones, acceptance criteria, validation gates, and the
+  current completion estimate.
+- Worker waterfall tool-pair rendering now collapses identical tool call/result
+  bodies into one visible line, reducing duplicate process noise while keeping
+  distinct command and result details.
+- Native Tiffany `/queue show` now renders retry-first, queued, and pending
+  inputs as separate visible sections so queue counts match what users can see.
+- Added `tiffany-ui/UPSTREAM.md` to document the Codex fork freeze point,
+  Tiffany-owned UI seams, and the required log for edits to non-owned vendored
+  files.
 
 ## [0.1.33] - 2026-06-24
 

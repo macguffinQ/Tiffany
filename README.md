@@ -100,7 +100,7 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 
 The active UI path is now a full tiffany-loop UI under [`tiffany-ui/`](tiffany-ui/). New terminal UI work should happen there, keeping the upstream Ratatui/Crossterm architecture, resize handling, copy/selection behavior, history cells, bottom pane, overlays, and exit rendering intact.
 
-The legacy [`src/tui`](src/tui/) path remains only as a compatibility bridge for the existing orchestrator runtime. Do not add new hand-written terminal rendering there unless it is a narrow bug fix needed before the tiffany-loop UI adapter replaces it.
+The legacy [`src/tui`](src/tui/) path remains only as a compatibility bridge for the existing orchestrator runtime. Do not add new hand-written terminal rendering there unless it is a narrow bug fix needed before the tiffany-loop UI adapter replaces it. The `scripts/tiffany-check-legacy-tui-shims` audit keeps the copied `src/tui/codex_*` modules fenced inside that fallback path.
 
 Development entrypoints:
 
@@ -112,9 +112,12 @@ Development entrypoints:
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml` - use a specific orchestrator config while keeping tiffany-loop UI config isolated under `TIFFANY_HOME`.
 - `./scripts/tiffany-dev orchestrator --legacy ...` - compatibility bridge to the old orchestrator CLI.
 - `./scripts/tiffany-build [cargo-build-args...]` - build both the parent orchestrator binary and the tiffany-loop UI in the shared `./target` directory. It defaults to `--small` for source-checkout local binaries; use `--dev` for Cargo's normal debug profile or `--fast-release` for a faster distributable build. Final dist binaries are stripped unless `TIFFANY_NO_STRIP=1`. Add `--prune-dist-cache` when you want to keep only the final dist binaries after a successful build.
-- `./scripts/tiffany-check --smoke` - small debug-build, format-check the fork, verify the isolated install surface, legacy bridge, event-stream entrypoint, and example smoke tests.
+- `./scripts/tiffany-check --smoke` - small debug-build, format-check the fork, verify the isolated install surface, legacy bridge, event-stream entrypoint, fake Claude/Codex/Gemini runtime e2e, and example smoke tests.
 - `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
 - `./scripts/tiffany-install-smoke --smoke|--dist` - verify `orchestrator`, `tiffany-loop`, and the `tiffany` alias in a temporary HOME without touching real user config.
+- `./scripts/tiffany-e2e-fake-runtime [--bin-dir DIR]` - no-network e2e that runs planner/critic/worker/reviewer through a fake Claude Code CLI and verifies session/thread/history persistence.
+- `./scripts/tiffany-e2e-multi-runtime [--bin-dir DIR]` - no-network e2e that drives fake Codex and Gemini workers, then verifies same-role native session resume.
+- `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]` - opt-in check for installed/logged-in native CLIs. Default mode is quota-free and reports installed tools, model/auth preflight hints, native transcript stores, the orchestrator binary, and copyable next commands; `--run` sends tiny direct native prompts, and `--adapter-run` sends the same probes through `orchestrator events --worker ...` with temporary Tiffany state. Both run modes may consume model quota.
 - `./scripts/tiffany-check-examples` - run only the checked-in example project tests.
 - `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` - run the consolidated release-readiness checks; use `--full --tag vX.Y.Z` before tagging. Tagged checks enforce a 24-hour release cooldown unless `TIFFANY_RELEASE_ALLOW_FREQUENT=1` is set for an urgent fix.
 - `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]` - generate the Homebrew formula from a published release asset and source archive checksums.
@@ -314,7 +317,18 @@ both commands are actually visible on `PATH`. They also compare the installed
 package, local tap formula, and remote tap formula when Homebrew appears stuck
 on an older release.
 
-Prebuilt macOS Apple Silicon binaries are published on the GitHub Releases page after each `v*` tag. Archives include `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias. Linux, Windows, and Intel Mac users can install from source while additional prebuilt targets are being staged.
+Prebuilt release archives are published for macOS, Linux, and Windows after each `v*` tag. Archives include `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias. Source install remains available for unsupported CPU/OS combinations or local development.
+
+Current release target status:
+
+| Target | Platform | Current install path | Release asset |
+| --- | --- | --- | --- |
+| `aarch64-apple-darwin` | macOS Apple Silicon | Homebrew and GitHub Release archive | `tiffany-loop-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
+| `x86_64-apple-darwin` | Intel Mac | Homebrew and GitHub Release archive | `tiffany-loop-vX.Y.Z-x86_64-apple-darwin.tar.gz` |
+| `x86_64-unknown-linux-gnu` | Linux x86_64 | Homebrew and GitHub Release archive | `tiffany-loop-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
+| `aarch64-unknown-linux-gnu` | Linux ARM64 | Homebrew and GitHub Release archive | `tiffany-loop-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
+| `x86_64-pc-windows-msvc` | Windows x86_64 | GitHub Release archive | `tiffany-loop-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
+| `other targets` | Other CPU/OS combinations | cargo install | not published yet |
 
 Source checkout for contributors:
 
@@ -348,7 +362,7 @@ chmod +x orchestrator tiffany-loop tiffany
 ```
 
 The `tiffany-loop` package installs `tiffany-loop`, `orchestrator`, and the compatibility alias `tiffany`; the current GitHub repository name remains `Tiffany`.
-Tag releases prioritize the macOS Apple Silicon archive used by Homebrew; Intel Macs, Linux, and Windows can install from source for now.
+Tag releases publish macOS Apple Silicon, Intel Mac, Linux x86_64, Linux ARM64, and Windows x86_64 archives. Homebrew uses the macOS/Linux archives when the current CPU/OS matches and falls back to source builds for unsupported targets.
 Public Homebrew installs require the `macguffinQ/Tiffany` repository and release assets to be public.
 
 ## Quickstart
@@ -484,6 +498,7 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `./scripts/tiffany-check --dist` | Run the release-profile fork/install/bridge/example verification |
 | `./scripts/tiffany-install-smoke --smoke|--dist` | Verify installed command behavior in an isolated temporary HOME |
 | `./scripts/tiffany-check-examples` | Run only checked-in example tests |
+| `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]` | Opt-in real native CLI/Tiffany adapter check; default is quota-free preflight for binaries, models, auth hints, transcript stores, and next commands |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | Run consolidated local release-readiness checks: format, clippy, tests, examples, audit, and dist checks in full mode |
 | `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--commit --push]` | Generate and optionally commit/push the Homebrew tap formula for a published release |
 | `./scripts/tiffany-post-release-check --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--skip-install]` | Verify release assets, tap formula checksums, installed versions, doctor, and `brew test` |
@@ -553,13 +568,13 @@ Default native TUI slash commands:
 
 - `/provider` - open provider setup; supports `list`, `edit <provider>`, `delete <provider>`, `env <provider> <ENV>`, `key <provider> <value>`, and `endpoint <provider> <url>`
 - `/role` - open the role-registration form or register one role with `register <role> --provider <provider> --model-name <api-model> --runtime <runtime>`
-- `/roles` - inspect role wiring, select the active worker route, or save role/provider/model/runtime bindings
+- `/roles` - inspect role wiring as role cards with provider/model/runtime health, worker session actions, active route selection, and role/provider/model/runtime profile saves
 - `/thread` - show role session cards with runtime/model/native session, continue/history/export actions, and reuse state; `/thread clear <role>` resets a stuck native session id
 - `/continue <role|claude|codex|gemini>` - show the native CLI handoff command for a worker role
 - `/continue open <role|claude|codex|gemini>` - pause Tiffany, open the original native Claude/Codex/Gemini session, then return with Claude/Codex/Gemini transcript events plus git status/stat/patch captured into the conversation and `/history kind diff`
-- `/history` - inspect/search saved Tiffany native conversation turns and typed worker events such as answer, tool calls/results, diff, patch, file updates, approval, stderr, and final output; use `/history role <role>`, `/history thread <id>`, or `/history kind <event-kind>` to focus the stream; `/history graph` shows a compact text flow, `/history mermaid` renders a Mermaid flowchart, `/history export-graph [--text|--mermaid] [--out file]` writes a graph file, and `/history export [role <role>|thread <id>|kind <event-kind>] [--out file.md]` writes a Markdown handoff
+- `/history` - inspect/search saved Tiffany native conversation turns and typed worker events such as answer, tool calls/results, diff, patch, file updates, approval, session recovery, stderr, and final output; use `/history role <role>`, `/history thread <id>`, or `/history kind <event-kind>` to focus the stream; `/history status` compares session DB vs local native history, `/history sync` mirrors local native history into the orchestrator session DB, `/history compact [role <role>|thread <id>|kind <event-kind>]` renders a readable handoff storyline, `/history graph` shows a compact text flow, `/history mermaid` renders a Mermaid flowchart, `/history export-graph [--text|--mermaid] [--out file]` writes a graph file, and `/history export [role <role>|thread <id>|kind <event-kind>] [--out file.md]` writes a Markdown handoff
 - `/doctor` - diagnose config, runtimes, API keys, role wiring, local tools, and install surface
-- `/status` - show current session/config status
+- `/status` - show the orchestration HUD: run mode, queue depth, resolved runtime, config path, provider/model/role counts, default worker readiness, and the `/thread`/`/history status`/`/history compact` follow-up entry points
 - `/help` - show Tiffany command help
 - `/copy` - copy the last assistant response as markdown
 - `/raw` - toggle copy-friendly raw scrollback mode
@@ -588,6 +603,7 @@ Troubleshooting first:
 - `orchestrator status` prints targeted next actions, for example `/provider env minimax <ENV_NAME>`, `/provider endpoint minimax <url>`, or `orchestrator roles register worker-cc ...` when provider/model/runtime wiring is incomplete.
 - Run `/doctor` or `orchestrator doctor` when a worker exits early, a provider says `model not found`, `模型不存在`, `401/403`, or an API key appears unset.
 - Doctor checks env-var key references without printing secrets, verifies `role -> model -> provider -> runtime`, catches duplicate/missing models, and reports the local install/toolchain surface: Homebrew tap/package, Rust/cargo, Xcode/CLT, worker CLI binaries, and Codex CLI `exec --cd` compatibility.
+- On source checkouts, doctor also reports oversized Cargo `target/` caches and promotes cleanup commands such as `./scripts/tiffany-clean-targets` and `./scripts/tiffany-clean-targets --trim` into Next steps.
 - Doctor also checks whether a Homebrew-installed package actually exposes
   `tiffany-loop` and `orchestrator` on `PATH`. If `brew install` says the
   package exists but the shell cannot find it, run `eval "$(brew shellenv)"` or
@@ -768,6 +784,8 @@ cargo build --release    # release, ~5-8min first time
 # ./scripts/tiffany-clean-targets --top-deep for slower file-level detail, and
 # ./scripts/tiffany-clean-targets --trim to remove rebuildable caches while
 # keeping compiled deps and final binaries warm.
+# Run ./scripts/tiffany-clean-targets with no args to remove the old duplicate
+# tiffany-ui/codex-rs/target cache without touching shared ./target.
 
 # Test
 cargo test               # run unit and integration tests
@@ -837,6 +855,12 @@ orchestrator/
 
 ## Roadmap
 
+Current beta status:
+
+- The core loop is usable: native `tiffany-loop` TUI, provider setup, role setup, multi-turn orchestration, queueing, role session memory, native Claude/Codex/Gemini handoff, return sync, history, doctor, Homebrew packaging, and release automation are in place.
+- What remains before a 1.0-quality release is mostly hardening, not a new architecture: removing the legacy partial TUI shims after the fork adapter is fully stable and true token-by-token final answer rendering from every native runtime.
+- Practical completion estimate: about 94-95% for the current CLI/TUI orchestration goal, lower for the larger platform vision that includes plugins, VS Code, and long-running background fleet management.
+
 - [x] 7+1 layer architecture
 - [x] 3 capability providers + 3 worker runtimes
 - [x] Subagent / Critic / Reviewer / Planner (LLM-backed)
@@ -872,8 +896,13 @@ orchestrator/
 - [x] Cost budget alerts
 - [x] Background task mode (`orchestrator run --detach` + `orchestrator attach`)
 - [x] CC agent invocation from orchestrator (`--agent reviewer`)
+- [x] Untruncated final response capture in terminal chat
+- [x] Legacy root `src/tui/codex_*` shim provenance/boundary audit in release preflight
+- [x] Release target manifest and preflight guard for macOS/Linux/Windows archives
+- [x] Native Tiffany worker answer/final chunks render through Codex's active assistant stream cell
+- [x] Intel Mac, Linux, and Windows prebuilt release archive matrix
 - [ ] Remove copied partial TUI modules after the fork adapter is stable
-- [ ] Full-token streaming final responses in terminal chat
+- [ ] Live token-by-token final response rendering in terminal chat
 - [ ] VS Code extension
 
 ---

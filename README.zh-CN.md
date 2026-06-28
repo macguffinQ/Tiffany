@@ -105,7 +105,7 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 
 当前主 UI 路线已经切到完整 tiffany-loop UI：[`tiffany-ui/`](tiffany-ui/)。后续终端界面改动都应在这个 fork 里做，保留上游 Ratatui/Crossterm 架构、窗口缩放、选中复制、历史 cell、bottom pane、overlay 和退出渲染策略。
 
-旧的 [`src/tui`](src/tui/) 只作为现有 orchestrator runtime 的兼容桥接层保留。除非是迁移前必须修的窄 bug，不再继续手写终端渲染。
+旧的 [`src/tui`](src/tui/) 只作为现有 orchestrator runtime 的兼容桥接层保留。除非是迁移前必须修的窄 bug，不再继续手写终端渲染。`scripts/tiffany-check-legacy-tui-shims` 会审计复制来的 `src/tui/codex_*` 模块，确保它们只留在 fallback 边界内。
 
 开发入口：
 
@@ -117,9 +117,12 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-dev orchestrator --orchestrator-config /path/to/config.yaml`：指定 orchestrator 配置文件，同时继续让 tiffany-loop UI 配置隔离在 `TIFFANY_HOME`。
 - `./scripts/tiffany-dev orchestrator --legacy ...`：兼容旧 orchestrator CLI 桥接。
 - `./scripts/tiffany-build [cargo-build-args...]`：同时构建父工程 orchestrator 和 tiffany-loop UI，默认共用 `./target`；默认使用源码本地运行的 `--small` profile，需要普通 debug profile 时用 `--dev`，需要更快的可分发构建时用 `--fast-release`。最终 dist 二进制默认 strip，可用 `TIFFANY_NO_STRIP=1` 保留符号。需要构建后只保留最终 dist 二进制时，加 `--prune-dist-cache`。
-- `./scripts/tiffany-check --smoke`：small debug 构建、检查 fork 格式，验证隔离安装入口、legacy bridge、事件流入口，并运行示例 smoke 测试。
+- `./scripts/tiffany-check --smoke`：small debug 构建、检查 fork 格式，验证隔离安装入口、legacy bridge、事件流入口、fake Claude/Codex/Gemini runtime e2e，并运行示例 smoke 测试。
 - `./scripts/tiffany-check --dist`：用可分发的 `tiffany-dist` profile 跑同样检查，发布前使用。
 - `./scripts/tiffany-install-smoke --smoke|--dist`：在临时 HOME 中验证 `orchestrator`、`tiffany-loop` 和 `tiffany` 兼容别名，不触碰真实用户配置。
+- `./scripts/tiffany-e2e-fake-runtime [--bin-dir DIR]`：无网络 e2e，用 fake Claude Code CLI 跑 planner/critic/worker/reviewer，并验证 session/thread/history 持久化。
+- `./scripts/tiffany-e2e-multi-runtime [--bin-dir DIR]`：无网络 e2e，用 fake Codex 和 Gemini worker 跑真实 adapter，并验证同角色 native session 复用。
+- `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]`：可选真实 CLI 检查。默认模式不消耗额度，会报告本机 binary、model/auth 预检线索、原生 transcript store、orchestrator binary 和可复制下一步命令；`--run` 直接发送很小的原生 prompt，`--adapter-run` 通过临时 Tiffany 状态执行 `orchestrator events --worker ...` 检查 adapter 路径。两种运行模式都可能消耗模型额度。
 - `./scripts/tiffany-check-examples`：只运行仓库内示例项目测试。
 - `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]`：运行汇总后的发布前检查；打 tag 前使用 `--full --tag vX.Y.Z`。带 tag 的检查默认有 24 小时发版冷却；只有安装损坏、启动失败、安全修复等紧急情况才设置 `TIFFANY_RELEASE_ALLOW_FREQUENT=1` 覆盖。
 - `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]`：根据已发布 release asset 和源码包 checksum 生成 Homebrew tap 公式。
@@ -215,7 +218,18 @@ tiffany-loop doctor
 `tiffany-loop doctor` 和 `orchestrator doctor` 会检查 Homebrew package
 prefix、实际安装的 `tiffany-loop` / `orchestrator` 二进制，以及这两个命令是否真的在 `PATH` 上可见。
 
-每个 `v*` tag 发布后，GitHub Releases 会优先提供 macOS Apple Silicon 预编译二进制，压缩包内包含 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。Linux、Windows 和 Intel Mac 目前可先从源码安装，后续再补更多预编译目标。
+每个 `v*` tag 发布后，macOS、Linux 和 Windows 都会发布预编译 release 压缩包，里面包含 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。不在矩阵内的 CPU/OS 组合仍可用源码安装。
+
+当前 release 目标状态：
+
+| Target | 平台 | 当前安装方式 | Release asset |
+| --- | --- | --- | --- |
+| `aarch64-apple-darwin` | macOS Apple Silicon | Homebrew 和 GitHub Release 压缩包 | `tiffany-loop-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
+| `x86_64-apple-darwin` | Intel Mac | Homebrew 和 GitHub Release 压缩包 | `tiffany-loop-vX.Y.Z-x86_64-apple-darwin.tar.gz` |
+| `x86_64-unknown-linux-gnu` | Linux x86_64 | Homebrew 和 GitHub Release 压缩包 | `tiffany-loop-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
+| `aarch64-unknown-linux-gnu` | Linux ARM64 | Homebrew 和 GitHub Release 压缩包 | `tiffany-loop-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
+| `x86_64-pc-windows-msvc` | Windows x86_64 | GitHub Release 压缩包 | `tiffany-loop-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
+| `other targets` | 其它 CPU/OS 组合 | cargo install | 暂未发布 |
 
 贡献者源码运行：
 
@@ -249,7 +263,7 @@ chmod +x orchestrator tiffany-loop tiffany
 ```
 
 `tiffany-loop` 安装包会提供 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`；当前 GitHub 仓库名仍是 `Tiffany`。
-tag release 目前优先提供 Homebrew 使用的 macOS Apple Silicon 压缩包；Intel Mac、Linux 和 Windows 可以先从源码安装。
+tag release 会发布 macOS Apple Silicon、Intel Mac、Linux x86_64、Linux ARM64 和 Windows x86_64 压缩包。Homebrew 在当前 CPU/OS 有匹配压缩包时直接安装预编译包，其它目标回退源码构建。
 公开 Homebrew 安装要求 `macguffinQ/Tiffany` 仓库和 release assets 对外公开。
 
 ## 快速开始
@@ -372,6 +386,7 @@ behavior:
 | `./scripts/tiffany-check --dist` | 执行发布 profile 的 fork/install/bridge/example 验证 |
 | `./scripts/tiffany-install-smoke --smoke|--dist` | 在隔离临时 HOME 中验证安装后的命令行为 |
 | `./scripts/tiffany-check-examples` | 只运行仓库内示例测试 |
+| `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]` | 可选真实 native CLI/Tiffany adapter 检查；默认是不消耗额度的 binary/model/auth/history/next command 预检 |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | 执行汇总后的本地发布前检查：format、clippy、测试、示例、审计；full 模式再跑 dist 检查 |
 | `./scripts/tiffany-update-homebrew-tap --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--commit --push]` | 为已发布版本生成并可选提交/推送 Homebrew tap 公式 |
 | `./scripts/tiffany-post-release-check --tag vX.Y.Z [--tap-dir ../homebrew-tap] [--skip-install]` | 验证 release asset、tap 公式 checksum、安装版本、doctor 和 `brew test` |
@@ -450,13 +465,13 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 
 - `/provider`：打开 provider 设置；支持 `list`、`edit <provider>`、`delete <provider>`、`env <provider> <ENV>`、`key <provider> <value>`、`endpoint <provider> <url>`。
 - `/role`：打开角色注册表单，或用 `register <role> --provider <provider> --model-name <api-model> --runtime <runtime>` 直接注册一个角色。
-- `/roles`：查看角色接线、选择当前 worker 路由，或保存 role/provider/model/runtime 绑定。
+- `/roles`：用角色卡片查看 provider/model/runtime 健康状态、worker 会话入口、当前 worker 路由选择，或保存 role/provider/model/runtime profile。
 - `/thread`：用角色会话卡片查看 runtime/model/native session、continue/history/export 入口和复用状态；`/thread clear <role>` 可清掉卡住的 native session id。
 - `/continue <role|claude|codex|gemini>`：查看某个角色的原生 CLI handoff 命令。
 - `/continue open <role|claude|codex|gemini>`：暂停 Tiffany，打开原始 Claude/Codex/Gemini 会话继续工作；退出原生 CLI 后，Tiffany 会把 Claude/Codex/Gemini transcript 事件、git status、diff stat 和完整 patch 保存到对话历史，可用 `/history kind diff` 复盘。
-- `/history`：查看、搜索、导出保存的原生事件流；支持 `/history role <role>`、`/history thread <id>`、`/history kind answer|tool_result|diff|approval`；`/history graph` 显示压缩文本流程，`/history mermaid` 渲染 Mermaid 流程图，`/history export-graph [--text|--mermaid] [--out file]` 导出流程图，`/history export kind <event-kind> --out file.md` 导出 Markdown handoff。
+- `/history`：查看、搜索、导出保存的原生事件流；支持 `/history role <role>`、`/history thread <id>`、`/history kind answer|tool_result|diff|approval|session_recovery`；`/history status` 对比 session DB 和本地原生历史，`/history sync` 手动把本地原生历史镜像进 orchestrator session DB，`/history compact [role <role>|thread <id>|kind <event-kind>]` 显示可读交接摘要，`/history graph` 显示压缩文本流程，`/history mermaid` 渲染 Mermaid 流程图，`/history export-graph [--text|--mermaid] [--out file]` 导出流程图，`/history export kind <event-kind> --out file.md` 导出 Markdown handoff。
 - `/doctor`：诊断配置、runtime、API key、角色绑定、本地工具和安装状态。
-- `/status`：显示当前会话和配置状态。
+- `/status`：显示编排 HUD，包括运行状态、队列数、实际 runtime、配置路径、provider/model/role 数量、默认 worker 就绪状态，以及 `/thread`、`/history status`、`/history compact` 后续入口。
 - `/help`：显示 Tiffany 命令帮助。
 - `/copy`：复制最后一条 assistant 回复为 Markdown。
 - `/raw`：切换便于系统选中复制的 raw scrollback 模式。
@@ -476,6 +491,7 @@ ORCHESTRATOR_LEGACY_TUI=1 orchestrator tui
 - `orchestrator status` 会给出更具体的下一步，例如 `/provider env minimax <ENV_NAME>`、`/provider endpoint minimax <url>`，或 provider/model/runtime 未连通时的 `orchestrator roles register worker-cc ...`。
 - worker 提前退出、provider 报 `model not found` / `模型不存在` / `401/403`、或者 API key 看起来没生效时，先运行 `/doctor` 或 `orchestrator doctor`。
 - doctor 会在不打印密钥的前提下检查环境变量 key 引用，验证 `role -> model -> provider -> runtime` 是否连通，提示重复/缺失 model，并显示本机安装/构建环境：Homebrew tap/package、Rust/cargo、Xcode/CLT 和 worker CLI 二进制。
+- 源码 checkout 下，doctor 也会检查过大的 Cargo `target/` 构建缓存，并把 `./scripts/tiffany-clean-targets`、`./scripts/tiffany-clean-targets --trim` 这类清理命令提升到 Next steps。
 - doctor 也会检查 Homebrew 安装包里的 `tiffany-loop` 和 `orchestrator` 是否真的在 `PATH` 上可见。如果 `brew install` 显示已安装但命令找不到，运行 `eval "$(brew shellenv)"`，或把 Homebrew 的 `bin` 目录写进 shell 启动文件。
 - 脚本、CI 或 UI bridge 需要稳定读取诊断结果时，用 `orchestrator doctor --format json`，里面有 `status`、`issue_count`、`issue_summary`、`next_steps` 和诊断行。
 - macOS 下 doctor 也会提示是否选中了 Xcode beta，并在源码构建失败时给出切换到稳定 Xcode 或 Command Line Tools 的 `xcode-select` 命令。
@@ -600,6 +616,8 @@ cargo build --release
 # 用 ./scripts/tiffany-clean-targets --top 定位体积来源；
 # 用 ./scripts/tiffany-clean-targets --top-deep 查看较慢的文件级细节；
 # 用 ./scripts/tiffany-clean-targets --trim 清理可重建缓存，同时保留已编译依赖和最终二进制。
+# 不带参数运行 ./scripts/tiffany-clean-targets 会删除旧的重复
+# tiffany-ui/codex-rs/target 缓存，不会动共享 ./target。
 
 # 测试
 cargo test
@@ -624,6 +642,12 @@ cargo run -- config
 请不要提交 API Key、本地配置、`~/.orchestrator` 会话日志、数据库文件或生成的 worktree。
 
 ## 路线图
+
+当前 Beta 状态：
+
+- 核心闭环已经可用：原生 `tiffany-loop` TUI、provider 设置、角色设置、多轮编排、排队消息、角色会话记忆、Claude/Codex/Gemini 原生 handoff、返回同步、历史记录、doctor、Homebrew 打包和 release 自动化都已经接上。
+- 1.0 前主要剩硬化，不是重做架构：fork adapter 完全稳定后删除旧的局部复制 TUI shim，以及所有 native runtime 都能提供真正 token 级最终答案实时渲染。
+- 实用完成度估计：对当前 CLI/TUI 编排目标大约 94-95%；如果按更大的平台愿景算，也就是插件、VS Code 和长期后台 worker fleet，还要再往后排。
 
 已完成：
 
@@ -650,11 +674,16 @@ cargo run -- config
 - 成本预算告警
 - 后台任务和 attach
 - orchestrator 调用 Claude Code 子 agent（`--agent reviewer`）
+- terminal chat 最终答案不再按字符截断
+- 根工程旧 `src/tui/codex_*` shim 的上游来源和边界审计已接入发布前检查
+- release target 清单和发布前检查会校验 macOS/Linux/Windows 压缩包矩阵
+- 原生 Tiffany worker 的 answer/final chunk 已接入 Codex active assistant stream cell
+- Intel Mac、Linux 和 Windows 预编译 release 压缩包矩阵
 
 计划中：
 
 - fork adapter 稳定后删除旧的局部复制 TUI 模块
-- 更完整的 token 级最终答案流式输出
+- 更完整的 token 级最终答案实时渲染
 - VS Code 扩展
 
 ## License
