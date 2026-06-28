@@ -202,7 +202,7 @@ impl RoleProfileSetupView {
         let Some(choice) = choices.get(dropdown.selected) else {
             return;
         };
-        self.active_field_mut().set_value(choice.value);
+        self.active_field_mut().set_value(&choice.value);
     }
 
     pub(crate) fn draft(&self) -> RoleProfileSetupDraft {
@@ -536,7 +536,7 @@ impl Renderable for RoleProfileSetupView {
                 Paragraph::new(Line::from(vec![
                     gutter(),
                     Span::styled(format!("{marker} {} ", idx + 1), style),
-                    Span::styled(choice.label, style),
+                    Span::styled(choice.label.clone(), style),
                     Span::styled(
                         format!("  {}", choice.hint),
                         Style::default().fg(Color::DarkGray),

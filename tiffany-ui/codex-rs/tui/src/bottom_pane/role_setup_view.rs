@@ -14,6 +14,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
+use std::borrow::Cow;
 use std::cell::RefCell;
 
 use crate::render::renderable::Renderable;
@@ -45,6 +46,7 @@ pub(crate) struct RoleSetupView {
     fields: Vec<RoleSetupField>,
     active: usize,
     dropdown: Option<RoleSetupDropdown>,
+    catalog: RoleSetupCatalog,
     on_submit: RoleSetupSubmitted,
     completion: Option<ViewCompletion>,
     error: Option<String>,
@@ -62,11 +64,27 @@ struct RoleSetupDropdown {
     selected: usize,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct RoleSetupChoice {
-    pub(super) label: &'static str,
-    pub(super) value: &'static str,
-    pub(super) hint: &'static str,
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoleSetupCatalog {
+    pub(crate) roles: Vec<RoleSetupChoice>,
+    pub(crate) providers: Vec<RoleSetupChoice>,
+    pub(crate) runtimes: Vec<RoleSetupChoice>,
+    pub(crate) models: Vec<RoleSetupModelChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RoleSetupChoice {
+    pub(crate) label: Cow<'static, str>,
+    pub(crate) value: Cow<'static, str>,
+    pub(crate) hint: Cow<'static, str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RoleSetupModelChoice {
+    pub(crate) provider: String,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) hint: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +97,11 @@ enum RoleSetupFieldKind {
 }
 
 impl RoleSetupView {
-    pub(crate) fn new(draft: RoleSetupDraft, on_submit: RoleSetupSubmitted) -> Self {
+    pub(crate) fn with_catalog(
+        draft: RoleSetupDraft,
+        catalog: RoleSetupCatalog,
+        on_submit: RoleSetupSubmitted,
+    ) -> Self {
         let RoleSetupDraft {
             role,
             provider,
@@ -89,7 +111,10 @@ impl RoleSetupView {
             teams,
         } = draft;
         let api_model = if model_name.trim().is_empty() {
-            model_name_for_model_id(&provider, &model_id).unwrap_or(model_id)
+            catalog
+                .model_name_for_model_id(&provider, &model_id)
+                .or_else(|| model_name_for_model_id(&provider, &model_id))
+                .unwrap_or(model_id)
         } else {
             model_name
         };
@@ -113,6 +138,7 @@ impl RoleSetupView {
             ],
             active: 0,
             dropdown: None,
+            catalog,
             on_submit,
             completion: None,
             error: None,
@@ -158,10 +184,20 @@ impl RoleSetupView {
 
     fn choices_for_field(&self, kind: RoleSetupFieldKind) -> Vec<RoleSetupChoice> {
         match kind {
-            RoleSetupFieldKind::ModelName => {
-                model_name_choices_for_provider(&self.field_value(RoleSetupFieldKind::Provider))
+            RoleSetupFieldKind::Role => merge_choices(self.catalog.roles.clone(), kind.choices()),
+            RoleSetupFieldKind::Provider => {
+                merge_choices(self.catalog.providers.clone(), kind.choices())
             }
-            _ => kind.choices(),
+            RoleSetupFieldKind::ModelName => merge_choices(
+                self.catalog.model_name_choices_for_provider(
+                    &self.field_value(RoleSetupFieldKind::Provider),
+                ),
+                model_name_choices_for_provider(&self.field_value(RoleSetupFieldKind::Provider)),
+            ),
+            RoleSetupFieldKind::Runtime => {
+                merge_choices(self.catalog.runtimes.clone(), kind.choices())
+            }
+            RoleSetupFieldKind::Teams => kind.choices(),
         }
     }
 
@@ -203,7 +239,8 @@ impl RoleSetupView {
         let Some(choice) = choices.get(dropdown.selected) else {
             return;
         };
-        self.apply_active_choice(choice.value);
+        let value = choice.value.to_string();
+        self.apply_active_choice(&value);
     }
 
     fn apply_active_choice(&mut self, value: &str) {
@@ -284,8 +321,12 @@ impl RoleSetupView {
             draft.model_id = draft.model_name.trim().to_string();
             draft.model_name.clear();
         } else {
-            draft.model_id =
-                model_id_for_selection(&draft.provider, &draft.runtime, &draft.model_name);
+            draft.model_id = self
+                .catalog
+                .model_id_for_selection(&draft.provider, &draft.model_name)
+                .unwrap_or_else(|| {
+                    model_id_for_selection(&draft.provider, &draft.runtime, &draft.model_name)
+                });
         }
         draft
     }
@@ -463,7 +504,7 @@ impl BottomPaneView for RoleSetupView {
             if let Some(choice) = self.active_choices().into_iter().find(|choice| {
                 choice.value.eq_ignore_ascii_case(value) || choice.label.eq_ignore_ascii_case(value)
             }) {
-                self.apply_active_choice(choice.value);
+                self.apply_active_choice(&choice.value);
             } else {
                 self.error = Some("choose from options".to_string());
             }
@@ -626,7 +667,7 @@ impl Renderable for RoleSetupView {
                 Paragraph::new(Line::from(vec![
                     gutter(),
                     Span::styled(format!("{marker} {} ", idx + 1), style),
-                    Span::styled(choice.label, style),
+                    Span::styled(choice.label.clone(), style),
                     if choice.hint.is_empty() {
                         Span::raw("")
                     } else {
@@ -700,6 +741,69 @@ impl Renderable for RoleSetupView {
 
 fn gutter() -> Span<'static> {
     "▌ ".cyan()
+}
+
+impl RoleSetupCatalog {
+    fn model_name_choices_for_provider(&self, provider: &str) -> Vec<RoleSetupChoice> {
+        self.models
+            .iter()
+            .filter(|model| model.provider.eq_ignore_ascii_case(provider))
+            .map(|model| {
+                RoleSetupChoice::new(model.name.clone(), model.name.clone(), model.hint.clone())
+            })
+            .collect()
+    }
+
+    fn model_name_for_model_id(&self, provider: &str, model_id: &str) -> Option<String> {
+        self.models
+            .iter()
+            .find(|model| {
+                model.provider.eq_ignore_ascii_case(provider)
+                    && model.id.eq_ignore_ascii_case(model_id)
+            })
+            .map(|model| model.name.clone())
+    }
+
+    fn model_id_for_selection(&self, provider: &str, model_name: &str) -> Option<String> {
+        self.models
+            .iter()
+            .find(|model| {
+                model.provider.eq_ignore_ascii_case(provider)
+                    && (model.name.eq_ignore_ascii_case(model_name)
+                        || model.id.eq_ignore_ascii_case(model_name))
+            })
+            .map(|model| model.id.clone())
+    }
+}
+
+impl RoleSetupChoice {
+    pub(crate) fn new(
+        label: impl Into<Cow<'static, str>>,
+        value: impl Into<Cow<'static, str>>,
+        hint: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+            hint: hint.into(),
+        }
+    }
+}
+
+impl RoleSetupModelChoice {
+    pub(crate) fn new(
+        provider: impl Into<String>,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider: provider.into(),
+            id: id.into(),
+            name: name.into(),
+            hint: hint.into(),
+        }
+    }
 }
 
 impl RoleSetupFieldKind {
@@ -940,7 +1044,7 @@ fn default_provider_setup(provider: &str) -> Option<RoleDefaults> {
         "google" | "gemini" => Some(RoleDefaults {
             provider: "google",
             model_name: "gemini-1.5-pro",
-            runtime: "direct",
+            runtime: "gemini",
             teams: "no",
         }),
         "deepseek" => Some(RoleDefaults {
@@ -996,7 +1100,25 @@ pub(super) fn choice(
     value: &'static str,
     hint: &'static str,
 ) -> RoleSetupChoice {
-    RoleSetupChoice { label, value, hint }
+    RoleSetupChoice::new(label, value, hint)
+}
+
+fn merge_choices(
+    mut preferred: Vec<RoleSetupChoice>,
+    fallback: Vec<RoleSetupChoice>,
+) -> Vec<RoleSetupChoice> {
+    for choice in fallback {
+        let duplicate = preferred.iter().any(|existing| {
+            existing.value.eq_ignore_ascii_case(&choice.value)
+                || (!existing.label.is_empty()
+                    && !choice.label.is_empty()
+                    && existing.label.eq_ignore_ascii_case(&choice.label))
+        });
+        if !duplicate {
+            preferred.push(choice);
+        }
+    }
+    preferred
 }
 
 pub(super) fn dropdown_window_start(selected: usize, len: usize, visible: usize) -> usize {
@@ -1070,5 +1192,45 @@ fn role_setup_preview(draft: &RoleSetupDraft) -> String {
     } else {
         draft.runtime.trim()
     };
-    format!("roles register {role} -> {model} via {provider}/{runtime}")
+    format!("roles register {role} -> {provider}/{model} @ {runtime} (model id auto)")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_catalog_filters_models_by_provider_and_preserves_model_id() {
+        let catalog = RoleSetupCatalog {
+            providers: vec![RoleSetupChoice::new("acme", "acme", "configured")],
+            models: vec![
+                RoleSetupModelChoice::new("acme", "fast", "fast-v2", "id fast"),
+                RoleSetupModelChoice::new("other", "slow", "slow-v1", "id slow"),
+            ],
+            ..RoleSetupCatalog::default()
+        };
+        let view = RoleSetupView::with_catalog(
+            RoleSetupDraft {
+                role: "worker-codex".to_string(),
+                provider: "acme".to_string(),
+                model_id: "fast".to_string(),
+                model_name: String::new(),
+                runtime: "codex".to_string(),
+                teams: "no".to_string(),
+            },
+            catalog,
+            Box::new(|_| Ok(())),
+        );
+
+        let choices = view.choices_for_field(RoleSetupFieldKind::ModelName);
+
+        assert_eq!(view.draft().model_name, "fast-v2");
+        assert_eq!(view.draft().model_id, "fast");
+        assert_eq!(choices[0].label.as_ref(), "fast-v2");
+        assert!(
+            choices
+                .iter()
+                .all(|choice| choice.label.as_ref() != "slow-v1")
+        );
+    }
 }
