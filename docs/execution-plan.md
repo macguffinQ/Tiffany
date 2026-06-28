@@ -55,12 +55,13 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   worker output kind selection, dedupe scope/key calculation, and compact plan
   summary shaping. `codex-tui` now adapts `TiffanyProgressEvent` into the bridge
   view and keeps Ratatui rendering local.
-- **Next:** continue F5+ extraction with another small pure slice, or switch to
-  F8 full `codex-tui --lib` stability work before CI depends on it.
-- **Tech debt noted (not blocking):** a full `cargo test -p codex-tui --lib` run
-  hangs / has snapshot drift unrelated to F4 — Codex killed a stuck run and
-  cleaned `.snap.new`. Track as queued F8 before it bites CI. Targeted fast-gate
-  tests all pass.
+- **F8 ✅ implemented locally and verified.** Full `codex-tui --lib` now passes
+  serially after stabilizing no-active-turn app-server paths, no-turn side-thread
+  discard behavior, large-stack test wrappers, Tiffany snapshot drift, and
+  trailing-whitespace-free terminal snapshot helpers.
+- **Next:** continue F5+ extraction with another small pure slice, then decide
+  whether to make the remaining app-server-heavy tests parallel-stable or keep
+  the full TUI gate documented as serial.
 - **F7 was M0-required and is now satisfied locally:** the slim runtime-only
   build exists and smoke-passes before M0 / `v0.2`; full release preflight still
   remains gated before tagging.

@@ -1808,7 +1808,7 @@ mod tests {
             for x in 0..buf.area().width {
                 row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
             }
-            lines.push(row);
+            lines.push(row.trim_end().to_string());
         }
         lines.join("\n")
     }

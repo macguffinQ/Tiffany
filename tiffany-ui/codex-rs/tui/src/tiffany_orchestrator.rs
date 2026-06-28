@@ -17317,7 +17317,7 @@ mod tests {
         assert!(visible.contains(" · worker-cc"));
         assert!(visible.contains("2. Update the forked TUI renderer"));
         assert!(visible.contains(" · worker-codex"));
-        assert!(visible.contains("… 1 more"));
+        assert!(visible.contains("... 1 more"));
         assert!(!visible.contains("agent:"));
         assert!(!visible.contains("4. Run the smoke check"));
     }

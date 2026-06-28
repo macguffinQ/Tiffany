@@ -528,11 +528,6 @@ impl App {
                         }
                     }
                     unreachable!("interrupt retry loop should return");
-                } else {
-                    app_server
-                        .startup_interrupt(thread_id)
-                        .await
-                        .wrap_err("turn/interrupt failed in TUI")?;
                 }
                 Ok(true)
             }

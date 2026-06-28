@@ -393,7 +393,7 @@ mod tests {
                         line.push_str(symbol);
                     }
                 }
-                line
+                line.trim_end().to_string()
             })
             .collect();
         lines.join("\n")

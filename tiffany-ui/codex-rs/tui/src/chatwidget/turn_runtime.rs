@@ -419,7 +419,7 @@ impl ChatWidget {
             }
             Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached) => {
                 self.on_error(
-                    "Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex."
+                    "Usage limit reached. You've reached your usage limit. Increase your limits to continue using tiffany-loop."
                         .to_string(),
                 );
             }

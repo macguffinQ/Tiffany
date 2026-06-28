@@ -9,6 +9,7 @@
 
 use super::*;
 use crate::chatwidget::InterruptedTurnNoticeMode;
+use codex_app_server_protocol::ThreadUnsubscribeStatus;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
@@ -362,12 +363,24 @@ impl App {
             self.chat_widget.add_error_message(message);
             return false;
         }
-        if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
-            let message =
-                format!("Failed to close side conversation {thread_id}; it is still open: {err}");
-            tracing::warn!("{message}");
-            self.chat_widget.add_error_message(message);
-            return false;
+        match app_server.thread_unsubscribe(thread_id).await {
+            Ok(ThreadUnsubscribeStatus::NotLoaded) => {
+                let message = format!(
+                    "Failed to close side conversation {thread_id}; it is not loaded by the app server."
+                );
+                tracing::warn!("{message}");
+                self.chat_widget.add_error_message(message);
+                return false;
+            }
+            Ok(ThreadUnsubscribeStatus::NotSubscribed | ThreadUnsubscribeStatus::Unsubscribed) => {}
+            Err(err) => {
+                let message = format!(
+                    "Failed to close side conversation {thread_id}; it is still open: {err}"
+                );
+                tracing::warn!("{message}");
+                self.chat_widget.add_error_message(message);
+                return false;
+            }
         }
         self.discard_thread_local_state(thread_id).await;
         true
@@ -399,7 +412,7 @@ impl App {
             if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                 app_server.turn_interrupt(thread_id, turn_id).await
             } else {
-                app_server.startup_interrupt(thread_id).await
+                Ok(())
             };
         interrupt_result.map_err(|err| {
             format!("Failed to close side conversation {thread_id}; it is still open: {err}")

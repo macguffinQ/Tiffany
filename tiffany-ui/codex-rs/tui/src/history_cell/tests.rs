@@ -1005,8 +1005,8 @@ fn prefixed_wrapped_history_cell_indents_wrapped_lines() {
     assert_eq!(
         rendered,
         vec![
-            "✔ You approved codex to".to_string(),
-            "  run echo something".to_string(),
+            "✔ You approved tiffany".to_string(),
+            "  to run echo something".to_string(),
             "  really long to ensure".to_string(),
             "  wrapping happens this".to_string(),
             "  time".to_string(),

@@ -3,8 +3,8 @@ source: tui/src/bottom_pane/mod.rs
 expression: "render_snapshot(&pane, area)"
 ---
 • Working (0s • esc to interr…
-                              
-                              
-› Ask Codex to do anything    
-                              
+
+
+› Ask tiffany-loop to do anyt
+
            100% context left

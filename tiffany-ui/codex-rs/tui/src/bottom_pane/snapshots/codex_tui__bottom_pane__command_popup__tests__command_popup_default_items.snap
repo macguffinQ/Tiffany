@@ -27,11 +27,14 @@ expression: commands
 /provider - configure tiffany-loop orchestrator providers
 /role - register one tiffany-loop orchestrator role
 /roles - inspect or register tiffany-loop orchestrator roles
+/queue - inspect or manage queued Tiffany follow-up prompts
 /thread - inspect or clear stable worker thread sessions
 /jobs - inspect persisted Tiffany queue jobs
 /history - inspect, search, export, or graph native Tiffany conversation history
 /approvals - show native worker approval requests
 /continue - show or open a worker's native CLI session
+/process - show captured native worker process events
+/o - fold or expand Tiffany process detail
 /doctor - diagnose tiffany-loop orchestrator setup
 /help - show Tiffany orchestrator commands
 /agent - switch the active agent thread

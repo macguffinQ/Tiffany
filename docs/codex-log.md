@@ -199,3 +199,28 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - Full `cargo test -p codex-tui --lib` remains queued as F8.
 - Next:
   - Either continue F5+ with another pure bridge slice, or switch to F8 and stabilize the full codex-tui lib test before release CI depends on it.
+
+## F8 — full codex-tui lib-test stabilization completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Stabilize codex tui lib tests`
+- Build/tests:
+  - Detected local Claude Code update: `claude --version` reports `2.1.193 (Claude Code)`.
+  - `claude --help` still exposes the runtime flags Tiffany depends on: `--print`, `--output-format`, `--resume`, `--continue`, `--fork-session`, `--session-id`, and permission-mode flags.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui --lib --quiet -- --test-threads=1` — green, 3149 passed, 0 failed, 1 ignored, 359.48s.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+  - No `.snap.new` files remain.
+- Decisions:
+  - Treated no-active-turn interrupt/discard as a handled no-op instead of routing through app-server startup interrupt paths.
+  - Added large-stack test wrappers for app-server-heavy TUI tests to avoid stack-overflow aborts in full lib runs.
+  - Accepted Tiffany branding/version/menu snapshot drift from the Codex fork.
+  - Updated rate-limit and prompt wording from `codex` / `Codex` to `tiffany-loop` where the visible product name is Tiffany.
+  - Normalized terminal snapshot helpers to trim trailing row padding before snapshot assertion; this keeps `git diff --check` clean without changing real TUI rendering.
+- Blockers / questions for Claude:
+  - No blocker for F8.
+  - The final full gate is verified in serial mode. Parallel full-test behavior can be a separate hardening task because app-server-heavy tests are still expensive and were historically flaky when run concurrently.
+- Next:
+  - Continue F5+ with the next small pure bridge slice, or add an explicit CI script for the serial `codex-tui --lib` gate before release preflight starts depending on it.

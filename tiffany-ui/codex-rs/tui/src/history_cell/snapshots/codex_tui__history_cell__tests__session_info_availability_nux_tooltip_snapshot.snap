@@ -1,10 +1,10 @@
 ---
 source: tui/src/history_cell/tests.rs
-assertion_line: 638
+assertion_line: 640
 expression: rendered
 ---
 ╭─────────────────────────────────────╮
-│ >_ tiffany-loop (v0.1.18)           │
+│ >_ tiffany-loop (v0.1.33)           │
 │                                     │
 │ model:     gpt-5   /model to change │
 │ directory: /tmp/project             │
