@@ -353,6 +353,46 @@ run_self_test() {
   grep -Fq "✓ claude transcripts: 1 file(s)" <<<"$output"
   grep -Fq "✓ codex transcripts: 1 file(s)" <<<"$output"
   grep -Fq "✓ gemini transcripts: 1 file(s)" <<<"$output"
+
+  cat >"$tmp_root/thread-worker-cc-self-test.log" <<'EOF'
+Worker thread 00000000
+Session card
+  role: worker-cc
+  native session: native-claude
+Commands
+  native resume: claude --resume native-claude
+  native handoff: cd /tmp/project && claude --resume native-claude
+  TUI resume: /continue open worker-cc
+EOF
+  assert_adapter_thread_detail thread-worker-cc-self-test worker-cc
+
+  cat >"$tmp_root/thread-worker-codex-self-test.log" <<'EOF'
+Worker thread 00000000
+Session card
+  role: worker-codex
+  native session: native-codex
+Commands
+  native resume: codex exec resume native-codex
+  native handoff: cd /tmp/project && codex resume native-codex
+  TUI resume: /continue open worker-codex
+EOF
+  assert_adapter_thread_detail thread-worker-codex-self-test worker-codex
+
+  cat >"$tmp_root/thread-worker-gemini-self-test.log" <<'EOF'
+Worker thread 00000000
+Session card
+  role: worker-gemini
+  native session: native-gemini
+Commands
+  native resume: gemini --resume native-gemini
+  native handoff: cd /tmp/project && gemini --resume native-gemini
+  TUI resume: /continue open worker-gemini
+EOF
+  assert_adapter_thread_detail thread-worker-gemini-self-test worker-gemini
+
+  assert_same_adapter_state worker-codex \
+    "tiffany-thread-1|native-codex" \
+    "tiffany-thread-1|native-codex"
   echo "real runtime check self-test passed"
 }
 

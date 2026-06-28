@@ -794,3 +794,23 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M1 provider/role setup polish or switch back to M2 worker waterfall cleanup depending on the next plan update.
+
+## M3 real-runtime handoff self-test strengthened — 2026-06-29
+
+- Commits:
+  - this commit: `Cover real runtime handoff self-test`
+- Build/tests:
+  - `./scripts/tiffany-real-runtime-check --self-test` — green.
+  - `./scripts/tiffany-check-script-helpers` — green.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Extended the quota-free real-runtime self-test so it now covers `/thread` detail handoff assertions for Claude Code, Codex, and Gemini role sessions.
+  - Wired `tiffany-real-runtime-check --self-test` into the script helper gate, so regressions in native resume/TUI resume/thread-detail wording are caught before live runtime checks.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M3 by running or hardening `--adapter-run` per runtime where local auth/quota permits, then return to M2 waterfall cleanup for remaining real-output noise.
