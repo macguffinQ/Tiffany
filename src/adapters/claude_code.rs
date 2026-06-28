@@ -165,16 +165,16 @@ impl WorkerAdapter for ClaudeCodeAdapter {
         let setting_sources = claude_setting_sources_for_provider(provider_for_model);
 
         let mut cmd = Command::new(&self.binary);
-        cmd.args(claude_worker_args(
+        cmd.args(claude_worker_args(ClaudeWorkerArgs {
             setting_sources,
-            &model,
-            &worktree,
-            task.cc_agent_hint.as_deref(),
-            self.bypass_permissions,
-            session.native_session_id.as_deref(),
-            (!full_system_prompt.is_empty()).then_some(full_system_prompt.as_str()),
-            &task.prompt,
-        ))
+            model: &model,
+            worktree: &worktree,
+            cc_agent_hint: task.cc_agent_hint.as_deref(),
+            bypass_permissions: self.bypass_permissions,
+            native_session_id: session.native_session_id.as_deref(),
+            system_prompt: (!full_system_prompt.is_empty()).then_some(full_system_prompt.as_str()),
+            prompt: &task.prompt,
+        }))
         .kill_on_drop(true)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -320,51 +320,58 @@ impl WorkerAdapter for ClaudeCodeAdapter {
     }
 }
 
-fn claude_worker_args(
-    setting_sources: &str,
-    model: &str,
-    worktree: &std::path::Path,
-    cc_agent_hint: Option<&str>,
+struct ClaudeWorkerArgs<'a> {
+    setting_sources: &'a str,
+    model: &'a str,
+    worktree: &'a std::path::Path,
+    cc_agent_hint: Option<&'a str>,
     bypass_permissions: bool,
-    native_session_id: Option<&str>,
-    system_prompt: Option<&str>,
-    prompt: &str,
-) -> Vec<String> {
+    native_session_id: Option<&'a str>,
+    system_prompt: Option<&'a str>,
+    prompt: &'a str,
+}
+
+fn claude_worker_args(input: ClaudeWorkerArgs<'_>) -> Vec<String> {
     let mut args = vec![
         "--print".to_string(),
         "--setting-sources".to_string(),
-        setting_sources.to_string(),
+        input.setting_sources.to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--model".to_string(),
-        model.to_string(),
+        input.model.to_string(),
         "--add-dir".to_string(),
-        worktree.display().to_string(),
+        input.worktree.display().to_string(),
         "--verbose".to_string(),
     ];
-    if let Some(session_id) = native_session_id
+    if let Some(session_id) = input
+        .native_session_id
         .map(str::trim)
         .filter(|session_id| !session_id.is_empty())
     {
         args.push("--resume".to_string());
         args.push(session_id.to_string());
     }
-    if let Some(agent) = cc_agent_hint
+    if let Some(agent) = input
+        .cc_agent_hint
         .map(str::trim)
         .filter(|agent| !agent.is_empty())
     {
         args.push("--agent".to_string());
         args.push(agent.to_string());
     }
-    if bypass_permissions {
+    if input.bypass_permissions {
         args.push("--permission-mode".to_string());
         args.push("bypassPermissions".to_string());
     }
-    if let Some(system_prompt) = system_prompt.filter(|prompt| !prompt.trim().is_empty()) {
+    if let Some(system_prompt) = input
+        .system_prompt
+        .filter(|prompt| !prompt.trim().is_empty())
+    {
         args.push("--append-system-prompt".to_string());
         args.push(system_prompt.to_string());
     }
-    args.push(prompt.to_string());
+    args.push(input.prompt.to_string());
     args
 }
 
@@ -478,16 +485,16 @@ mod tests {
 
     #[test]
     fn claude_worker_args_include_cc_subagent_when_set() {
-        let args = claude_worker_args(
-            "project,local",
-            "sonnet",
-            std::path::Path::new("/tmp/project"),
-            Some("reviewer"),
-            true,
-            Some("123e4567-e89b-42d3-a456-426614174000"),
-            Some("system"),
-            "do the work",
-        );
+        let args = claude_worker_args(ClaudeWorkerArgs {
+            setting_sources: "project,local",
+            model: "sonnet",
+            worktree: std::path::Path::new("/tmp/project"),
+            cc_agent_hint: Some("reviewer"),
+            bypass_permissions: true,
+            native_session_id: Some("123e4567-e89b-42d3-a456-426614174000"),
+            system_prompt: Some("system"),
+            prompt: "do the work",
+        });
 
         assert!(args
             .windows(2)
@@ -512,16 +519,16 @@ mod tests {
 
     #[test]
     fn claude_worker_args_skip_empty_cc_subagent() {
-        let args = claude_worker_args(
-            "project,local",
-            "sonnet",
-            std::path::Path::new("/tmp/project"),
-            Some("  "),
-            false,
-            Some("  "),
-            None,
-            "do the work",
-        );
+        let args = claude_worker_args(ClaudeWorkerArgs {
+            setting_sources: "project,local",
+            model: "sonnet",
+            worktree: std::path::Path::new("/tmp/project"),
+            cc_agent_hint: Some("  "),
+            bypass_permissions: false,
+            native_session_id: Some("  "),
+            system_prompt: None,
+            prompt: "do the work",
+        });
 
         assert!(!args.iter().any(|arg| arg == "--agent"));
         assert!(!args.iter().any(|arg| arg == "--permission-mode"));
@@ -559,16 +566,16 @@ mod tests {
 
     #[test]
     fn claude_worker_args_use_requested_setting_sources() {
-        let args = claude_worker_args(
-            "user,project,local",
-            "sonnet",
-            std::path::Path::new("/tmp/project"),
-            None,
-            false,
-            None,
-            None,
-            "hi",
-        );
+        let args = claude_worker_args(ClaudeWorkerArgs {
+            setting_sources: "user,project,local",
+            model: "sonnet",
+            worktree: std::path::Path::new("/tmp/project"),
+            cc_agent_hint: None,
+            bypass_permissions: false,
+            native_session_id: None,
+            system_prompt: None,
+            prompt: "hi",
+        });
 
         assert!(args
             .windows(2)

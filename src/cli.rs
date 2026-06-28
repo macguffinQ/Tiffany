@@ -3185,11 +3185,10 @@ fn native_thread_interactive_resume_command(cfg: &Config, thread: &WorkerThread)
 }
 
 fn cli_tui_continue_command(thread: &WorkerThread) -> String {
-    if thread.agent == "claude-code" || thread.runtime == "claude-code" {
-        format!("/continue open {}", thread.role)
-    } else if thread.agent == "codex" || thread.runtime == "codex" {
-        format!("/continue open {}", thread.role)
-    } else if thread.agent == "gemini" || thread.runtime == "gemini" {
+    if matches!(
+        (thread.agent.as_str(), thread.runtime.as_str()),
+        ("claude-code" | "codex" | "gemini", _) | (_, "claude-code" | "codex" | "gemini")
+    ) {
         format!("/continue open {}", thread.role)
     } else {
         "none".to_string()

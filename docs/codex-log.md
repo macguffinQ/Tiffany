@@ -533,7 +533,7 @@ Hard rules while executing anything from `docs/execution-plan.md`:
 ## F9 — release build-time regression gate completed locally — 2026-06-28
 
 - Commits:
-  - pending commit: `Add release build-time regression gate`
+  - `4b813ea` Add release build-time regression gate
 - Build/tests:
   - `bash -n scripts/tiffany-build-time-gate` — green.
   - `./scripts/tiffany-build-time-gate --self-test` — green.
@@ -559,3 +559,32 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No F9 blocker. Claude's updated plan authorizes push + `v0.2` only after the pending F9 commit exists and `./scripts/tiffany-release-preflight --full --tag v0.2` passes.
 - Next:
   - Commit F9, run the full `v0.2` preflight gate, then push/tag only if it is green.
+
+## v0.2 release version alignment in progress — 2026-06-28
+
+- Commits:
+  - pending commit: `Prepare v0.2 release`
+- Build/tests:
+  - `./scripts/tiffany-release-preflight --quick --tag v0.2` initially passed
+    version checks after normalizing `v0.2` to package version `0.2.0`, then
+    exposed clippy issues and version snapshot drift.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt` — green.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui update_available_history_cell_snapshot --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui session_info_availability_nux_tooltip_snapshot --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui status_snapshot --lib --quiet` — green, 24 passed.
+  - `bash -n scripts/tiffany-release-preflight` — green.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_orchestrator --lib --quiet` — green, 243 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui slash_commands --lib --quiet` — green, 194 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui update_action --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_runtime_marker_disables_upstream_update_checks --lib --quiet` — green, 1 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Bumped root `tiffany-loop`, `tiffany-cli`, and `codex-tui` package versions to `0.2.0` and refreshed both lockfiles.
+  - Added `CHANGELOG.md` release entry `## [0.2.0] - 2026-06-28`.
+  - Allowed `scripts/tiffany-release-preflight --tag v0.2` to match Cargo package version `0.2.0` by normalizing short `major.minor` release tags.
+  - Fixed release-preflight clippy findings by grouping Claude worker args and worker recovery progress fields, merging identical continue-command branches, and applying the suggested `unwrap_or` / needless-borrow cleanups.
+  - Accepted version-only TUI snapshots from `0.1.33` to `0.2.0`.
+  - Updated the release preflight targeted `codex-tui` tests to pass `--lib`, after the full preflight reached those checks and stalled in unnecessary binary/test target linking.
+- Blockers / questions for Claude:
+  - None yet. Next required gate remains `./scripts/tiffany-release-preflight --full --tag v0.2`; push/tag only if green.

@@ -143,6 +143,15 @@ check_changelog_release_entry() {
   echo "CHANGELOG.md contains release entry for $expected"
 }
 
+normalize_release_tag_version() {
+  local version="$1"
+  case "$version" in
+    *.*.*) printf '%s\n' "$version" ;;
+    *.*) printf '%s.0\n' "$version" ;;
+    *) printf '%s\n' "$version" ;;
+  esac
+}
+
 previous_release_tag() {
   local current_tag="$1"
   git -C "$repo_dir" tag --list 'v[0-9]*' --sort=-v:refname | while read -r tag; do
@@ -169,7 +178,8 @@ if [[ -n "$release_tag" ]]; then
     echo "Could not read root package version from Cargo.toml" >&2
     exit 1
   fi
-  if [[ "$tag_version" != "$package_version" ]]; then
+  normalized_tag_version="$(normalize_release_tag_version "$tag_version")"
+  if [[ "$normalized_tag_version" != "$package_version" ]]; then
     echo "Tag $release_tag does not match Cargo.toml package version $package_version" >&2
     exit 1
   fi
@@ -248,16 +258,16 @@ step "tiffany fork targeted format"
 (cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo fmt -p codex-tui -p tiffany-cli -- --check)
 
 step "tiffany-loop orchestrator targeted tests"
-(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui tiffany_orchestrator)
+(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui tiffany_orchestrator --lib)
 
 step "tiffany slash command targeted tests"
-(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui slash_commands)
+(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui slash_commands --lib)
 
 step "tiffany update action targeted tests"
-(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui update_action)
+(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui update_action --lib)
 
 step "tiffany runtime update guard targeted tests"
-(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui tiffany_runtime_marker_disables_upstream_update_checks)
+(cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo test -p codex-tui tiffany_runtime_marker_disables_upstream_update_checks --lib)
 
 if [[ "$mode" == "full" || -n "$release_tag" || "${TIFFANY_PREFLIGHT_CODEX_TUI_LIB:-0}" == "1" ]]; then
   step "tiffany codex-tui serial lib tests"

@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.2.0] - 2026-06-28
+
+- Added a release build-time regression gate for the full multi-call
+  `tiffany-loop` binary, with checked-in per-target baselines and CI/preflight
+  validation.
 - Native Tiffany orchestrator mode now restores recent multi-turn context per
   working directory from `~/.tiffany/tiffany-orchestrator/memory.json`, so
   follow-up prompts continue to work after restarting the TUI.

@@ -136,8 +136,7 @@ pub(crate) fn stream_cli_session_events(
                     task_id,
                     ts: Utc::now(),
                     kind: classify(&line),
-                    payload: serde_json::from_str(&line)
-                        .unwrap_or_else(|_| serde_json::Value::String(line)),
+                    payload: serde_json::from_str(&line).unwrap_or(serde_json::Value::String(line)),
                 });
             }
 

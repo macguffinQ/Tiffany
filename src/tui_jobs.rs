@@ -38,7 +38,7 @@ pub fn format_tui_job_detail(
 
 fn format_tui_jobs_block(store: &SessionStore, jobs: &[TuiJob], surface: TuiJobsSurface) -> String {
     let active = store.list_active_tui_jobs().unwrap_or_default();
-    let counts = TuiJobCounts::from_jobs(&jobs);
+    let counts = TuiJobCounts::from_jobs(jobs);
     let mut out = format!(
         "Jobs\n  active: {}  queued: {}  running: {}  done: {}  failed: {}  cancelled: {}  shown: {}\n\n",
         active.len(),

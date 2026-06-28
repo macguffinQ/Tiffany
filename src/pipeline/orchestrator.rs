@@ -941,13 +941,14 @@ impl Orchestrator {
                             }
                             emit_worker_recovery_progress(
                                 &lifecycle_tx,
-                                task_id,
-                                &agent,
-                                &worker_role,
-                                thread.id,
-                                locked_task.native_session_id.clone(),
-                                "busy",
-                                &format!(
+                                WorkerRecoveryProgress {
+                                    task_id,
+                                    agent: &agent,
+                                    role: &worker_role,
+                                    thread_id: thread.id,
+                                    native_session_id: locked_task.native_session_id.clone(),
+                                    recovery: "busy",
+                                    message: &format!(
                                     "native session busy · waiting for saved session {} and retry {}/{} after {}ms with the same native session",
                                     locked_task
                                         .native_session_id
@@ -956,7 +957,8 @@ impl Orchestrator {
                                     attempt + 1,
                                     NATIVE_SESSION_BUSY_RETRY_DELAYS_MS.len(),
                                     delay_ms
-                                ),
+                                    ),
+                                },
                             );
                             tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
                             res = adapter.start(&locked_task, Some(event_tx.clone())).await;
@@ -972,16 +974,18 @@ impl Orchestrator {
                                 Ok(()) => {
                                     emit_worker_recovery_progress(
                                         &lifecycle_tx,
-                                        task_id,
-                                        &agent,
-                                        &worker_role,
-                                        thread.id,
-                                        previous_native.clone(),
-                                        "missing",
-                                        &format!(
+                                        WorkerRecoveryProgress {
+                                            task_id,
+                                            agent: &agent,
+                                            role: &worker_role,
+                                            thread_id: thread.id,
+                                            native_session_id: previous_native.clone(),
+                                            recovery: "missing",
+                                            message: &format!(
                                             "native session missing · cleared saved session {} and retrying once with a fresh native session",
                                             previous_native.as_deref().unwrap_or("unknown")
-                                        ),
+                                            ),
+                                        },
                                     );
                                     res = adapter.start(&locked_task, Some(event_tx.clone())).await;
                                 }
@@ -1575,24 +1579,28 @@ fn is_recoverable_native_session_error(message: &str) -> bool {
     is_native_session_occupied(message) || is_native_session_missing(message)
 }
 
-fn emit_worker_recovery_progress(
-    progress_tx: &UnboundedSender<RunProgress>,
+struct WorkerRecoveryProgress<'a> {
     task_id: Uuid,
-    agent: &str,
-    role: &str,
+    agent: &'a str,
+    role: &'a str,
     thread_id: Uuid,
     native_session_id: Option<String>,
-    recovery: &str,
-    message: &str,
+    recovery: &'a str,
+    message: &'a str,
+}
+
+fn emit_worker_recovery_progress(
+    progress_tx: &UnboundedSender<RunProgress>,
+    progress: WorkerRecoveryProgress<'_>,
 ) {
     let _ = progress_tx.send(RunProgress::WorkerRecovery {
-        task_id,
-        agent: agent.to_string(),
-        role: role.to_string(),
-        thread_id,
-        native_session_id,
-        recovery: recovery.to_string(),
-        content: message.to_string(),
+        task_id: progress.task_id,
+        agent: progress.agent.to_string(),
+        role: progress.role.to_string(),
+        thread_id: progress.thread_id,
+        native_session_id: progress.native_session_id,
+        recovery: progress.recovery.to_string(),
+        content: progress.message.to_string(),
     });
 }
 
