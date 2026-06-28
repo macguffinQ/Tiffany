@@ -1,0 +1,16 @@
+[package]
+name = "tiffany-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "tiffany_bridge"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_yaml = { workspace = true }

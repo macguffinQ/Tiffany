@@ -26,7 +26,7 @@ future upstream backports impossible to review.
 - This is a vendor-freeze fork with manual backports, not a scheduled rebase.
 - Upstream Ratatui/Crossterm app architecture should remain intact.
 - Tiffany-specific product logic should move toward
-  `tiffany-ui/tiffany-bridge/` one module at a time.
+  `tiffany-ui/codex-rs/tiffany-bridge/` one module at a time.
 - Fork-side Codex files should become thin seams that delegate to Tiffany-owned
   bridge code.
 - Do not do a big-bang extraction of `tui/src/tiffany_orchestrator.rs`; each
@@ -65,7 +65,7 @@ unless a Tiffany requirement explicitly changes it.
   provider, role, queue, and orchestration behavior
 - `tiffany-ui/codex-rs/tui/src/bottom_pane/snapshots/*command_popup*` Tiffany
   command-menu snapshots
-- Future bridge crate: `tiffany-ui/tiffany-bridge/**`
+- Future bridge crate: `tiffany-ui/codex-rs/tiffany-bridge/**`
 
 ## Vendored-Untouched Default
 
@@ -85,3 +85,6 @@ Format: `YYYY-MM-DD - path - reason`.
 - 2026-06-28 - `tiffany-ui/codex-rs/Cargo.toml` - planned F4 bridge wiring will
   add `tiffany-bridge` as a local workspace dependency; no other workspace-wide
   dependency edits are covered by this entry.
+- 2026-06-28 - `tiffany-ui/codex-rs/tui/Cargo.toml` - F4 bridge wiring adds the
+  local `tiffany-bridge` dependency so `codex-tui` can delegate Tiffany-owned
+  config parsing logic out of `tiffany_orchestrator.rs`.

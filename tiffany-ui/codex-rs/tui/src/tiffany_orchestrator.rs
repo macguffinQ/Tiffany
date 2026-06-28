@@ -16,6 +16,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
+use tiffany_bridge::ConfigSummary as TiffanyConfigSummary;
+use tiffany_bridge::WorkerReadinessStatus as TiffanyWorkerReadinessStatus;
 use tiffany_event_format as event_format;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
@@ -80,31 +82,6 @@ enum TiffanyConfigReadiness {
     Missing { path: String },
     Invalid { path: String, message: String },
     Ready(TiffanyConfigSummary),
-}
-
-#[derive(Debug, Clone)]
-struct TiffanyConfigSummary {
-    providers: usize,
-    models: usize,
-    roles: usize,
-    runtimes: usize,
-    default_worker: Option<TiffanyDefaultWorkerSummary>,
-}
-
-#[derive(Debug, Clone)]
-struct TiffanyDefaultWorkerSummary {
-    role: String,
-    runtime: String,
-    binary: String,
-    status: TiffanyWorkerReadinessStatus,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TiffanyWorkerReadinessStatus {
-    Ready,
-    ModelMissing,
-    ProviderMissing,
-    RuntimeMissing,
 }
 
 #[derive(Clone, Debug)]
@@ -212,50 +189,6 @@ pub(crate) struct TiffanyNativeChatEvent {
     #[serde(default)]
     pub(crate) worker_thread_id: Option<String>,
     pub(crate) native_session_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawTiffanyOrchestratorConfig {
-    #[serde(default)]
-    providers: HashMap<String, RawTiffanyProviderConfig>,
-    #[serde(default)]
-    runtimes: HashMap<String, RawTiffanyRuntimeConfig>,
-    #[serde(default)]
-    models: Vec<RawTiffanyModelConfig>,
-    #[serde(default)]
-    roles: HashMap<String, RawTiffanyRoleConfig>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawTiffanyProviderConfig {
-    #[serde(rename = "type")]
-    #[allow(dead_code)]
-    kind: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawTiffanyRuntimeConfig {
-    #[serde(rename = "type")]
-    #[allow(dead_code)]
-    kind: Option<String>,
-    binary: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawTiffanyModelConfig {
-    #[allow(dead_code)]
-    id: String,
-    #[allow(dead_code)]
-    provider: String,
-    #[allow(dead_code)]
-    name: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawTiffanyRoleConfig {
-    #[allow(dead_code)]
-    model: String,
-    runtime: String,
 }
 
 fn memory_schema_version() -> u32 {
@@ -760,132 +693,18 @@ fn config_readiness_from_path(path: std::path::PathBuf) -> TiffanyConfigReadines
             };
         }
     };
-    let config = match serde_yaml::from_str::<RawTiffanyOrchestratorConfig>(&raw) {
-        Ok(config) => config,
+    let summary = match tiffany_bridge::summarize_orchestrator_config_yaml(&raw, |binary| {
+        runtime_status(binary).resolved.is_some()
+    }) {
+        Ok(summary) => summary,
         Err(err) => {
             return TiffanyConfigReadiness::Invalid {
                 path: display_path,
-                message: err.to_string(),
+                message: err,
             };
         }
     };
-    let default_worker = default_worker_summary(&config);
-    TiffanyConfigReadiness::Ready(TiffanyConfigSummary {
-        providers: config.providers.len(),
-        models: config.models.len(),
-        roles: config.roles.len(),
-        runtimes: config.runtimes.len(),
-        default_worker,
-    })
-}
-
-fn default_worker_summary(
-    config: &RawTiffanyOrchestratorConfig,
-) -> Option<TiffanyDefaultWorkerSummary> {
-    let role = default_worker_role(&config.roles)?;
-    let role_cfg = config.roles.get(&role)?;
-    let runtime_cfg = runtime_config(config, &role_cfg.runtime);
-    let binary = runtime_cfg
-        .and_then(|runtime| runtime.binary.as_deref())
-        .map(str::to_string)
-        .unwrap_or_else(|| default_binary_for_runtime(&role_cfg.runtime));
-    let status = default_worker_status(config, role_cfg, runtime_cfg, &binary);
-    Some(TiffanyDefaultWorkerSummary {
-        role,
-        runtime: role_cfg.runtime.clone(),
-        binary,
-        status,
-    })
-}
-
-fn default_worker_status(
-    config: &RawTiffanyOrchestratorConfig,
-    role: &RawTiffanyRoleConfig,
-    runtime: Option<&RawTiffanyRuntimeConfig>,
-    binary: &str,
-) -> TiffanyWorkerReadinessStatus {
-    let Some(model) = config.models.iter().find(|model| model.id == role.model) else {
-        return TiffanyWorkerReadinessStatus::ModelMissing;
-    };
-    if !config.providers.contains_key(&model.provider) {
-        return TiffanyWorkerReadinessStatus::ProviderMissing;
-    }
-    if runtime.is_none() || runtime_status(binary).resolved.is_none() {
-        return TiffanyWorkerReadinessStatus::RuntimeMissing;
-    }
-    TiffanyWorkerReadinessStatus::Ready
-}
-
-fn runtime_config<'a>(
-    config: &'a RawTiffanyOrchestratorConfig,
-    runtime: &str,
-) -> Option<&'a RawTiffanyRuntimeConfig> {
-    config.runtimes.get(runtime).or_else(|| {
-        runtime_aliases(runtime)
-            .iter()
-            .find_map(|alias| config.runtimes.get(*alias))
-    })
-}
-
-fn runtime_aliases(runtime: &str) -> &'static [&'static str] {
-    match runtime {
-        "codex" => &["codex"],
-        "claude-code" | "claude" | "cc" => &["claude-code", "claude", "cc"],
-        "gemini" | "gemini-cli" => &["gemini", "gemini-cli"],
-        _ => &[],
-    }
-}
-
-fn default_binary_for_runtime(runtime: &str) -> String {
-    if is_claude_runtime(runtime) {
-        "claude".to_string()
-    } else if is_codex_runtime(runtime) {
-        "codex".to_string()
-    } else if is_gemini_runtime(runtime) {
-        "gemini".to_string()
-    } else {
-        runtime.to_string()
-    }
-}
-
-fn default_worker_role(roles: &HashMap<String, RawTiffanyRoleConfig>) -> Option<String> {
-    default_worker_role_for_runtime(roles, is_claude_runtime, "worker-cc")
-        .or_else(|| default_worker_role_for_runtime(roles, is_codex_runtime, "worker-codex"))
-        .or_else(|| default_worker_role_for_runtime(roles, is_gemini_runtime, "worker-gemini"))
-}
-
-fn default_worker_role_for_runtime(
-    roles: &HashMap<String, RawTiffanyRoleConfig>,
-    runtime_matches: impl Fn(&str) -> bool,
-    preferred: &str,
-) -> Option<String> {
-    if roles.contains_key(preferred) {
-        return Some(preferred.to_string());
-    }
-    let mut candidates = roles
-        .iter()
-        .filter(|(name, role)| is_worker_role_name(name) && runtime_matches(&role.runtime))
-        .map(|(name, _)| name.clone())
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates.into_iter().next()
-}
-
-fn is_claude_runtime(runtime: &str) -> bool {
-    matches!(runtime, "claude-code" | "claude" | "cc")
-}
-
-fn is_codex_runtime(runtime: &str) -> bool {
-    runtime == "codex"
-}
-
-fn is_gemini_runtime(runtime: &str) -> bool {
-    matches!(runtime, "gemini" | "gemini-cli")
-}
-
-fn is_worker_role_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    (name.contains("worker") || name.contains("executor")) && !name.contains("reviewer")
+    TiffanyConfigReadiness::Ready(summary)
 }
 
 pub(crate) fn startup_readiness_lines(readiness: &TiffanyStartupReadiness) -> Vec<Line<'static>> {
@@ -945,9 +764,9 @@ pub(crate) fn startup_readiness_lines(readiness: &TiffanyStartupReadiness) -> Ve
             ));
             let (state, detail, color) = match &summary.default_worker {
                 Some(worker) => (
-                    worker.status.label(),
+                    worker_readiness_label(worker.status),
                     format!("{} · {} · {}", worker.role, worker.runtime, worker.binary),
-                    worker.status.color(),
+                    worker_readiness_color(worker.status),
                 ),
                 None => (
                     "missing",
@@ -1168,22 +987,27 @@ fn health_action_line(
     ])
 }
 
-impl TiffanyWorkerReadinessStatus {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Ready => "ready",
-            Self::ModelMissing => "model-missing",
-            Self::ProviderMissing => "provider-missing",
-            Self::RuntimeMissing => "runtime-missing",
-        }
+fn worker_readiness_label(status: TiffanyWorkerReadinessStatus) -> &'static str {
+    match status {
+        TiffanyWorkerReadinessStatus::Ready => "ready",
+        TiffanyWorkerReadinessStatus::ModelMissing => "model-missing",
+        TiffanyWorkerReadinessStatus::ProviderMissing => "provider-missing",
+        TiffanyWorkerReadinessStatus::RuntimeMissing => "runtime-missing",
     }
+}
 
-    fn color(self) -> Color {
-        match self {
-            Self::Ready => TIFFANY_SOFT,
-            Self::ModelMissing | Self::ProviderMissing | Self::RuntimeMissing => Color::Red,
-        }
+fn worker_readiness_color(status: TiffanyWorkerReadinessStatus) -> Color {
+    match status {
+        TiffanyWorkerReadinessStatus::Ready => TIFFANY_SOFT,
+        TiffanyWorkerReadinessStatus::ModelMissing
+        | TiffanyWorkerReadinessStatus::ProviderMissing
+        | TiffanyWorkerReadinessStatus::RuntimeMissing => Color::Red,
     }
+}
+
+fn is_worker_role_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    (name.contains("worker") || name.contains("executor")) && !name.contains("reviewer")
 }
 
 fn readiness_line(

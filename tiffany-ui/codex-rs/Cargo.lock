@@ -4049,6 +4049,7 @@ dependencies = [
  "tempfile",
  "textwrap 0.16.2",
  "thiserror 2.0.18",
+ "tiffany-bridge",
  "tiffany-event-format",
  "tokio",
  "tokio-stream",
@@ -13282,6 +13283,14 @@ dependencies = [
  "quick-error",
  "weezl",
  "zune-jpeg 0.4.21",
+]
+
+[[package]]
+name = "tiffany-bridge"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_yaml",
 ]
 
 [[package]]
