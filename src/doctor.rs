@@ -3,6 +3,7 @@
 use crate::config::{self, Config, RoleConfig};
 use crate::runtime;
 use crate::tiffany_install;
+use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -11,6 +12,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
+
+const TIFFANY_NATIVE_SESSIONS_FILE: &str = "tiffany-orchestrator/native-sessions.json";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -216,7 +219,26 @@ impl DoctorReport {
             .iter()
             .map(|line| line.message.as_str())
             .collect::<Vec<_>>();
+        let has_legacy_target_cache = self.lines.iter().any(|line| {
+            line.level == DoctorLevel::Warn && line.message.contains("legacy fork target:")
+        });
+        let has_large_shared_target_cache = self
+            .lines
+            .iter()
+            .any(|line| line.level == DoctorLevel::Warn && line.message.contains("shared target:"));
         if self.issue_count == 0 {
+            if has_legacy_target_cache {
+                steps.push(
+                    "Remove the old duplicate fork-local build cache with `./scripts/tiffany-clean-targets`."
+                        .to_string(),
+                );
+            }
+            if has_large_shared_target_cache {
+                steps.push(
+                    "Trim rebuildable Cargo caches with `./scripts/tiffany-clean-targets --dry-run --trim`, then `./scripts/tiffany-clean-targets --trim`."
+                        .to_string(),
+                );
+            }
             if messages.iter().any(|message| {
                 message.contains("homebrew tap formula is stale")
                     || message.contains("homebrew package is older than tap formula")
@@ -242,6 +264,24 @@ impl DoctorReport {
             {
                 steps.push(
                     "For unattended runs, set `behavior.cc_bypass_permissions: true` or approve Claude Code prompts manually."
+                        .to_string(),
+                );
+            }
+            if messages
+                .iter()
+                .any(|message| message.contains("worker threads: none persisted yet"))
+            {
+                steps.push(
+                    "Run one prompt, then use `/thread` or `/continue open <role>` to verify native session reuse."
+                        .to_string(),
+                );
+            }
+            if messages
+                .iter()
+                .any(|message| message.contains("native history: not created yet"))
+            {
+                steps.push(
+                    "After the first prompt, run `/history status` to verify local/DB native history sync."
                         .to_string(),
                 );
             }
@@ -445,6 +485,7 @@ pub fn run(config_path: &Path) -> DoctorReport {
 
     if let Some(cfg) = cfg.as_ref() {
         check_paths(&mut builder, cfg);
+        check_persistence(&mut builder, cfg);
         check_runtimes(&mut builder, cfg);
         check_providers(
             &mut builder,
@@ -836,6 +877,186 @@ fn check_paths(builder: &mut DoctorReportBuilder, cfg: &Config) {
             builder.fail(format!("db parent missing: {}", parent.display()));
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PersistenceStats {
+    sessions: i64,
+    native_conversations: i64,
+    worker_threads: Vec<DoctorWorkerThread>,
+    schema_ready: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DoctorWorkerThread {
+    role: String,
+    native_session_id: Option<String>,
+}
+
+fn check_persistence(builder: &mut DoctorReportBuilder, cfg: &Config) {
+    builder.header("Persistence");
+    let db_path = &cfg.behavior.db_path;
+    if !db_path.exists() {
+        builder.warn(format!(
+            "session db not initialized yet: {}",
+            db_path.display()
+        ));
+        builder.hint("first orchestration run creates it; use `/history status` after a prompt");
+    } else if !db_path.is_file() {
+        builder.fail(format!(
+            "session db path is not a file: {}",
+            db_path.display()
+        ));
+        builder.hint("set behavior.db_path to a writable SQLite file");
+    } else {
+        match read_persistence_stats(db_path) {
+            Ok(stats) => report_persistence_stats(builder, db_path, &stats),
+            Err(err) => {
+                builder.warn(format!(
+                    "session db could not be inspected read-only: {} ({err})",
+                    db_path.display()
+                ));
+                builder.hint("check file permissions or run `orchestrator doctor` after closing other writers");
+            }
+        }
+    }
+
+    if let Some((home, _source)) = tiffany_install::resolved_tiffany_home() {
+        let native_history = home.join(TIFFANY_NATIVE_SESSIONS_FILE);
+        if native_history.is_file() {
+            builder.ok(format!("native history: {}", native_history.display()));
+            builder
+                .hint("use `/history status` to compare local native history with the session DB");
+        } else {
+            builder.warn(format!(
+                "native history: not created yet ({})",
+                native_history.display()
+            ));
+            builder
+                .hint("run one prompt in tiffany-loop, then `/history status` or `/history sync`");
+        }
+    }
+}
+
+fn report_persistence_stats(
+    builder: &mut DoctorReportBuilder,
+    db_path: &Path,
+    stats: &PersistenceStats,
+) {
+    builder.ok(format!(
+        "session db: {} (sessions {}, worker_threads {}, native_conversations {})",
+        db_path.display(),
+        stats.sessions,
+        stats.worker_threads.len(),
+        stats.native_conversations
+    ));
+    if !stats.schema_ready {
+        builder.warn(
+            "session db schema is incomplete; worker/session history will initialize on next run",
+        );
+        builder.hint("run one prompt or `orchestrator doctor` again after starting tiffany-loop");
+        return;
+    }
+
+    if stats.worker_threads.is_empty() {
+        builder.warn(
+            "worker threads: none persisted yet; native handoff starts after first worker run",
+        );
+        builder.hint("after a worker runs, use `/thread` to inspect per-role native sessions");
+        return;
+    }
+
+    let roles = stats
+        .worker_threads
+        .iter()
+        .map(|thread| thread.role.clone())
+        .collect::<Vec<_>>();
+    let native_roles = stats
+        .worker_threads
+        .iter()
+        .filter(|thread| thread.native_session_id.is_some())
+        .map(|thread| thread.role.clone())
+        .collect::<Vec<_>>();
+    if native_roles.is_empty() {
+        builder.warn(format!(
+            "worker threads: {} persisted but no native CLI session ids captured yet",
+            join_limited(&roles, 4)
+        ));
+        builder.hint(
+            "run a worker once, then use `/continue open <role>` to hand off to its native CLI",
+        );
+    } else {
+        builder.ok(format!(
+            "native handoff ready for role(s): {}",
+            join_limited(&native_roles, 4)
+        ));
+        builder.hint("use `/thread <role>` to see resume commands or `/continue open <role>` to enter the native CLI");
+    }
+}
+
+fn read_persistence_stats(db_path: &Path) -> rusqlite::Result<PersistenceStats> {
+    let db = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let sessions_ready = sqlite_table_exists(&db, "sessions")?;
+    let worker_threads_ready = sqlite_table_exists(&db, "worker_threads")?;
+    let native_conversations_ready = sqlite_table_exists(&db, "native_conversations")?;
+    let sessions = if sessions_ready {
+        sqlite_table_count(&db, "sessions")?
+    } else {
+        0
+    };
+    let native_conversations = if native_conversations_ready {
+        sqlite_table_count(&db, "native_conversations")?
+    } else {
+        0
+    };
+    let worker_threads = if worker_threads_ready {
+        read_doctor_worker_threads(&db)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(PersistenceStats {
+        sessions,
+        native_conversations,
+        worker_threads,
+        schema_ready: sessions_ready && worker_threads_ready && native_conversations_ready,
+    })
+}
+
+fn sqlite_table_exists(db: &Connection, table: &str) -> rusqlite::Result<bool> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+}
+
+fn sqlite_table_count(db: &Connection, table: &str) -> rusqlite::Result<i64> {
+    let sql = format!("SELECT COUNT(*) FROM {}", sqlite_identifier(table));
+    db.query_row(&sql, [], |row| row.get(0))
+}
+
+fn read_doctor_worker_threads(db: &Connection) -> rusqlite::Result<Vec<DoctorWorkerThread>> {
+    let mut stmt = db.prepare(
+        "SELECT role, native_session_id FROM worker_threads ORDER BY updated_at DESC, role ASC",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(DoctorWorkerThread {
+                role: row.get(0)?,
+                native_session_id: row.get::<_, Option<String>>(1)?.and_then(|id| {
+                    let id = id.trim().to_string();
+                    (!id.is_empty()).then_some(id)
+                }),
+            })
+        })?
+        .collect();
+    rows
+}
+
+fn sqlite_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 fn check_runtimes(builder: &mut DoctorReportBuilder, cfg: &Config) {
@@ -2814,6 +3035,16 @@ end
         assert!(rendered.contains("Build cache:"));
         assert!(rendered.contains("shared target:"));
         assert!(rendered.contains("legacy fork target:"));
+        assert!(
+            rendered.contains(
+                "Remove the old duplicate fork-local build cache with `./scripts/tiffany-clean-targets`."
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("Trim rebuildable Cargo caches with `./scripts/tiffany-clean-targets --dry-run --trim`, then `./scripts/tiffany-clean-targets --trim`."),
+            "{rendered}"
+        );
         assert!(rendered.contains("tiffany-clean-targets --sizes"));
         assert!(rendered.contains("tiffany-clean-targets --dry-run --trim"));
         assert!(rendered.contains("tiffany-clean-targets --trim"));
@@ -2837,6 +3068,7 @@ end
         assert!(report_has_line(&report, DoctorLevel::Ok, "shared target:"));
         assert!(!rendered.contains("✓ shared target:"));
         assert!(!rendered.contains("legacy fork target"));
+        assert!(!rendered.contains("Remove the old duplicate fork-local build cache"));
         assert!(!rendered.contains("tiffany-clean-targets --trim"));
     }
 
@@ -2946,6 +3178,62 @@ end
         ));
         assert!(rendered.contains(
             "orchestrator roles register worker-codex --provider <provider> --model-name <api-model> --runtime codex"
+        ));
+    }
+
+    #[test]
+    fn persistence_report_guides_first_worker_run_and_handoff() {
+        let mut builder = DoctorReportBuilder::default();
+        let stats = PersistenceStats {
+            sessions: 0,
+            native_conversations: 0,
+            worker_threads: Vec::new(),
+            schema_ready: true,
+        };
+
+        report_persistence_stats(&mut builder, Path::new("/tmp/tiffany-state.db"), &stats);
+        let report = builder.finish();
+        let rendered = report.render_text();
+
+        assert_eq!(report.issue_count, 0);
+        assert!(rendered.contains(
+            "worker threads: none persisted yet; native handoff starts after first worker run"
+        ));
+        assert!(rendered.contains("use `/thread` to inspect per-role native sessions"));
+        assert!(rendered.contains("Run one prompt, then use `/thread` or `/continue open <role>`"));
+    }
+
+    #[test]
+    fn persistence_report_marks_native_handoff_ready_by_role() {
+        let mut builder = DoctorReportBuilder::default();
+        let stats = PersistenceStats {
+            sessions: 2,
+            native_conversations: 1,
+            worker_threads: vec![
+                DoctorWorkerThread {
+                    role: "worker-cc".into(),
+                    native_session_id: Some("claude-native-session".into()),
+                },
+                DoctorWorkerThread {
+                    role: "worker-codex".into(),
+                    native_session_id: None,
+                },
+            ],
+            schema_ready: true,
+        };
+
+        report_persistence_stats(&mut builder, Path::new("/tmp/tiffany-state.db"), &stats);
+        let report = builder.finish();
+
+        assert!(report_has_line(
+            &report,
+            DoctorLevel::Ok,
+            "native handoff ready for role(s): worker-cc"
+        ));
+        assert!(report_has_line(
+            &report,
+            DoctorLevel::Hint,
+            "/continue open <role>"
         ));
     }
 

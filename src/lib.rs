@@ -24,6 +24,7 @@ pub mod task_policy;
 pub mod tiffany_events;
 pub mod tiffany_install;
 pub mod tui;
+pub mod tui_jobs;
 pub mod usage;
 pub mod webhook;
 

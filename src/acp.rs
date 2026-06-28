@@ -2036,6 +2036,46 @@ fn progress_text(event: &RunProgress, capture: &mut AcpRunCapture) -> Option<Str
         RunProgress::Executing { sub_task_count } => {
             Some(format!("Running {sub_task_count} worker run(s)."))
         }
+        RunProgress::WorkerThreadWaiting {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+        } => {
+            let native = native_session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(|id| format!(" Native session {id}."))
+                .unwrap_or_default();
+            Some(format!(
+                "Worker {role} is waiting for session lock {} for task {}.{native}",
+                short_uuid(thread_id),
+                short_uuid(task_id)
+            ))
+        }
+        RunProgress::WorkerRecovery {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            recovery,
+            content,
+            ..
+        } => {
+            let native = native_session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(|id| format!(" Native session {id}."))
+                .unwrap_or_default();
+            Some(format!(
+                "Worker {role} native session recovery ({recovery}) for thread {} task {}.{native} {}",
+                short_uuid(thread_id),
+                short_uuid(task_id),
+                agent_events::humanize_jsonish(content, 1600)
+            ))
+        }
         RunProgress::RoleOutput { role, content } => {
             if agent_events::is_redundant_role_output(role, content, 1600) {
                 return None;

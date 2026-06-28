@@ -3,7 +3,8 @@
 use anyhow::{Context, Result};
 use orchestrator::config::Config;
 use orchestrator::core::session_store::{
-    NativeConversation, NativeEvent, NativeImportReport, NativeTurn, WorkerThread,
+    NativeConversation, NativeEvent, NativeImportReport, NativeTurn, SessionStore, TuiJob,
+    WorkerThread,
 };
 use orchestrator::core::types::{Role, Session, Task, TaskStatus};
 use orchestrator::pipeline::orchestrator::Orchestrator;
@@ -21,6 +22,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
 const TIFFANY_NATIVE_SESSIONS_FILE: &str = "tiffany-orchestrator/native-sessions.json";
+const TIFFANY_JOB_RESULT_MAX_CHARS: usize = 12_000;
 
 pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
     match cmd {
@@ -110,6 +112,10 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             format,
         } => {
             let cfg = Config::load(config_path)?;
+            let store = SessionStore::open(&cfg.behavior.session_log_dir, &cfg.behavior.db_path)?;
+            let job = store
+                .create_tui_job(&prompt, "running", None, worker.as_deref())
+                .ok();
             let orch = build_orchestrator(
                 &cfg,
                 no_critic,
@@ -130,8 +136,13 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
             let run = tokio::spawn(async move { orch.run_with_progress(task, tx).await });
             let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
             let mut text_formatter = TiffanyTextProgressFormatter::new();
+            let mut job_result = TuiJobResultCapture::default();
 
             while let Some(event) = rx.recv().await {
+                if let Some(job) = job.as_ref() {
+                    attach_tui_job_progress(&store, job.id, &event);
+                }
+                job_result.observe(&event);
                 match format {
                     crate::EventsFormat::Json => {
                         let line = serde_json::to_string(&TiffanyProgressEvent::from(event))?;
@@ -149,7 +160,33 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                 }
             }
 
-            run.await??;
+            let run_result = run.await?;
+            match run_result {
+                Ok(_) => {
+                    if let Some(job) = job {
+                        let result = job_result.result();
+                        let _ = store.set_tui_job_status(job.id, "done", result.as_deref(), None);
+                    }
+                    Ok(())
+                }
+                Err(err) => {
+                    if let Some(job) = job {
+                        let _ = store.set_tui_job_status(
+                            job.id,
+                            "failed",
+                            None,
+                            Some(&format!("{err:#}")),
+                        );
+                    }
+                    Err(err)
+                }
+            }
+        }
+
+        crate::Cmd::Jobs { action, limit } => {
+            let cfg = Config::load(config_path)?;
+            let store = SessionStore::open(&cfg.behavior.session_log_dir, &cfg.behavior.db_path)?;
+            println!("{}", run_jobs_command(&store, action, limit)?);
             Ok(())
         }
 
@@ -388,7 +425,15 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                         report.events
                     );
                 }
-                crate::SessionsCmd::NativeHistory { cwd } => {
+                crate::SessionsCmd::NativeHistory {
+                    cwd,
+                    format,
+                    out,
+                    role,
+                    thread,
+                    native,
+                    kind,
+                } => {
                     let cwd = match cwd {
                         Some(cwd) => cwd,
                         None => {
@@ -400,7 +445,29 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                         }
                     };
                     let conversation = store.native_conversation_by_cwd(&cwd)?;
-                    println!("{}", serde_json::to_string_pretty(&conversation)?);
+                    let filter = NativeHistoryCliFilter::new(role, thread, native, kind);
+                    let conversation = conversation.map(|conversation| {
+                        filter_native_conversation_for_cli(conversation, &filter)
+                    });
+                    let body = match format {
+                        crate::NativeHistoryFormat::Json => {
+                            serde_json::to_string_pretty(&conversation)?
+                        }
+                        crate::NativeHistoryFormat::Text => {
+                            format_native_history_cli(conversation.as_ref(), &cwd, &filter)
+                        }
+                    };
+                    if let Some(out) = out {
+                        if let Some(parent) = out.parent() {
+                            std::fs::create_dir_all(parent)
+                                .with_context(|| format!("creating {}", parent.display()))?;
+                        }
+                        std::fs::write(&out, body.as_bytes())
+                            .with_context(|| format!("writing {}", out.display()))?;
+                        println!("Exported native history to {}", out.display());
+                    } else {
+                        println!("{body}");
+                    }
                 }
             }
             Ok(())
@@ -520,6 +587,9 @@ pub async fn run(cmd: crate::Cmd, config_path: &Path) -> Result<()> {
                     run_provider_setup_ui(config_path, dry_run, check_env)
                 }
                 Some(crate::ProviderConfigCmd::List) => list_providers(config_path),
+                Some(crate::ProviderConfigCmd::Show { provider }) => {
+                    show_provider(config_path, &provider)
+                }
                 Some(crate::ProviderConfigCmd::Presets) => list_provider_presets(),
                 Some(crate::ProviderConfigCmd::Delete { provider, dry_run }) => {
                     delete_provider(config_path, &provider, dry_run)
@@ -836,6 +906,379 @@ fn truncate_for_cli(value: &str, max_chars: usize) -> String {
         out.push('…');
     }
     out
+}
+
+#[derive(Default)]
+struct TuiJobResultCapture {
+    final_output: Option<String>,
+    last_worker_output: Option<String>,
+}
+
+impl TuiJobResultCapture {
+    fn observe(&mut self, event: &orchestrator::pipeline::orchestrator::RunProgress) {
+        let orchestrator::pipeline::orchestrator::RunProgress::WorkerOutput {
+            event_kind,
+            content,
+            ..
+        } = event
+        else {
+            return;
+        };
+        if is_worker_error_event_kind(event_kind) {
+            return;
+        }
+        if !is_worker_process_event_kind(event_kind) {
+            if let Some(final_output) = orchestrator::agent_events::final_output_candidate(
+                content,
+                TIFFANY_JOB_RESULT_MAX_CHARS,
+            ) {
+                remember_better_job_text(&mut self.final_output, final_output);
+            }
+        }
+        let display =
+            orchestrator::agent_events::humanize_jsonish(content, TIFFANY_JOB_RESULT_MAX_CHARS);
+        if display.trim().is_empty() || orchestrator::agent_events::is_low_value_output(&display) {
+            return;
+        }
+        if is_worker_process_event_kind(event_kind) {
+            return;
+        }
+        let normalized = normalize_job_worker_output(&display);
+        if normalized.trim().is_empty()
+            || orchestrator::agent_events::is_low_value_output(&normalized)
+        {
+            return;
+        }
+        remember_better_job_text(&mut self.last_worker_output, normalized);
+    }
+
+    fn result(&self) -> Option<String> {
+        if let Some(final_output) = self.final_output.as_deref() {
+            let display = orchestrator::agent_events::humanize_jsonish(
+                final_output,
+                TIFFANY_JOB_RESULT_MAX_CHARS,
+            );
+            if !display.trim().is_empty() {
+                return Some(display);
+            }
+        }
+        self.last_worker_output
+            .as_deref()
+            .map(|text| {
+                orchestrator::agent_events::humanize_jsonish(text, TIFFANY_JOB_RESULT_MAX_CHARS)
+            })
+            .filter(|text| !text.trim().is_empty())
+    }
+}
+
+fn is_worker_error_event_kind(event_kind: &str) -> bool {
+    matches!(
+        orchestrator::agent_events::visible_agent_output_kind_for_event_kind(event_kind),
+        Some(orchestrator::agent_events::VisibleAgentOutputKind::Stderr)
+            | Some(orchestrator::agent_events::VisibleAgentOutputKind::Actionable)
+    ) || matches!(event_kind, "error" | "stderr" | "process_exit")
+}
+
+fn is_worker_process_event_kind(event_kind: &str) -> bool {
+    orchestrator::agent_events::visible_agent_output_kind_for_event_kind(event_kind)
+        .is_some_and(|kind| kind.is_process_event())
+}
+
+fn normalize_job_worker_output(display: &str) -> String {
+    let normalized = orchestrator::agent_events::normalize_output_summary(display);
+    let trimmed = normalized.trim();
+    let Some((prefix, body)) = trimmed.split_once(": ") else {
+        return trimmed.to_string();
+    };
+    let kind = prefix.split_whitespace().last().unwrap_or_default();
+    if matches!(kind, "tool" | "tool_use" | "tool_result" | "exec") {
+        body.trim_start().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn remember_better_job_text(slot: &mut Option<String>, candidate: String) {
+    let candidate = candidate.trim().to_string();
+    if candidate.is_empty() {
+        return;
+    }
+    let should_replace = slot
+        .as_ref()
+        .map(|current| candidate.chars().count() > current.chars().count())
+        .unwrap_or(true);
+    if should_replace {
+        *slot = Some(candidate);
+    }
+}
+
+fn format_tui_jobs_cli(store: &SessionStore, limit: usize) -> Result<String> {
+    orchestrator::tui_jobs::format_tui_jobs(
+        store,
+        limit,
+        orchestrator::tui_jobs::TuiJobsSurface::Cli,
+    )
+}
+
+fn run_jobs_command(
+    store: &SessionStore,
+    action: Option<crate::JobsCmd>,
+    parent_limit: usize,
+) -> Result<String> {
+    match action {
+        None => format_tui_jobs_cli(store, parent_limit),
+        Some(crate::JobsCmd::List { limit }) => format_tui_jobs_cli(store, limit),
+        Some(crate::JobsCmd::Show { id }) => {
+            let job = resolve_tui_job(store, &id)?;
+            Ok(format_tui_job_detail_cli(store, &job))
+        }
+        Some(crate::JobsCmd::Cancel { id }) => cancel_tui_job(store, &id),
+        Some(crate::JobsCmd::Recover { stale_minutes }) => {
+            recover_stale_tui_jobs(store, stale_minutes, parent_limit)
+        }
+        Some(crate::JobsCmd::Retry {
+            id,
+            emit_retry_prompt,
+            tui_handoff,
+        }) => retry_tui_job(store, &id, parent_limit, emit_retry_prompt, tui_handoff),
+    }
+}
+
+fn recover_stale_tui_jobs(
+    store: &SessionStore,
+    stale_minutes: u64,
+    parent_limit: usize,
+) -> Result<String> {
+    if stale_minutes == 0 {
+        anyhow::bail!("jobs recover --stale-minutes must be greater than zero");
+    }
+    let now = chrono::Utc::now();
+    let cutoff = now - chrono::Duration::minutes(stale_minutes.min(i64::MAX as u64) as i64);
+    let mut recovered = Vec::new();
+    for job in store.list_active_tui_jobs()? {
+        if job.status != "running" {
+            continue;
+        }
+        let last_seen = job.started_at.unwrap_or(job.updated_at);
+        if last_seen > cutoff {
+            continue;
+        }
+        let error = format!(
+            "recovered stale running job after {stale_minutes} minute(s); previous process is no longer tracked"
+        );
+        store.set_tui_job_status(job.id, "failed", None, Some(&error))?;
+        recovered.push(short_uuid_for_cli(job.id));
+    }
+
+    let mut out = if recovered.is_empty() {
+        format!("Recovered stale jobs\n  none older than {stale_minutes} minute(s)")
+    } else {
+        format!(
+            "Recovered stale jobs\n  failed: {}  ids: {}",
+            recovered.len(),
+            recovered.join(", ")
+        )
+    };
+    out.push_str("\n\n");
+    out.push_str(&format_tui_jobs_cli(store, parent_limit)?);
+    Ok(out)
+}
+
+fn retry_tui_job(
+    store: &SessionStore,
+    selector: &str,
+    parent_limit: usize,
+    emit_retry_prompt: bool,
+    tui_handoff: bool,
+) -> Result<String> {
+    let job = resolve_tui_job(store, selector)?;
+    if matches!(job.status.as_str(), "queued" | "running") {
+        anyhow::bail!(
+            "job {} is {}; use `orchestrator jobs show {}` or cancel/recover it first",
+            short_uuid_for_cli(job.id),
+            job.status,
+            short_uuid_for_cli(job.id)
+        );
+    }
+
+    if tui_handoff {
+        let mut out = format!(
+            "Job {} prepared for TUI retry\n  status: queued in current TUI input queue\n  prompt: {}\n  retry prompt: {}\n\nNext:\n  /queue run\n  /jobs",
+            short_uuid_for_cli(job.id),
+            truncate_for_cli(&job.prompt.replace('\n', " "), 160),
+            escape_retry_prompt_for_tui(&job.prompt)
+        );
+        out.push_str("\n\n");
+        out.push_str(&format_tui_jobs_cli(store, parent_limit)?);
+        return Ok(out);
+    }
+
+    let retry = store.create_tui_job(
+        &job.prompt,
+        "queued",
+        job.route.as_deref(),
+        job.role.as_deref(),
+    )?;
+    let mut out = format!(
+        "Job {} queued for retry as {}\n  status: queued\n  prompt: {}\n\nNext:\n  tiffany-loop /jobs show {}\n  tiffany-loop /queue run",
+        short_uuid_for_cli(job.id),
+        short_uuid_for_cli(retry.id),
+        truncate_for_cli(&job.prompt.replace('\n', " "), 160),
+        short_uuid_for_cli(retry.id)
+    );
+    if emit_retry_prompt {
+        out.push_str(&format!(
+            "\n  retry prompt: {}",
+            escape_retry_prompt_for_tui(&job.prompt)
+        ));
+    }
+    out.push_str("\n\n");
+    out.push_str(&format_tui_jobs_cli(store, parent_limit)?);
+    Ok(out)
+}
+
+fn escape_retry_prompt_for_tui(prompt: &str) -> String {
+    let mut escaped = String::with_capacity(prompt.len());
+    for ch in prompt.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn cancel_tui_job(store: &SessionStore, selector: &str) -> Result<String> {
+    let job = resolve_tui_job(store, selector)?;
+    if matches!(
+        job.status.as_str(),
+        "done" | "failed" | "cancelled" | "removed" | "skipped"
+    ) {
+        return Ok(format!(
+            "Job {} already {}\n\n{}",
+            short_uuid_for_cli(job.id),
+            job.status,
+            format_tui_job_detail_cli(store, &job)
+        ));
+    }
+
+    let message = if job.status == "running" {
+        "cancel requested from jobs; active process may finish if already running"
+    } else {
+        "cancelled by user from jobs"
+    };
+    store.set_tui_job_status(job.id, "cancelled", None, Some(message))?;
+    let job = store.get_tui_job(job.id)?.unwrap_or(job);
+    Ok(format!(
+        "Job {} cancelled\n\n{}",
+        short_uuid_for_cli(job.id),
+        format_tui_job_detail_cli(store, &job)
+    ))
+}
+
+fn resolve_tui_job(store: &SessionStore, selector: &str) -> Result<TuiJob> {
+    let selector = selector.trim();
+    if selector.is_empty() {
+        anyhow::bail!("job id is required");
+    }
+
+    if matches!(selector, "." | "last") {
+        return store
+            .list_tui_jobs(1)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no persisted jobs yet"));
+    }
+
+    if let Ok(id) = uuid::Uuid::parse_str(selector) {
+        return store
+            .get_tui_job(id)?
+            .ok_or_else(|| anyhow::anyhow!("tui job not found: {selector}"));
+    }
+
+    let matches = store.find_tui_jobs_by_id_prefix(selector, 20)?;
+    match matches.len() {
+        0 => anyhow::bail!("tui job not found: {selector}"),
+        1 => Ok(matches.into_iter().next().expect("single job")),
+        _ => {
+            let ids = matches
+                .iter()
+                .map(|job| short_uuid_for_cli(job.id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::bail!("ambiguous tui job prefix: {selector} ({ids})")
+        }
+    }
+}
+
+fn format_tui_job_detail_cli(store: &SessionStore, job: &TuiJob) -> String {
+    orchestrator::tui_jobs::format_tui_job_detail(
+        store,
+        job,
+        orchestrator::tui_jobs::TuiJobsSurface::Cli,
+    )
+}
+
+fn short_uuid_for_cli(id: uuid::Uuid) -> String {
+    id.to_string().chars().take(8).collect()
+}
+
+fn attach_tui_job_progress(
+    store: &SessionStore,
+    job_id: uuid::Uuid,
+    event: &orchestrator::pipeline::orchestrator::RunProgress,
+) {
+    use orchestrator::pipeline::orchestrator::RunProgress;
+
+    match event {
+        RunProgress::WorkerStarted { task_id, role, .. } => {
+            let _ = store.attach_tui_job_worker(job_id, Some(*task_id), Some(role), None, None);
+        }
+        RunProgress::WorkerThreadWaiting {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            ..
+        }
+        | RunProgress::WorkerThreadReady {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            ..
+        } => {
+            let _ = store.attach_tui_job_worker(
+                job_id,
+                Some(*task_id),
+                Some(role),
+                Some(*thread_id),
+                native_session_id.as_deref(),
+            );
+        }
+        RunProgress::WorkerRecovery {
+            task_id,
+            role,
+            thread_id,
+            native_session_id,
+            ..
+        } => {
+            let _ = store.attach_tui_job_worker(
+                job_id,
+                Some(*task_id),
+                Some(role),
+                Some(*thread_id),
+                native_session_id.as_deref(),
+            );
+        }
+        RunProgress::WorkerDone { task_id, role, .. } => {
+            let _ = store.attach_tui_job_completed_task(job_id, *task_id, Some(role));
+        }
+        _ => {}
+    }
 }
 
 #[cfg(unix)]
@@ -1895,6 +2338,7 @@ fn handle_roles(config_path: &Path, action: crate::RolesCmd) -> Result<()> {
     match action {
         crate::RolesCmd::List => print_roles(config_path, None),
         crate::RolesCmd::Show { role } => print_roles(config_path, role.as_deref()),
+        crate::RolesCmd::Options => print_role_options(config_path),
         crate::RolesCmd::Register {
             role,
             model,
@@ -1913,6 +2357,7 @@ fn handle_roles(config_path: &Path, action: crate::RolesCmd) -> Result<()> {
             agent_teams,
             no_agent_teams,
         ),
+        crate::RolesCmd::Delete { role } => delete_role(config_path, &role),
         crate::RolesCmd::Profile {
             name,
             planner,
@@ -1920,6 +2365,7 @@ fn handle_roles(config_path: &Path, action: crate::RolesCmd) -> Result<()> {
             reviewer,
             worker_cc,
             worker_codex,
+            worker_gemini,
             dry_run,
         } => save_role_profile(
             config_path,
@@ -1930,6 +2376,7 @@ fn handle_roles(config_path: &Path, action: crate::RolesCmd) -> Result<()> {
                 ("reviewer", reviewer.as_deref()),
                 ("worker-cc", worker_cc.as_deref()),
                 ("worker-codex", worker_codex.as_deref()),
+                ("worker-gemini", worker_gemini.as_deref()),
             ],
             dry_run,
         ),
@@ -1945,12 +2392,12 @@ fn handle_thread(config_path: &Path, action: crate::ThreadCmd) -> Result<()> {
 
     match action {
         crate::ThreadCmd::List => {
-            let threads = store.list_worker_threads()?;
+            let threads = store.worker_threads_in_current_scope_family()?;
             println!("{}", worker_thread_list(&cfg, &threads));
             Ok(())
         }
         crate::ThreadCmd::Show { role } => {
-            let threads = store.list_worker_threads()?;
+            let threads = store.worker_threads_in_current_scope_family()?;
             let Some(thread) = find_worker_thread(&threads, &role) else {
                 if cfg.roles.contains_key(&role) {
                     println!("{}", missing_worker_thread_detail(&cfg, &role));
@@ -1965,7 +2412,7 @@ fn handle_thread(config_path: &Path, action: crate::ThreadCmd) -> Result<()> {
             Ok(())
         }
         crate::ThreadCmd::Clear { role } => {
-            let threads = store.list_worker_threads()?;
+            let threads = store.worker_threads_in_current_scope_family()?;
             let Some(thread) = find_worker_thread(&threads, &role) else {
                 if cfg.roles.contains_key(&role) {
                     println!(
@@ -2001,7 +2448,7 @@ fn handle_thread(config_path: &Path, action: crate::ThreadCmd) -> Result<()> {
             out,
             clipboard,
         } => {
-            let threads = store.list_worker_threads()?;
+            let threads = store.worker_threads_in_current_scope_family()?;
             let Some(thread) = find_worker_thread(&threads, &role) else {
                 if cfg.roles.contains_key(&role) {
                     anyhow::bail!("worker thread '{role}' has no captured Tiffany session yet");
@@ -2154,6 +2601,234 @@ fn native_event_from_file(event_index: u32, event: NativeChatEventFile) -> Optio
     })
 }
 
+#[derive(Clone, Debug, Default)]
+struct NativeHistoryCliFilter {
+    role: Option<String>,
+    thread: Option<String>,
+    native: Option<String>,
+    kind: Option<String>,
+}
+
+impl NativeHistoryCliFilter {
+    fn new(
+        role: Option<String>,
+        thread: Option<String>,
+        native: Option<String>,
+        kind: Option<String>,
+    ) -> Self {
+        Self {
+            role: role.and_then(trimmed_nonempty),
+            thread: thread.and_then(trimmed_nonempty),
+            native: native.and_then(trimmed_nonempty),
+            kind: kind.and_then(trimmed_nonempty),
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.role.is_some() || self.thread.is_some() || self.native.is_some() || self.kind.is_some()
+    }
+
+    fn display(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if let Some(role) = &self.role {
+            parts.push(format!("role={role}"));
+        }
+        if let Some(thread) = &self.thread {
+            parts.push(format!("thread={thread}"));
+        }
+        if let Some(native) = &self.native {
+            parts.push(format!("native={native}"));
+        }
+        if let Some(kind) = &self.kind {
+            parts.push(format!("kind={kind}"));
+        }
+        (!parts.is_empty()).then(|| parts.join(" "))
+    }
+
+    fn matches_event(&self, event: &NativeEvent) -> bool {
+        if let Some(role) = &self.role {
+            let matches_role = event.worker_role.as_deref() == Some(role.as_str())
+                || event.agent.as_deref() == Some(role.as_str())
+                || event.role == *role;
+            if !matches_role {
+                return false;
+            }
+        }
+        if let Some(thread) = &self.thread {
+            let matches_thread = event
+                .worker_thread_id
+                .as_deref()
+                .is_some_and(|id| id == thread || id.starts_with(thread));
+            if !matches_thread {
+                return false;
+            }
+        }
+        if let Some(native) = &self.native {
+            let matches_native = event
+                .native_session_id
+                .as_deref()
+                .is_some_and(|id| id == native || id.starts_with(native));
+            if !matches_native {
+                return false;
+            }
+        }
+        if let Some(kind) = &self.kind {
+            let matches_kind = event
+                .kind
+                .as_deref()
+                .is_some_and(|event_kind| native_history_cli_kind_matches(event_kind, kind));
+            if !matches_kind {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn native_history_cli_kind_matches(event_kind: &str, filter: &str) -> bool {
+    let event_kind = normalize_native_history_cli_kind(event_kind);
+    let filter = normalize_native_history_cli_kind(filter);
+    event_kind == filter || event_kind.starts_with(&filter)
+}
+
+fn normalize_native_history_cli_kind(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace(['-', ' '], "_")
+}
+
+fn filter_native_conversation_for_cli(
+    mut conversation: NativeConversation,
+    filter: &NativeHistoryCliFilter,
+) -> NativeConversation {
+    if !filter.is_active() {
+        return conversation;
+    }
+    conversation.turns = conversation
+        .turns
+        .into_iter()
+        .filter_map(|mut turn| {
+            turn.events.retain(|event| filter.matches_event(event));
+            (!turn.events.is_empty()).then_some(turn)
+        })
+        .collect();
+    conversation
+}
+
+fn format_native_history_cli(
+    conversation: Option<&NativeConversation>,
+    cwd: &str,
+    filter: &NativeHistoryCliFilter,
+) -> String {
+    let Some(conversation) = conversation else {
+        let mut out = format!("Native history\n  cwd: {cwd}\n  status: no saved native history");
+        out.push_str(
+            "\n\nNext:\n  tiffany-loop /history sync\n  orchestrator sessions import-native",
+        );
+        return out;
+    };
+
+    let event_count = conversation
+        .turns
+        .iter()
+        .map(|turn| turn.events.len())
+        .sum::<usize>();
+    let mut out = format!(
+        "Native history\n  cwd: {}\n  session: {}\n  turns: {}  events: {}",
+        conversation.cwd,
+        conversation.id,
+        conversation.turns.len(),
+        event_count
+    );
+    if let Some(filter) = filter.display() {
+        out.push_str(&format!("\n  filter: {filter}"));
+    }
+    if conversation.turns.is_empty() {
+        out.push_str("\n\nNo matching native events.");
+        out.push_str("\n\nNext:\n  orchestrator sessions native-history --format text");
+        return out;
+    }
+
+    for turn in &conversation.turns {
+        out.push_str(&format!(
+            "\n\nTurn {}\n  user: {}\n  result: {}",
+            turn.turn_index + 1,
+            truncate_for_cli(&one_line_cli(&turn.user_prompt), 120),
+            truncate_for_cli(&one_line_cli(&turn.result), 140)
+        ));
+        for event in turn.events.iter().take(40) {
+            out.push_str(&format_native_event_cli(event));
+        }
+        if turn.events.len() > 40 {
+            out.push_str(&format!(
+                "\n  ... {} more event(s); use --format json for complete data",
+                turn.events.len() - 40
+            ));
+        }
+    }
+
+    out.push_str("\n\nNext:");
+    out.push_str("\n  tiffany-loop /history full");
+    out.push_str("\n  tiffany-loop /history compact");
+    if let Some(role) = filter
+        .role
+        .as_deref()
+        .or_else(|| first_native_history_role(conversation))
+    {
+        out.push_str(&format!("\n  tiffany-loop /continue open {role}"));
+    }
+    out
+}
+
+fn format_native_event_cli(event: &NativeEvent) -> String {
+    let role = event
+        .worker_role
+        .as_deref()
+        .or(event.agent.as_deref())
+        .unwrap_or(event.role.as_str());
+    let kind = event.kind.as_deref().unwrap_or(event.status.as_str());
+    let mut out = format!(
+        "\n  - {} · {} · {}",
+        kind,
+        role,
+        truncate_for_cli(&event.title, 96)
+    );
+    if let Some(thread) = event.worker_thread_id.as_deref() {
+        out.push_str(&format!("\n    thread: {thread}"));
+    }
+    if let Some(native) = event.native_session_id.as_deref() {
+        out.push_str(&format!("\n    native: {native}"));
+    }
+    if let Some(content) = event.content.as_deref() {
+        let content = orchestrator::agent_events::humanize_jsonish(content, 2_000);
+        for line in content.lines().take(8) {
+            out.push_str(&format!("\n    {}", truncate_for_cli(line, 160)));
+        }
+        let hidden = content.lines().count().saturating_sub(8);
+        if hidden > 0 {
+            out.push_str(&format!(
+                "\n    ... {hidden} more line(s); use --format json for full content"
+            ));
+        }
+    }
+    out
+}
+
+fn one_line_cli(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn first_native_history_role(conversation: &NativeConversation) -> Option<&str> {
+    conversation.turns.iter().find_map(|turn| {
+        turn.events.iter().find_map(|event| {
+            event
+                .worker_role
+                .as_deref()
+                .or(event.agent.as_deref())
+                .or(Some(event.role.as_str()))
+                .filter(|role| !role.trim().is_empty())
+        })
+    })
+}
+
 fn trimmed_nonempty(value: String) -> Option<String> {
     let value = value.trim().to_string();
     (!value.is_empty()).then_some(value)
@@ -2261,7 +2936,7 @@ fn worker_thread_list(cfg: &Config, threads: &[WorkerThread]) -> String {
     } else {
         for role in roles {
             out.push('\n');
-            if let Some(thread) = threads.iter().find(|thread| thread.role == role) {
+            if let Some(thread) = find_worker_thread(threads, &role) {
                 out.push_str(&worker_thread_summary(cfg, thread));
             } else {
                 out.push_str(&missing_worker_thread_summary(cfg, &role));
@@ -2300,14 +2975,26 @@ fn worker_role_sort_key(role: &str) -> (u8, String) {
 }
 
 fn find_worker_thread<'a>(threads: &'a [WorkerThread], selector: &str) -> Option<&'a WorkerThread> {
+    let role_matches = threads
+        .iter()
+        .filter(|thread| thread.role == selector)
+        .collect::<Vec<_>>();
+    if !role_matches.is_empty() {
+        return role_matches
+            .iter()
+            .copied()
+            .find(|thread| {
+                thread
+                    .native_session_id
+                    .as_deref()
+                    .is_some_and(|id| !id.trim().is_empty())
+            })
+            .or_else(|| role_matches.first().copied());
+    }
+
     threads
         .iter()
-        .find(|thread| thread.role == selector)
-        .or_else(|| {
-            threads
-                .iter()
-                .find(|thread| thread.id.to_string().starts_with(selector))
-        })
+        .find(|thread| thread.id.to_string().starts_with(selector))
         .or_else(|| {
             threads.iter().find(|thread| {
                 thread
@@ -2330,10 +3017,11 @@ fn worker_thread_summary(cfg: &Config, thread: &WorkerThread) -> String {
         .map(short_uuid)
         .unwrap_or_else(|| "none".to_string());
     format!(
-        "  ● {:<18} {} · {} · thread {} · native {} · last {}",
+        "  ● {:<18} {} · {} · scope {} · thread {} · native {} · last {}",
         thread.role,
         thread.runtime,
         worker_thread_model_label(cfg, thread),
+        short_worker_thread_scope(&thread.scope),
         short_uuid(&thread.id),
         native,
         last
@@ -2350,6 +3038,10 @@ fn missing_worker_thread_summary(cfg: &Config, role: &str) -> String {
 }
 
 fn worker_thread_detail(cfg: &Config, thread: &WorkerThread) -> String {
+    worker_thread_detail_card(cfg, thread)
+}
+
+fn worker_thread_detail_card(cfg: &Config, thread: &WorkerThread) -> String {
     let native_session = thread
         .native_session_id
         .as_deref()
@@ -2360,27 +3052,39 @@ fn worker_thread_detail(cfg: &Config, thread: &WorkerThread) -> String {
         .as_ref()
         .map(uuid::Uuid::to_string)
         .unwrap_or_else(|| "none".to_string());
+    let worktree = thread
+        .worktree_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let status = worker_thread_status_hint(thread);
+    let resume = native_thread_resume_command(cfg, thread);
+    let handoff = native_thread_handoff_command(cfg, thread);
+    let tui_resume = cli_tui_continue_command(thread);
+    let legacy_handoff = legacy_handoff_continue_command(thread);
     format!(
-        "Worker thread {}\n  role: {}\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n  Tiffany thread: {}\n  native session: {}\n  native resume: {}\n  native handoff: {}\n  last Tiffany session: {}\n  worktree: {}\n  created: {}\n  updated: {}\n\nStatus: {}\nAction: orchestrator thread export {} writes the last Tiffany session for handoff.\nAction: orchestrator thread clear {} resets only the native CLI session id for a fresh next run.",
+        "Worker thread {}\nSession card\n  role: {}\n  scope: {}\n  status: {}\n  reuse: same role in the same project keeps Tiffany thread, native session, and worktree\n\nBinding\n  runtime: {}\n  agent: {}\n  model: {}\n  provider: {}\n\nNative session\n  Tiffany thread: {}\n  native session: {}\n  last Tiffany session: {}\n  worktree: {}\n\nCommands\n  native resume: {}\n  native handoff: {}\n  TUI resume: {}\n  legacy handoff: {}\n\nTimestamps\n  created: {}\n  updated: {}\n\nStatus: {}\nAction: open tiffany-loop and run {} to continue in the native CLI.\nAction: {} saves a handoff package in the legacy terminal TUI.\nAction: orchestrator thread export {} writes the last Tiffany session for handoff.\nAction: orchestrator thread clear {} resets only the native CLI session id for a fresh next run.",
         short_uuid(&thread.id),
         thread.role,
+        thread.scope,
+        status,
         thread.runtime,
         thread.agent,
         worker_thread_model_label(cfg, thread),
         thread.provider.as_deref().unwrap_or("none"),
         thread.id,
         native_session,
-        native_thread_resume_command(thread),
-        native_thread_handoff_command(thread),
         last_session,
-        thread
-            .worktree_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "none".to_string()),
+        worktree,
+        resume,
+        handoff,
+        tui_resume,
+        legacy_handoff,
         thread.created_at.to_rfc3339(),
         thread.updated_at.to_rfc3339(),
-        worker_thread_status_hint(thread),
+        status,
+        tui_resume,
+        legacy_handoff,
         thread.role,
         thread.role
     )
@@ -2413,7 +3117,7 @@ fn worker_thread_model_label(cfg: &Config, thread: &WorkerThread) -> String {
         .unwrap_or_else(|| thread.model.clone())
 }
 
-fn native_thread_resume_command(thread: &WorkerThread) -> String {
+fn native_thread_resume_command(cfg: &Config, thread: &WorkerThread) -> String {
     let Some(native_session_id) = thread
         .native_session_id
         .as_deref()
@@ -2422,32 +3126,38 @@ fn native_thread_resume_command(thread: &WorkerThread) -> String {
     else {
         return "none".to_string();
     };
-    if thread.agent == "claude-code" || thread.runtime == "claude-code" {
-        return format!("claude --resume {native_session_id}");
+    let Some(runtime) = native_thread_runtime(thread) else {
+        return "none".to_string();
+    };
+    let binary = shell_quote_arg(&native_thread_binary(cfg, thread, runtime));
+    let native_session_id = shell_quote_arg(native_session_id);
+    match runtime {
+        roles::cli_subprocess::RoleCliRuntime::ClaudeCode => {
+            format!("{binary} --resume {native_session_id}")
+        }
+        roles::cli_subprocess::RoleCliRuntime::Codex => {
+            format!("{binary} exec resume {native_session_id}")
+        }
+        roles::cli_subprocess::RoleCliRuntime::Gemini => {
+            format!("{binary} --resume {native_session_id}")
+        }
     }
-    if thread.agent == "codex" || thread.runtime == "codex" {
-        return format!("codex exec resume {native_session_id}");
-    }
-    if thread.agent == "gemini" || thread.runtime == "gemini" {
-        return format!("gemini --resume {native_session_id}");
-    }
-    "none".to_string()
 }
 
-fn native_thread_handoff_command(thread: &WorkerThread) -> String {
+fn native_thread_handoff_command(cfg: &Config, thread: &WorkerThread) -> String {
     let cwd = thread
         .worktree_path
         .as_deref()
         .map(shell_quote_path)
         .unwrap_or_else(|| ".".to_string());
-    let command = native_thread_interactive_resume_command(thread);
+    let command = native_thread_interactive_resume_command(cfg, thread);
     if command == "none" {
         return "none".to_string();
     }
     format!("cd {cwd} && {command}")
 }
 
-fn native_thread_interactive_resume_command(thread: &WorkerThread) -> String {
+fn native_thread_interactive_resume_command(cfg: &Config, thread: &WorkerThread) -> String {
     let Some(native_session_id) = thread
         .native_session_id
         .as_deref()
@@ -2456,16 +3166,78 @@ fn native_thread_interactive_resume_command(thread: &WorkerThread) -> String {
     else {
         return "none".to_string();
     };
+    let Some(runtime) = native_thread_runtime(thread) else {
+        return "none".to_string();
+    };
+    let binary = shell_quote_arg(&native_thread_binary(cfg, thread, runtime));
+    let native_session_id = shell_quote_arg(native_session_id);
+    match runtime {
+        roles::cli_subprocess::RoleCliRuntime::ClaudeCode => {
+            format!("{binary} --resume {native_session_id}")
+        }
+        roles::cli_subprocess::RoleCliRuntime::Codex => {
+            format!("{binary} resume {native_session_id}")
+        }
+        roles::cli_subprocess::RoleCliRuntime::Gemini => {
+            format!("{binary} --resume {native_session_id}")
+        }
+    }
+}
+
+fn cli_tui_continue_command(thread: &WorkerThread) -> String {
     if thread.agent == "claude-code" || thread.runtime == "claude-code" {
-        return format!("claude --resume {}", shell_quote_arg(native_session_id));
+        format!("/continue open {}", thread.role)
+    } else if thread.agent == "codex" || thread.runtime == "codex" {
+        format!("/continue open {}", thread.role)
+    } else if thread.agent == "gemini" || thread.runtime == "gemini" {
+        format!("/continue open {}", thread.role)
+    } else {
+        "none".to_string()
     }
-    if thread.agent == "codex" || thread.runtime == "codex" {
-        return format!("codex resume {}", shell_quote_arg(native_session_id));
+}
+
+fn legacy_handoff_continue_command(thread: &WorkerThread) -> String {
+    if thread.agent == "claude-code" || thread.runtime == "claude-code" {
+        "/continue claude".to_string()
+    } else if thread.agent == "codex" || thread.runtime == "codex" {
+        "/continue codex".to_string()
+    } else if thread.agent == "gemini" || thread.runtime == "gemini" {
+        "/continue gemini".to_string()
+    } else {
+        "none".to_string()
     }
-    if thread.agent == "gemini" || thread.runtime == "gemini" {
-        return format!("gemini --resume {}", shell_quote_arg(native_session_id));
+}
+
+fn native_thread_runtime(thread: &WorkerThread) -> Option<roles::cli_subprocess::RoleCliRuntime> {
+    roles::cli_subprocess::RoleCliRuntime::from_runtime_id(&thread.runtime)
+        .or_else(|| roles::cli_subprocess::RoleCliRuntime::from_runtime_id(&thread.agent))
+}
+
+fn native_thread_binary(
+    cfg: &Config,
+    thread: &WorkerThread,
+    runtime: roles::cli_subprocess::RoleCliRuntime,
+) -> String {
+    cfg.runtimes
+        .get(&thread.runtime)
+        .and_then(|runtime| runtime.binary.as_deref())
+        .or_else(|| {
+            cfg.runtimes
+                .get(&thread.agent)
+                .and_then(|runtime| runtime.binary.as_deref())
+        })
+        .map(str::trim)
+        .filter(|binary| !binary.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| native_thread_default_binary(runtime).to_string())
+}
+
+fn native_thread_default_binary(runtime: roles::cli_subprocess::RoleCliRuntime) -> &'static str {
+    match runtime {
+        roles::cli_subprocess::RoleCliRuntime::ClaudeCode => "claude",
+        roles::cli_subprocess::RoleCliRuntime::Codex => "codex",
+        roles::cli_subprocess::RoleCliRuntime::Gemini => "gemini",
     }
-    "none".to_string()
 }
 
 fn shell_quote_path(path: &Path) -> String {
@@ -2517,8 +3289,18 @@ fn short_text_id(id: &str) -> String {
     }
 }
 
+fn short_worker_thread_scope(scope: &str) -> String {
+    scope
+        .strip_prefix("cwd:")
+        .and_then(|path| std::path::Path::new(path).file_name())
+        .and_then(|name| name.to_str())
+        .map(|name| format!("cwd:{name}"))
+        .unwrap_or_else(|| scope.to_string())
+}
+
 fn print_roles(config_path: &Path, selected_role: Option<&str>) -> Result<()> {
     let cfg = Config::load(config_path)?;
+    let threads = role_worker_threads_for_cli(&cfg);
     if let Some(role) = selected_role {
         let Some(role_cfg) = cfg.roles.get(role) else {
             anyhow::bail!(
@@ -2527,7 +3309,10 @@ fn print_roles(config_path: &Path, selected_role: Option<&str>) -> Result<()> {
                 available_roles_for_cli(&cfg)
             );
         };
-        println!("{}", role_detail_for_cli(&cfg, role, role_cfg));
+        let thread = threads
+            .as_deref()
+            .and_then(|threads| find_worker_thread(threads, role));
+        println!("{}", role_detail_for_cli(&cfg, role, role_cfg, thread));
         return Ok(());
     }
 
@@ -2538,12 +3323,151 @@ fn print_roles(config_path: &Path, selected_role: Option<&str>) -> Result<()> {
         println!("  (none)");
     }
     for (role, role_cfg) in roles {
-        println!("  {}", role_detail_for_cli(&cfg, role, role_cfg));
+        let thread = threads
+            .as_deref()
+            .and_then(|threads| find_worker_thread(threads, role));
+        println!("  {}", role_detail_for_cli(&cfg, role, role_cfg, thread));
     }
     println!(
         "\nRegister: orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime-id>"
     );
     Ok(())
+}
+
+fn role_worker_threads_for_cli(cfg: &Config) -> Option<Vec<WorkerThread>> {
+    SessionStore::open(&cfg.behavior.session_log_dir, &cfg.behavior.db_path)
+        .and_then(|store| store.worker_threads_in_current_scope_family())
+        .ok()
+}
+
+fn print_role_options(config_path: &Path) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    println!("Role options");
+    println!("  providers: {}", available_providers_for_cli(&cfg));
+    println!("  runtimes: {}", available_runtimes_for_cli(&cfg));
+    println!();
+    println!("Models:");
+    if cfg.models.is_empty() {
+        println!("  (none)");
+    }
+    let mut models = cfg.models.iter().collect::<Vec<_>>();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    for model in models {
+        println!("  {}", role_model_option_for_cli(&cfg, model));
+    }
+    println!();
+    println!("Runtime presets:");
+    for preset in role_runtime_presets_for_cli(&cfg) {
+        println!("  {preset}");
+    }
+    println!();
+    println!("Register: orchestrator roles register <role> --provider <provider> --model-name <api-model> --runtime <runtime-id>");
+    println!("Profile: orchestrator roles profile dev --worker-cc provider/model@claude-code --worker-codex provider/model@codex --worker-gemini provider/model@gemini");
+    Ok(())
+}
+
+fn role_model_option_for_cli(cfg: &Config, model: &orchestrator::config::ModelConfig) -> String {
+    let provider_ready = cfg.providers.contains_key(&model.provider);
+    let runtimes = compatible_runtime_ids_for_model(cfg, model);
+    let teams = if runtimes.iter().any(|runtime| {
+        cfg.runtime_config(runtime)
+            .is_some_and(|runtime| runtime.supports_agent_teams)
+    }) {
+        "auto"
+    } else {
+        "off"
+    };
+    let health = if !provider_ready {
+        format!("provider-missing:{}", model.provider)
+    } else if runtimes.is_empty() {
+        "runtime-missing".to_string()
+    } else {
+        "ready".to_string()
+    };
+    let symbol = if health == "ready" { "✓" } else { "⚠" };
+    let runtime_label = if runtimes.is_empty() {
+        "-".to_string()
+    } else {
+        runtimes.join(",")
+    };
+    let roles = suggested_roles_for_runtime_ids(&runtimes);
+    format!(
+        "{symbol} {:<18} provider={:<12} api_model={:<28} runtimes={:<22} teams={:<4} roles={:<34} health={}",
+        model.id, model.provider, model.name, runtime_label, teams, roles, health
+    )
+}
+
+fn compatible_runtime_ids_for_model(
+    cfg: &Config,
+    model: &orchestrator::config::ModelConfig,
+) -> Vec<String> {
+    let mut runtimes = cfg
+        .runtimes
+        .keys()
+        .filter(|runtime| {
+            runtime_target_for_id(runtime)
+                .is_some_and(|target| model_supports_runtime(cfg, model, target))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    runtimes.sort();
+    runtimes
+}
+
+fn runtime_target_for_id(runtime: &str) -> Option<RuntimeTarget> {
+    match roles::cli_subprocess::RoleCliRuntime::from_runtime_id(runtime)? {
+        roles::cli_subprocess::RoleCliRuntime::ClaudeCode => Some(RuntimeTarget::Claude),
+        roles::cli_subprocess::RoleCliRuntime::Codex => Some(RuntimeTarget::Codex),
+        roles::cli_subprocess::RoleCliRuntime::Gemini => Some(RuntimeTarget::Gemini),
+    }
+}
+
+fn suggested_roles_for_runtime_ids(runtimes: &[String]) -> String {
+    let mut roles = Vec::new();
+    if runtimes
+        .iter()
+        .any(|runtime| runtime == "claude-code" || runtime == "claude")
+    {
+        roles.push("worker-cc");
+    }
+    if runtimes.iter().any(|runtime| runtime == "codex") {
+        roles.extend(["worker-codex", "planner", "critic", "reviewer"]);
+    }
+    if runtimes
+        .iter()
+        .any(|runtime| runtime == "gemini" || runtime == "gemini-cli")
+    {
+        roles.push("worker-gemini");
+    }
+    if roles.is_empty() {
+        "-".to_string()
+    } else {
+        roles.join(",")
+    }
+}
+
+fn role_runtime_presets_for_cli(cfg: &Config) -> Vec<String> {
+    let mut runtimes = cfg.runtimes.iter().collect::<Vec<_>>();
+    runtimes.sort_by(|a, b| a.0.cmp(b.0));
+    runtimes
+        .into_iter()
+        .map(|(id, runtime)| {
+            let teams = if runtime.supports_agent_teams {
+                "teams=auto"
+            } else {
+                "teams=off"
+            };
+            let binary = runtime
+                .binary
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("default");
+            format!(
+                "• {:<12} type={:<10} binary={:<18} {}",
+                id, runtime.kind, binary, teams
+            )
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2602,6 +3526,20 @@ fn register_role(
             println!("  orchestrator run \"...\" --worker {}", role);
             println!("  /roles use {}   (legacy terminal chat)", role);
         }
+    }
+    Ok(())
+}
+
+fn delete_role(config_path: &Path, role: &str) -> Result<()> {
+    if Config::delete_role_from_config_file(config_path, role)? {
+        println!("✓ role {} deleted", role);
+        println!("  kept: models, providers, runtimes, worker threads, and session history");
+        println!("  next: orchestrator roles list");
+        println!("  optional: orchestrator thread clear {role}");
+    } else {
+        let cfg = Config::load(config_path)?;
+        println!("role {} not found", role);
+        println!("  available: {}", available_roles_for_cli(&cfg));
     }
     Ok(())
 }
@@ -2847,6 +3785,7 @@ fn role_detail_for_cli(
     cfg: &Config,
     role: &str,
     role_cfg: &orchestrator::config::RoleConfig,
+    thread: Option<&WorkerThread>,
 ) -> String {
     let model_entry = cfg.models.iter().find(|m| m.id == role_cfg.model);
     let model = model_entry
@@ -2855,10 +3794,37 @@ fn role_detail_for_cli(
     let provider = model_entry.map(|m| m.provider.as_str()).unwrap_or("-");
     let api_model = model_entry.map(|m| m.name.as_str()).unwrap_or("-");
     let health = role_health_for_cli(cfg, role_cfg, model_entry);
-    format!(
+    let mut detail = format!(
         "{:<14} model={:<18} provider={:<12} api_model={:<28} runtime={:<12} teams={} health={}",
         role, model, provider, api_model, role_cfg.runtime, role_cfg.agent_teams, health
-    )
+    );
+    if role.contains("worker") || thread.is_some() {
+        let (thread_id, native_id, last_id) = role_thread_status_tokens(thread);
+        detail.push_str(&format!(
+            " thread={thread_id} native={native_id} last={last_id}"
+        ));
+    }
+    detail
+}
+
+fn role_thread_status_tokens(thread: Option<&WorkerThread>) -> (String, String, String) {
+    let Some(thread) = thread else {
+        return ("none".to_string(), "none".to_string(), "none".to_string());
+    };
+    let thread_id = short_uuid(&thread.id);
+    let native_id = thread
+        .native_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(short_text_id)
+        .unwrap_or_else(|| "none".to_string());
+    let last_id = thread
+        .last_session_id
+        .as_ref()
+        .map(short_uuid)
+        .unwrap_or_else(|| "none".to_string());
+    (thread_id, native_id, last_id)
 }
 
 fn role_health_for_cli(
@@ -3847,6 +4813,82 @@ fn list_providers(config_path: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn show_provider(config_path: &Path, provider: &str) -> Result<()> {
+    let cfg = Config::load(config_path)
+        .with_context(|| format!("loading config at {}", config_path.display()))?;
+    print!("{}", format_provider_detail_for_cli(&cfg, provider));
+    Ok(())
+}
+
+fn format_provider_detail_for_cli(cfg: &Config, provider: &str) -> String {
+    let Some(provider_cfg) = cfg.providers.get(provider) else {
+        return format!(
+            "Unknown provider: {provider}\n\
+             Available providers: {}\n\n\
+             Create one with:\n\
+               tiffany-loop config provider setup {provider} --env <ENV_VAR>\n\
+             Then bind a role:\n\
+               tiffany-loop roles register <role> --provider {provider} --model-name <api-model> --runtime <runtime>\n",
+            available_providers_for_cli(cfg)
+        );
+    };
+
+    let (models, roles) = provider_model_role_summary(cfg, provider);
+    let auth = if provider_auth_ready_for_cli(provider_cfg) {
+        "set"
+    } else {
+        "missing"
+    };
+    let endpoint = provider_cfg
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("provider default");
+
+    let mut out = format!(
+        "Provider {provider}\n\
+           type: {}\n\
+           auth: {auth}\n\
+           endpoint: {endpoint}\n\
+           models: {models}\n\
+           roles: {roles}\n\n\
+         Model bindings:\n",
+        provider_cfg.kind
+    );
+    let mut bound = cfg
+        .models
+        .iter()
+        .filter(|model| model.provider == provider)
+        .map(|model| format!("  {} -> {}", model.id, model.name))
+        .collect::<Vec<_>>();
+    bound.sort();
+    if bound.is_empty() {
+        out.push_str("  none\n");
+    } else {
+        for line in bound {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+    out.push_str(&format!(
+        "Actions: /provider edit {provider}, /role <role>, /roles register <role> --provider {provider} --model-name <api-model> --runtime <runtime>, /doctor\n"
+    ));
+    out
+}
+
+fn provider_auth_ready_for_cli(cfg: &orchestrator::config::ProviderConfig) -> bool {
+    let kind = cfg.kind.to_ascii_lowercase();
+    if matches!(kind.as_str(), "ollama" | "local" | "none") {
+        return true;
+    }
+    cfg.api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
 }
 
 fn provider_model_role_summary(cfg: &Config, provider: &str) -> (String, String) {
@@ -5537,13 +6579,99 @@ mod tests {
     }
 
     #[test]
+    fn provider_detail_formats_model_and_role_bindings() {
+        let mut cfg = config_with_models();
+        cfg.providers
+            .insert("openai".to_string(), provider("openai"));
+        cfg.roles.insert(
+            "worker-codex".to_string(),
+            RoleConfig {
+                model: "gpt4o".to_string(),
+                runtime: "codex".to_string(),
+                agent_teams: false,
+            },
+        );
+
+        let rendered = format_provider_detail_for_cli(&cfg, "openai");
+
+        assert!(rendered.contains("Provider openai"));
+        assert!(rendered.contains("type: openai"));
+        assert!(rendered.contains("auth: set"));
+        assert!(rendered.contains("models: gpt4o"));
+        assert!(rendered.contains("roles: worker-codex"));
+        assert!(rendered.contains("gpt4o -> gpt-4o"));
+        assert!(rendered.contains("/provider edit openai"));
+    }
+
+    #[test]
+    fn provider_detail_guides_unknown_provider_setup() {
+        let cfg = config_with_models();
+
+        let rendered = format_provider_detail_for_cli(&cfg, "openai");
+
+        assert!(rendered.contains("Unknown provider: openai"));
+        assert!(rendered.contains("Available providers: (none)"));
+        assert!(rendered.contains("tiffany-loop config provider setup openai"));
+    }
+
+    #[test]
+    fn role_options_align_models_with_supported_runtimes() {
+        let mut cfg = config_with_models();
+        cfg.providers
+            .insert("anthropic".to_string(), provider("anthropic"));
+        cfg.providers
+            .insert("openai".to_string(), provider("openai"));
+        cfg.providers
+            .insert("google".to_string(), provider("google"));
+        cfg.models.push(ModelConfig {
+            id: "gemini-pro".to_string(),
+            provider: "google".to_string(),
+            name: "gemini-2.5-pro".to_string(),
+        });
+        cfg.runtimes.insert(
+            "gemini".to_string(),
+            orchestrator::config::RuntimeConfig {
+                kind: "subprocess".to_string(),
+                binary: Some("gemini-test".to_string()),
+                supports_mcp: false,
+                supports_agent_teams: false,
+            },
+        );
+
+        let sonnet = cfg
+            .models
+            .iter()
+            .find(|model| model.id == "sonnet")
+            .unwrap();
+        let codex = cfg.models.iter().find(|model| model.id == "gpt4o").unwrap();
+        let gemini = cfg
+            .models
+            .iter()
+            .find(|model| model.id == "gemini-pro")
+            .unwrap();
+
+        assert_eq!(
+            compatible_runtime_ids_for_model(&cfg, sonnet),
+            vec!["claude-code"]
+        );
+        assert_eq!(compatible_runtime_ids_for_model(&cfg, codex), vec!["codex"]);
+        assert_eq!(
+            compatible_runtime_ids_for_model(&cfg, gemini),
+            vec!["gemini"]
+        );
+        assert!(role_model_option_for_cli(&cfg, sonnet).contains("roles=worker-cc"));
+        assert!(role_model_option_for_cli(&cfg, codex).contains("worker-codex"));
+        assert!(role_model_option_for_cli(&cfg, gemini).contains("worker-gemini"));
+    }
+
+    #[test]
     fn role_detail_for_cli_surfaces_provider_api_model_and_health() {
         let mut cfg = config_with_models();
         cfg.providers
             .insert("anthropic".to_string(), provider("anthropic"));
 
         let planner = cfg.roles.get("planner").unwrap();
-        let detail = role_detail_for_cli(&cfg, "planner", planner);
+        let detail = role_detail_for_cli(&cfg, "planner", planner, None);
         assert!(detail.contains("model=sonnet"));
         assert!(detail.contains("provider=anthropic"));
         assert!(detail.contains("api_model=claude-sonnet-4-6"));
@@ -5555,9 +6683,45 @@ mod tests {
             runtime: "missing-runtime".to_string(),
             agent_teams: false,
         };
-        let detail = role_detail_for_cli(&cfg, "broken", &broken);
+        let detail = role_detail_for_cli(&cfg, "broken", &broken, None);
         assert!(detail.contains("health=model-missing:missing-model"));
         assert!(detail.contains("runtime-missing:missing-runtime"));
+    }
+
+    #[test]
+    fn role_detail_for_cli_surfaces_worker_thread_handoff_state() {
+        let mut cfg = config_with_models();
+        cfg.providers
+            .insert("openai".to_string(), provider("openai"));
+        let role = RoleConfig {
+            model: "gpt4o".to_string(),
+            runtime: "codex".to_string(),
+            agent_teams: false,
+        };
+        let thread = WorkerThread {
+            id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap(),
+            scope: "tui:/tmp/project:session:abc".to_string(),
+            role: "worker-codex".to_string(),
+            runtime: "codex".to_string(),
+            agent: "codex".to_string(),
+            model: "gpt-4o".to_string(),
+            provider: Some("openai".to_string()),
+            worktree_path: Some(std::path::PathBuf::from("/tmp/project")),
+            native_session_id: Some("codex-native-session-123456".to_string()),
+            last_session_id: Some(
+                uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000456").unwrap(),
+            ),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let detail = role_detail_for_cli(&cfg, "worker-codex", &role, Some(&thread));
+
+        assert!(detail.contains("provider=openai"));
+        assert!(detail.contains("api_model=gpt-4o"));
+        assert!(detail.contains("thread=00000000"));
+        assert!(detail.contains("native=codex-native..."));
+        assert!(detail.contains("last=00000000"));
     }
 
     #[test]
@@ -5594,6 +6758,27 @@ mod tests {
     }
 
     #[test]
+    fn delete_role_removes_only_role_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        std::fs::write(
+            &config_path,
+            "providers:\n  minimax:\n    type: openai\n    api_key: ${MINIMAX_API_KEY}\nruntimes:\n  codex:\n    type: subprocess\n    binary: codex\nmodels:\n  - id: minimax-m3\n    provider: minimax\n    name: MiniMax-M3\nroles:\n  worker-codex:\n    model: minimax-m3\n    runtime: codex\n    agent_teams: false\nbehavior: {}\n",
+        )
+        .unwrap();
+
+        delete_role(&config_path, "worker-codex").unwrap();
+
+        let body = std::fs::read_to_string(&config_path).unwrap();
+        assert!(!body.contains("worker-codex:"));
+        assert!(body.contains("minimax-m3"));
+        assert!(body.contains("providers:"));
+        assert!(body.contains("runtimes:"));
+
+        delete_role(&config_path, "missing-role").unwrap();
+    }
+
+    #[test]
     fn parse_role_profile_binding_accepts_model_or_provider_model() {
         let model = parse_role_profile_binding("sonnet@claude-code").unwrap();
         assert_eq!(model.model, Some("sonnet"));
@@ -5617,7 +6802,7 @@ mod tests {
         let config_path = dir.path().join("config.yaml");
         std::fs::write(
             &config_path,
-            "providers:\n  anthropic:\n    type: anthropic\n    api_key: ${ANTHROPIC_API_KEY}\n  minimax:\n    type: openai\n    api_key: ${MINIMAX_API_KEY}\n    base_url: https://api.minimaxi.com/v1\nruntimes:\n  claude-code:\n    type: subprocess\n    binary: claude\n    supports_agent_teams: true\n  codex:\n    type: subprocess\n    binary: codex\nmodels:\n  - id: sonnet\n    provider: anthropic\n    name: claude-sonnet-4-6\nroles: {}\nbehavior: {}\n",
+            "providers:\n  anthropic:\n    type: anthropic\n    api_key: ${ANTHROPIC_API_KEY}\n  minimax:\n    type: openai\n    api_key: ${MINIMAX_API_KEY}\n    base_url: https://api.minimaxi.com/v1\n  google:\n    type: google\n    api_key: ${GOOGLE_API_KEY}\nruntimes:\n  claude-code:\n    type: subprocess\n    binary: claude\n    supports_agent_teams: true\n  codex:\n    type: subprocess\n    binary: codex\n  gemini:\n    type: subprocess\n    binary: gemini\nmodels:\n  - id: sonnet\n    provider: anthropic\n    name: claude-sonnet-4-6\nroles: {}\nbehavior: {}\n",
         )
         .unwrap();
 
@@ -5628,6 +6813,7 @@ mod tests {
                 ("planner", Some("sonnet@claude-code")),
                 ("worker-cc", Some("minimax/MiniMax-M3@claude-code")),
                 ("worker-codex", Some("sonnet@codex")),
+                ("worker-gemini", Some("google/gemini-2.5-pro@gemini")),
             ],
             false,
         )
@@ -5637,11 +6823,16 @@ mod tests {
         assert!(body.contains("planner:"));
         assert!(body.contains("worker-cc:"));
         assert!(body.contains("worker-codex:"));
+        assert!(body.contains("worker-gemini:"));
         assert!(body.contains("id: minimax-m3"));
         assert!(body.contains("provider: minimax"));
         assert!(body.contains("name: MiniMax-M3"));
+        assert!(body.contains("id: gemini-2-5-pro"));
+        assert!(body.contains("provider: google"));
+        assert!(body.contains("name: gemini-2.5-pro"));
         assert!(body.contains("agent_teams: true"));
         assert!(body.contains("runtime: codex"));
+        assert!(body.contains("runtime: gemini"));
     }
 
     #[test]
@@ -6036,6 +7227,7 @@ mod tests {
         );
         let thread = WorkerThread {
             id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap(),
+            scope: "cwd:/tmp/tiffany-worker".to_string(),
             role: "worker-codex".to_string(),
             runtime: "codex".to_string(),
             agent: "codex".to_string(),
@@ -6075,6 +7267,7 @@ mod tests {
         );
         let thread = WorkerThread {
             id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap(),
+            scope: "cwd:/tmp/tiffany-worker".to_string(),
             role: "worker-codex".to_string(),
             runtime: "codex".to_string(),
             agent: "codex".to_string(),
@@ -6091,20 +7284,86 @@ mod tests {
 
         let detail = worker_thread_detail(&cfg, &thread);
 
+        assert!(detail.contains("Session card"));
+        assert!(detail.contains("reuse: same role in the same project keeps Tiffany thread"));
+        assert!(detail.contains("scope: cwd:/tmp/tiffany-worker"));
+        assert!(detail.contains("Binding"));
+        assert!(detail.contains("Native session"));
+        assert!(detail.contains("Commands"));
         assert!(detail.contains("native session: codex-native-session"));
-        assert!(detail.contains("native resume: codex exec resume codex-native-session"));
+        assert!(detail.contains("native resume: codex-test exec resume codex-native-session"));
         assert!(detail.contains(
-            "native handoff: cd /tmp/tiffany-worker && codex resume codex-native-session"
+            "native handoff: cd /tmp/tiffany-worker && codex-test resume codex-native-session"
         ));
+        assert!(detail.contains("TUI resume: /continue open worker-codex"));
+        assert!(detail.contains("legacy handoff: /continue codex"));
+        assert!(detail.contains("Action: open tiffany-loop and run /continue open worker-codex"));
+        assert!(detail.contains("Action: /continue codex saves a handoff package"));
         assert!(detail.contains("Status: ready for native resume"));
         assert!(detail.contains("Action: orchestrator thread clear worker-codex"));
         assert!(detail.contains("/tmp/tiffany-worker"));
     }
 
     #[test]
+    fn worker_thread_selection_prefers_recoverable_native_session_for_same_role() {
+        let mut cfg = config_with_models();
+        cfg.roles.insert(
+            "worker-cc".to_string(),
+            RoleConfig {
+                model: "sonnet".to_string(),
+                runtime: "claude-code".to_string(),
+                agent_teams: true,
+            },
+        );
+        let now = chrono::Utc::now();
+        let current_without_native = WorkerThread {
+            id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000111").unwrap(),
+            scope: "tui:/tmp/project:session:current".to_string(),
+            role: "worker-cc".to_string(),
+            runtime: "claude-code".to_string(),
+            agent: "claude-code".to_string(),
+            model: "sonnet".to_string(),
+            provider: Some("anthropic".to_string()),
+            worktree_path: Some(std::path::PathBuf::from("/tmp/project")),
+            native_session_id: None,
+            last_session_id: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let previous_with_native = WorkerThread {
+            id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000222").unwrap(),
+            scope: "tui:/tmp/project:session:previous".to_string(),
+            role: "worker-cc".to_string(),
+            runtime: "claude-code".to_string(),
+            agent: "claude-code".to_string(),
+            model: "sonnet".to_string(),
+            provider: Some("anthropic".to_string()),
+            worktree_path: Some(std::path::PathBuf::from("/tmp/project")),
+            native_session_id: Some("claude-native-session".to_string()),
+            last_session_id: Some(
+                uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000333").unwrap(),
+            ),
+            created_at: now - chrono::Duration::minutes(10),
+            updated_at: now - chrono::Duration::minutes(10),
+        };
+        let threads = vec![current_without_native, previous_with_native];
+
+        let selected = find_worker_thread(&threads, "worker-cc").expect("selected thread");
+        let rendered = worker_thread_list(&cfg, &threads);
+
+        assert_eq!(
+            selected.native_session_id.as_deref(),
+            Some("claude-native-session")
+        );
+        assert!(rendered.contains("native claude-nativ..."));
+        assert!(rendered.contains("thread 00000000"));
+    }
+
+    #[test]
     fn worker_thread_cli_handoff_quotes_paths_and_targets_native_tui() {
         let thread = WorkerThread {
             id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap(),
+            scope: "cwd:/tmp/tiffany-worker".to_string(),
             role: "worker-cc".to_string(),
             runtime: "claude-code".to_string(),
             agent: "claude-code".to_string(),
@@ -6118,9 +7377,418 @@ mod tests {
         };
 
         assert_eq!(
-            native_thread_handoff_command(&thread),
+            native_thread_handoff_command(&Config::default(), &thread),
             "cd '/tmp/tiffany worker' && claude --resume 'native session'"
         );
+    }
+
+    #[test]
+    fn tui_job_result_capture_prefers_final_worker_output() {
+        let mut capture = TuiJobResultCapture::default();
+        let task_id = uuid::Uuid::new_v4();
+
+        capture.observe(
+            &orchestrator::pipeline::orchestrator::RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".to_string(),
+                role: "worker-cc".to_string(),
+                event_kind: "assistant".to_string(),
+                content: "claude-code assistant: thinking".to_string(),
+            },
+        );
+        capture.observe(
+            &orchestrator::pipeline::orchestrator::RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".to_string(),
+                role: "worker-cc".to_string(),
+                event_kind: "assistant".to_string(),
+                content: "claude-code assistant: interim answer".to_string(),
+            },
+        );
+        capture.observe(
+            &orchestrator::pipeline::orchestrator::RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".to_string(),
+                role: "worker-cc".to_string(),
+                event_kind: "result".to_string(),
+                content: "claude-code result: final answer for the job".to_string(),
+            },
+        );
+
+        assert_eq!(
+            capture.result().as_deref(),
+            Some("final answer for the job")
+        );
+    }
+
+    #[test]
+    fn tui_job_result_capture_does_not_replace_final_answer_with_diff() {
+        let mut capture = TuiJobResultCapture::default();
+        let task_id = uuid::Uuid::new_v4();
+
+        capture.observe(
+            &orchestrator::pipeline::orchestrator::RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".to_string(),
+                role: "worker-cc".to_string(),
+                event_kind: "assistant".to_string(),
+                content:
+                    "claude-code assistant: Fake Claude worker completed the Tiffany e2e smoke run."
+                        .to_string(),
+            },
+        );
+        capture.observe(
+            &orchestrator::pipeline::orchestrator::RunProgress::WorkerOutput {
+                task_id,
+                agent: "claude-code".to_string(),
+                role: "worker-cc".to_string(),
+                event_kind: "result".to_string(),
+                content:
+                    "claude-code result: Fake Claude worker completed the Tiffany e2e smoke run."
+                        .to_string(),
+            },
+        );
+        capture.observe(&orchestrator::pipeline::orchestrator::RunProgress::WorkerOutput {
+            task_id,
+            agent: "claude-code".to_string(),
+            role: "worker-cc".to_string(),
+            event_kind: "diff".to_string(),
+            content: "claude-code diff: files changed:\n  - README.md\n\ndiff --git a/README.md b/README.md\n+very long diff output".to_string(),
+        });
+
+        assert_eq!(
+            capture.result().as_deref(),
+            Some("Fake Claude worker completed the Tiffany e2e smoke run.")
+        );
+    }
+
+    #[test]
+    fn jobs_cli_includes_result_summary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = orchestrator::core::session_store::SessionStore::open(
+            &tmp.path().join("logs"),
+            &tmp.path().join("db.sqlite"),
+        )
+        .unwrap();
+        let job = store
+            .create_tui_job(
+                "write summary",
+                "running",
+                Some("single-worker"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+        store
+            .set_tui_job_status(job.id, "done", Some("final result\nwith two lines"), None)
+            .unwrap();
+
+        let rendered = format_tui_jobs_cli(&store, 5).unwrap();
+
+        assert!(rendered.contains("✓"));
+        assert!(rendered.contains("done"));
+        assert!(rendered.contains("result final result with two lines"));
+        assert!(!rendered.contains('{'));
+    }
+
+    #[test]
+    fn jobs_cli_can_show_and_cancel_by_short_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = orchestrator::core::session_store::SessionStore::open(
+            &tmp.path().join("logs"),
+            &tmp.path().join("db.sqlite"),
+        )
+        .unwrap();
+        let job = store
+            .create_tui_job(
+                "queued follow-up",
+                "queued",
+                Some("direct-answer"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+        let short_id = job.id.to_string().chars().take(8).collect::<String>();
+
+        let shown = run_jobs_command(
+            &store,
+            Some(crate::JobsCmd::Show {
+                id: short_id.clone(),
+            }),
+            20,
+        )
+        .unwrap();
+        assert!(shown.contains("Jobs"));
+        assert!(shown.contains(&short_id));
+        assert!(shown.contains("queued follow-up"));
+        assert!(shown.contains("queued"));
+
+        let cancelled = run_jobs_command(
+            &store,
+            Some(crate::JobsCmd::Cancel {
+                id: short_id.clone(),
+            }),
+            20,
+        )
+        .unwrap();
+        assert!(cancelled.contains("Job "));
+        assert!(cancelled.contains("cancelled"));
+        assert!(cancelled.contains("error cancelled by user from jobs"));
+        let job = store.get_tui_job(job.id).unwrap().expect("job");
+        assert_eq!(job.status, "cancelled");
+    }
+
+    #[test]
+    fn jobs_cli_recovers_only_stale_running_jobs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("db.sqlite");
+        let store = orchestrator::core::session_store::SessionStore::open(
+            &tmp.path().join("logs"),
+            &db_path,
+        )
+        .unwrap();
+        let stale = store
+            .create_tui_job(
+                "stale running",
+                "running",
+                Some("single-worker"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+        let fresh = store
+            .create_tui_job(
+                "fresh running",
+                "running",
+                Some("single-worker"),
+                Some("worker-codex"),
+            )
+            .unwrap();
+        let queued = store
+            .create_tui_job(
+                "queued prompt",
+                "queued",
+                Some("direct-answer"),
+                Some("worker-gemini"),
+            )
+            .unwrap();
+        let old = (chrono::Utc::now() - chrono::Duration::minutes(45)).to_rfc3339();
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute(
+            "UPDATE tui_jobs SET started_at = ?, updated_at = ? WHERE id = ?",
+            rusqlite::params![old, old, stale.id.to_string()],
+        )
+        .unwrap();
+
+        let rendered = recover_stale_tui_jobs(&store, 30, 10).unwrap();
+
+        let stale = store.get_tui_job(stale.id).unwrap().expect("stale job");
+        let fresh = store.get_tui_job(fresh.id).unwrap().expect("fresh job");
+        let queued = store.get_tui_job(queued.id).unwrap().expect("queued job");
+        assert_eq!(stale.status, "failed");
+        assert!(stale
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("recovered stale running job"));
+        assert!(stale.ended_at.is_some());
+        assert_eq!(fresh.status, "running");
+        assert_eq!(queued.status, "queued");
+        assert!(rendered.contains("Recovered stale jobs"));
+        assert!(rendered.contains("failed: 1"));
+        assert!(rendered.contains("stale running"));
+        assert!(rendered.contains("fresh running"));
+    }
+
+    #[test]
+    fn jobs_cli_retries_finished_job_as_new_queued_job() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = orchestrator::core::session_store::SessionStore::open(
+            &tmp.path().join("logs"),
+            &tmp.path().join("db.sqlite"),
+        )
+        .unwrap();
+        let failed = store
+            .create_tui_job(
+                "retry this prompt",
+                "running",
+                Some("single-worker"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+        store
+            .set_tui_job_status(failed.id, "failed", None, Some("network timeout"))
+            .unwrap();
+        let short = short_uuid_for_cli(failed.id);
+
+        let rendered = retry_tui_job(&store, &short, 10, false, false).unwrap();
+        let jobs = store.list_tui_jobs(10).unwrap();
+        let retry = jobs
+            .iter()
+            .find(|job| job.id != failed.id && job.prompt == "retry this prompt")
+            .expect("retry job");
+        let failed = store.get_tui_job(failed.id).unwrap().expect("failed job");
+
+        assert_eq!(failed.status, "failed");
+        assert_eq!(retry.status, "queued");
+        assert_eq!(retry.route.as_deref(), Some("single-worker"));
+        assert_eq!(retry.role.as_deref(), Some("worker-cc"));
+        assert!(rendered.contains("queued for retry"));
+        assert!(rendered.contains(&short_uuid_for_cli(retry.id)));
+        assert!(rendered.contains("tiffany-loop /queue run"));
+        assert!(!rendered.contains("retry prompt:"));
+    }
+
+    #[test]
+    fn jobs_cli_can_emit_full_retry_prompt_for_tui_handoff() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = orchestrator::core::session_store::SessionStore::open(
+            &tmp.path().join("logs"),
+            &tmp.path().join("db.sqlite"),
+        )
+        .unwrap();
+        let prompt = "first line\nsecond\tline \\ slash";
+        let failed = store
+            .create_tui_job(prompt, "running", Some("single-worker"), Some("worker-cc"))
+            .unwrap();
+        store
+            .set_tui_job_status(failed.id, "failed", None, Some("network timeout"))
+            .unwrap();
+
+        let rendered =
+            retry_tui_job(&store, &short_uuid_for_cli(failed.id), 10, true, false).unwrap();
+
+        assert!(rendered.contains("retry prompt: first line\\nsecond\\tline \\\\ slash"));
+    }
+
+    #[test]
+    fn jobs_cli_tui_handoff_does_not_leave_duplicate_persisted_retry_job() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = orchestrator::core::session_store::SessionStore::open(
+            &tmp.path().join("logs"),
+            &tmp.path().join("db.sqlite"),
+        )
+        .unwrap();
+        let failed = store
+            .create_tui_job(
+                "retry in active TUI",
+                "running",
+                Some("single-worker"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+        store
+            .set_tui_job_status(failed.id, "failed", None, Some("network timeout"))
+            .unwrap();
+
+        let rendered = retry_tui_job(&store, &short_uuid_for_cli(failed.id), 10, false, true)
+            .expect("tui handoff");
+        let jobs = store.list_tui_jobs(10).unwrap();
+
+        assert_eq!(
+            jobs.len(),
+            1,
+            "handoff should not create a stale queued retry job"
+        );
+        assert_eq!(jobs[0].id, failed.id);
+        assert_eq!(jobs[0].status, "failed");
+        assert!(rendered.contains("prepared for TUI retry"));
+        assert!(rendered.contains("queued in current TUI input queue"));
+        assert!(rendered.contains("retry prompt: retry in active TUI"));
+        assert!(rendered.contains("/queue run"));
+    }
+
+    #[test]
+    fn jobs_cli_rejects_retry_for_active_job() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = orchestrator::core::session_store::SessionStore::open(
+            &tmp.path().join("logs"),
+            &tmp.path().join("db.sqlite"),
+        )
+        .unwrap();
+        let running = store
+            .create_tui_job(
+                "active prompt",
+                "running",
+                Some("single-worker"),
+                Some("worker-cc"),
+            )
+            .unwrap();
+
+        let err = retry_tui_job(&store, &short_uuid_for_cli(running.id), 10, false, false)
+            .expect_err("running job should not retry");
+
+        assert!(format!("{err:#}").contains("is running"));
+        assert_eq!(store.list_tui_jobs(10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn tui_job_progress_attaches_worker_session_and_native_handle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = orchestrator::core::session_store::SessionStore::open(
+            &tmp.path().join("logs"),
+            &tmp.path().join("db.sqlite"),
+        )
+        .unwrap();
+        let job = store
+            .create_tui_job("continue worker", "running", None, Some("worker-cc"))
+            .unwrap();
+        let task_id = uuid::Uuid::new_v4();
+        let thread_id = uuid::Uuid::new_v4();
+
+        attach_tui_job_progress(
+            &store,
+            job.id,
+            &orchestrator::pipeline::orchestrator::RunProgress::WorkerStarted {
+                task_id,
+                agent: "claude-code".to_string(),
+                role: "worker-cc".to_string(),
+                runtime: "claude-code".to_string(),
+                cc_agent: None,
+                model: "claude-sonnet-4-6".to_string(),
+                provider: Some("anthropic".to_string()),
+                prompt: "continue worker".to_string(),
+            },
+        );
+        attach_tui_job_progress(
+            &store,
+            job.id,
+            &orchestrator::pipeline::orchestrator::RunProgress::WorkerThreadReady {
+                task_id,
+                role: "worker-cc".to_string(),
+                thread_id,
+                native_session_id: Some("claude-native-session".to_string()),
+                reused: true,
+            },
+        );
+
+        let job = store.get_tui_job(job.id).unwrap().expect("job");
+        assert_eq!(job.task_id, Some(task_id));
+        assert_eq!(job.session_id, None);
+        assert_eq!(job.worker_thread_id, Some(thread_id));
+        assert_eq!(
+            job.native_session_id.as_deref(),
+            Some("claude-native-session")
+        );
+        let mut session = Session::new(task_id, "claude-code", Role::Worker);
+        session.worker_thread_id = Some(thread_id);
+        session.native_session_id = Some("claude-native-session".to_string());
+        store.finalize(&session).unwrap();
+        attach_tui_job_progress(
+            &store,
+            job.id,
+            &orchestrator::pipeline::orchestrator::RunProgress::WorkerDone {
+                task_id,
+                agent: "claude-code".to_string(),
+                role: "worker-cc".to_string(),
+                duration_ms: 125,
+                ok: true,
+            },
+        );
+        let job = store.get_tui_job(job.id).unwrap().expect("job");
+        assert_eq!(job.session_id, Some(session.id));
+        let rendered = format_tui_jobs_cli(&store, 5).unwrap();
+        assert!(rendered.contains("task "));
+        assert!(rendered.contains("session "));
+        assert!(rendered.contains("thread "));
+        assert!(rendered.contains("native claude-native-session"));
     }
 
     #[test]
@@ -6218,6 +7886,76 @@ mod tests {
                           "task_id": "task-1",
                           "worker_thread_id": "thread-1",
                           "native_session_id": "native-1"
+                        },
+                        {
+                          "role": "worker",
+                          "status": "output",
+                          "title": "worker answer · worker-cc · claude-code",
+                          "kind": "answer",
+                          "content": "已读取规则，准备实现。",
+                          "agent": "claude-code",
+                          "worker_role": "worker-cc",
+                          "model": "claude-sonnet-4-6",
+                          "provider": "anthropic",
+                          "task_id": "task-answer",
+                          "worker_thread_id": "thread-1",
+                          "native_session_id": "native-1"
+                        },
+                        {
+                          "role": "worker",
+                          "status": "output",
+                          "title": "worker tool call · worker-cc · claude-code",
+                          "kind": "tool_call",
+                          "content": "tool Bash: cargo test -q",
+                          "agent": "claude-code",
+                          "worker_role": "worker-cc",
+                          "model": "claude-sonnet-4-6",
+                          "provider": "anthropic",
+                          "task_id": "task-tool",
+                          "worker_thread_id": "thread-1",
+                          "native_session_id": "native-1"
+                        },
+                        {
+                          "role": "worker",
+                          "status": "output",
+                          "title": "worker tool result · worker-cc · claude-code",
+                          "kind": "tool_result",
+                          "content": "tool shell result: exit 0\nok",
+                          "agent": "claude-code",
+                          "worker_role": "worker-cc",
+                          "model": "claude-sonnet-4-6",
+                          "provider": "anthropic",
+                          "task_id": "task-tool-result",
+                          "worker_thread_id": "thread-1",
+                          "native_session_id": "native-1"
+                        },
+                        {
+                          "role": "worker",
+                          "status": "output",
+                          "title": "worker approval · worker-cc · claude-code",
+                          "kind": "approval",
+                          "content": "waiting for command approval: rm -rf target",
+                          "agent": "claude-code",
+                          "worker_role": "worker-cc",
+                          "model": "claude-sonnet-4-6",
+                          "provider": "anthropic",
+                          "task_id": "task-approval",
+                          "worker_thread_id": "thread-1",
+                          "native_session_id": "native-1"
+                        },
+                        {
+                          "role": "worker",
+                          "status": "output",
+                          "title": "worker stderr · worker-codex · codex",
+                          "kind": "stderr",
+                          "content": "API Error: 400 [1211][模型不存在]",
+                          "agent": "codex",
+                          "worker_role": "worker-codex",
+                          "model": "MiniMax-M3",
+                          "provider": "minimax",
+                          "task_id": "task-stderr",
+                          "worker_thread_id": "thread-codex",
+                          "native_session_id": "codex-native"
                         }
                       ]
                     }
@@ -6236,21 +7974,120 @@ mod tests {
 
         assert_eq!(report.conversations, 1);
         assert_eq!(report.turns, 1);
-        assert_eq!(report.events, 1);
+        assert_eq!(report.events, 6);
         assert_eq!(conversation.id, "tiffany-native-test");
         assert_eq!(conversation.turns[0].user_prompt, "改 README");
+        let events = &conversation.turns[0].events;
+        let kinds = events
+            .iter()
+            .map(|event| event.kind.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>();
         assert_eq!(
-            conversation.turns[0].events[0].kind.as_deref(),
-            Some("diff")
+            kinds,
+            vec![
+                "diff",
+                "answer",
+                "tool_call",
+                "tool_result",
+                "approval",
+                "stderr"
+            ]
         );
+        assert_eq!(events[0].kind.as_deref(), Some("diff"));
         assert_eq!(
-            conversation.turns[0].events[0].content.as_deref(),
+            events[0].content.as_deref(),
             Some("diff --git a/README.md b/README.md")
         );
+        assert_eq!(events[0].worker_role.as_deref(), Some("worker-cc"));
         assert_eq!(
-            conversation.turns[0].events[0].worker_role.as_deref(),
-            Some("worker-cc")
+            events[2].content.as_deref(),
+            Some("tool Bash: cargo test -q")
         );
+        assert_eq!(
+            events[3].content.as_deref(),
+            Some("tool shell result: exit 0\nok")
+        );
+        assert_eq!(
+            events[4].content.as_deref(),
+            Some("waiting for command approval: rm -rf target")
+        );
+        assert_eq!(events[5].worker_role.as_deref(), Some("worker-codex"));
+        assert_eq!(
+            events[5].content.as_deref(),
+            Some("API Error: 400 [1211][模型不存在]")
+        );
+    }
+
+    #[test]
+    fn native_history_cli_filters_and_formats_readable_text() {
+        let conversation = NativeConversation {
+            id: "conv-1".to_string(),
+            cwd: "/tmp/project".to_string(),
+            created_at_unix: 1,
+            updated_at_unix: 2,
+            turns: vec![NativeTurn {
+                turn_index: 0,
+                user_prompt: "改 README".to_string(),
+                result: "done".to_string(),
+                captured_at_unix: 2,
+                events: vec![
+                    NativeEvent {
+                        event_index: 0,
+                        role: "worker".to_string(),
+                        status: "output".to_string(),
+                        title: "worker diff · worker-cc".to_string(),
+                        kind: Some("diff".to_string()),
+                        content: Some(
+                            "{\"message\":\"diff --git a/README.md b/README.md\"}".to_string(),
+                        ),
+                        agent: Some("claude-code".to_string()),
+                        worker_role: Some("worker-cc".to_string()),
+                        model: Some("claude".to_string()),
+                        provider: Some("anthropic".to_string()),
+                        task_id: Some("task-1".to_string()),
+                        worker_thread_id: Some("abcdef12-0000".to_string()),
+                        native_session_id: Some("claude-native-session".to_string()),
+                    },
+                    NativeEvent {
+                        event_index: 1,
+                        role: "worker".to_string(),
+                        status: "output".to_string(),
+                        title: "worker stderr · worker-codex".to_string(),
+                        kind: Some("stderr".to_string()),
+                        content: Some("codex error".to_string()),
+                        agent: Some("codex".to_string()),
+                        worker_role: Some("worker-codex".to_string()),
+                        model: Some("gpt".to_string()),
+                        provider: Some("openai".to_string()),
+                        task_id: Some("task-2".to_string()),
+                        worker_thread_id: Some("99999999-0000".to_string()),
+                        native_session_id: Some("codex-native-session".to_string()),
+                    },
+                ],
+            }],
+        };
+        let filter = NativeHistoryCliFilter::new(
+            Some("worker-cc".to_string()),
+            Some("abcdef12".to_string()),
+            None,
+            Some("diff".to_string()),
+        );
+
+        let filtered = filter_native_conversation_for_cli(conversation, &filter);
+        let text = format_native_history_cli(Some(&filtered), "/tmp/project", &filter);
+
+        assert_eq!(filtered.turns.len(), 1);
+        assert_eq!(filtered.turns[0].events.len(), 1);
+        assert!(text.contains("Native history"));
+        assert!(text.contains("filter: role=worker-cc thread=abcdef12 kind=diff"));
+        assert!(text.contains("events: 1"));
+        assert!(text.contains("diff · worker-cc"));
+        assert!(text.contains("thread: abcdef12-0000"));
+        assert!(text.contains("native: claude-native-session"));
+        assert!(text.contains("diff --git a/README.md b/README.md"));
+        assert!(text.contains("tiffany-loop /continue open worker-cc"));
+        assert!(!text.contains("worker-codex"));
+        assert!(!text.contains("{\"message\""));
     }
 
     #[test]

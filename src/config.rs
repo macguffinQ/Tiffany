@@ -333,6 +333,26 @@ impl Config {
         write_raw_config_yaml(&path, &yaml)
     }
 
+    /// Delete a role entry from the YAML config without expanding env placeholders.
+    pub fn delete_role_from_config_file(path: &Path, role: &str) -> Result<bool> {
+        validate_config_id("role name", role)?;
+        let (path, mut yaml) = read_raw_config_yaml(path)?;
+        let root = yaml_root_mapping_mut(&mut yaml)?;
+        let roles_key = serde_yaml::Value::String("roles".into());
+        let Some(roles_value) = root.get_mut(&roles_key) else {
+            return Ok(false);
+        };
+        let removed = roles_value
+            .as_mapping_mut()
+            .ok_or_else(|| anyhow::anyhow!("config field 'roles' must be a mapping"))?
+            .remove(serde_yaml::Value::String(role.to_string()))
+            .is_some();
+        if removed {
+            write_raw_config_yaml(&path, &yaml)?;
+        }
+        Ok(removed)
+    }
+
     /// Add or replace a provider API key without expanding env placeholders.
     pub fn write_provider_key_to_config_file(
         path: &Path,
@@ -757,6 +777,27 @@ mod tests {
         let body = std::fs::read_to_string(&path).unwrap();
         assert!(body.contains("${OPENAI_API_KEY}"));
         assert!(body.contains("base_url: https://api.openai.com/v1"));
+    }
+
+    #[test]
+    fn raw_role_delete_removes_only_selected_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "providers:\n  minimax:\n    type: openai\n    api_key: ${MINIMAX_API_KEY}\nmodels:\n  - id: minimax-m3\n    provider: minimax\n    name: MiniMax-M3\nroles:\n  worker-cc:\n    model: minimax-m3\n    runtime: claude-code\n    agent_teams: true\n  worker-codex:\n    model: minimax-m3\n    runtime: codex\n    agent_teams: false\nbehavior: {}\n",
+        )
+        .unwrap();
+
+        let removed = Config::delete_role_from_config_file(&path, "worker-codex").unwrap();
+
+        assert!(removed);
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("worker-cc:"));
+        assert!(!body.contains("worker-codex:"));
+        assert!(body.contains("minimax-m3"));
+        assert!(body.contains("providers:"));
+        assert!(body.contains("${MINIMAX_API_KEY}"));
     }
 
     #[test]

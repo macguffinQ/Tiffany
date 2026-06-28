@@ -167,6 +167,16 @@ enum Cmd {
         action: SessionsCmd,
     },
 
+    /// Inspect persisted Tiffany TUI jobs
+    Jobs {
+        #[command(subcommand)]
+        action: Option<JobsCmd>,
+
+        /// Number of recent jobs to show
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+
     /// Register and inspect orchestrator roles
     Roles {
         #[command(subcommand)]
@@ -206,6 +216,12 @@ enum Cmd {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum EventsFormat {
+    Json,
+    Text,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum NativeHistoryFormat {
     Json,
     Text,
 }
@@ -341,6 +357,12 @@ enum ProviderConfigCmd {
     /// List configured providers with redacted credentials
     List,
 
+    /// Show one configured provider with model and role bindings
+    Show {
+        /// Provider id to inspect
+        provider: String,
+    },
+
     /// List built-in provider setup presets
     Presets,
 
@@ -396,6 +418,10 @@ enum RolesCmd {
         role: Option<String>,
     },
 
+    /// Show provider/model/runtime combinations usable for role bindings
+    #[command(alias = "opts", alias = "models")]
+    Options,
+
     /// Register or update a role binding
     #[command(alias = "add", alias = "set")]
     Register {
@@ -427,6 +453,13 @@ enum RolesCmd {
         no_agent_teams: bool,
     },
 
+    /// Delete one role binding; models, providers, runtimes, and worker threads are kept
+    #[command(alias = "rm", alias = "remove")]
+    Delete {
+        /// Role name, for example planner, critic, worker-cc, executor
+        role: String,
+    },
+
     /// Save a complete orchestration role profile in one command
     Profile {
         /// Profile label shown in command output
@@ -451,6 +484,10 @@ enum RolesCmd {
         /// Codex worker binding: model@runtime or provider/model-name@runtime
         #[arg(long = "worker-codex")]
         worker_codex: Option<String>,
+
+        /// Gemini worker binding: model@runtime or provider/model-name@runtime
+        #[arg(long = "worker-gemini")]
+        worker_gemini: Option<String>,
 
         /// Preview writes without changing the config file
         #[arg(long)]
@@ -548,11 +585,66 @@ enum SessionsCmd {
         #[arg(long)]
         path: Option<PathBuf>,
     },
-    /// Print one tiffany-loop native TUI conversation from the SQLite session store as JSON
+    /// Print one tiffany-loop native TUI conversation from the SQLite session store
     NativeHistory {
         /// Conversation cwd key (default: current directory)
         #[arg(long)]
         cwd: Option<String>,
+        /// Output format
+        #[arg(long, value_enum, default_value_t = NativeHistoryFormat::Json)]
+        format: NativeHistoryFormat,
+        /// Write output to this file instead of stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Only include events for this worker role
+        #[arg(long)]
+        role: Option<String>,
+        /// Only include events for this Tiffany worker thread id or prefix
+        #[arg(long)]
+        thread: Option<String>,
+        /// Only include events for this native Claude/Codex/Gemini session id or prefix
+        #[arg(long)]
+        native: Option<String>,
+        /// Only include events with this kind, e.g. answer, tool_result, diff, approval
+        #[arg(long)]
+        kind: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum JobsCmd {
+    /// List recent persisted jobs
+    List {
+        /// Number of recent jobs to show
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Show one persisted job by full UUID, short prefix, last, or .
+    Show {
+        /// Job UUID, short prefix, last, or .
+        id: String,
+    },
+    /// Mark a queued/running persisted job as cancelled
+    Cancel {
+        /// Job UUID, short prefix, last, or .
+        id: String,
+    },
+    /// Mark stale running jobs as failed after a restart or lost process
+    Recover {
+        /// Running jobs older than this many minutes are considered stale
+        #[arg(long, default_value = "30")]
+        stale_minutes: u64,
+    },
+    /// Requeue a finished/failed/cancelled job as a new persisted queued job
+    Retry {
+        /// Job UUID, short prefix, last, or .
+        id: String,
+        /// Emit the full retry prompt for native TUI queue handoff.
+        #[arg(long, hide = true)]
+        emit_retry_prompt: bool,
+        /// Do not create a persisted queued retry job; hand the prompt to the active native TUI queue.
+        #[arg(long, hide = true)]
+        tui_handoff: bool,
     },
 }
 
@@ -754,6 +846,37 @@ mod tests {
     }
 
     #[test]
+    fn config_provider_show_parses_provider_name() {
+        let cli = Cli::parse_from(["orchestrator", "config", "provider", "show", "openai"]);
+
+        match cli.cmd {
+            Cmd::Config {
+                action:
+                    ConfigCmd::Provider {
+                        action: Some(ProviderConfigCmd::Show { provider }),
+                    },
+            } => {
+                assert_eq!(provider, "openai");
+            }
+            _ => panic!("unexpected config provider command"),
+        }
+    }
+
+    #[test]
+    fn roles_delete_parses_role_name() {
+        let cli = Cli::parse_from(["orchestrator", "roles", "delete", "worker-codex"]);
+
+        match cli.cmd {
+            Cmd::Roles {
+                action: RolesCmd::Delete { role },
+            } => {
+                assert_eq!(role, "worker-codex");
+            }
+            _ => panic!("unexpected roles command"),
+        }
+    }
+
+    #[test]
     fn attach_defaults_to_recent_run() {
         let cli = Cli::parse_from(["orchestrator", "attach"]);
 
@@ -777,6 +900,109 @@ mod tests {
                 action: SessionsCmd::Show { id: None, .. }
             }
         ));
+    }
+
+    #[test]
+    fn jobs_command_accepts_limit() {
+        let cli = Cli::parse_from(["orchestrator", "jobs", "--limit", "5"]);
+
+        match cli.cmd {
+            Cmd::Jobs {
+                action: None,
+                limit,
+            } => assert_eq!(limit, 5),
+            _ => panic!("unexpected jobs command"),
+        }
+    }
+
+    #[test]
+    fn jobs_command_accepts_show_and_cancel() {
+        let cli = Cli::parse_from(["orchestrator", "jobs", "show", "abcd1234"]);
+        match cli.cmd {
+            Cmd::Jobs {
+                action: Some(JobsCmd::Show { id }),
+                ..
+            } => assert_eq!(id, "abcd1234"),
+            _ => panic!("unexpected jobs show command"),
+        }
+
+        let cli = Cli::parse_from(["orchestrator", "jobs", "cancel", "last"]);
+        match cli.cmd {
+            Cmd::Jobs {
+                action: Some(JobsCmd::Cancel { id }),
+                ..
+            } => assert_eq!(id, "last"),
+            _ => panic!("unexpected jobs cancel command"),
+        }
+
+        let cli = Cli::parse_from(["orchestrator", "jobs", "recover", "--stale-minutes", "45"]);
+        match cli.cmd {
+            Cmd::Jobs {
+                action: Some(JobsCmd::Recover { stale_minutes }),
+                ..
+            } => assert_eq!(stale_minutes, 45),
+            _ => panic!("unexpected jobs recover command"),
+        }
+
+        let cli = Cli::parse_from(["orchestrator", "jobs", "retry", "abcd1234"]);
+        match cli.cmd {
+            Cmd::Jobs {
+                action:
+                    Some(JobsCmd::Retry {
+                        id,
+                        emit_retry_prompt,
+                        tui_handoff,
+                    }),
+                ..
+            } => {
+                assert_eq!(id, "abcd1234");
+                assert!(!emit_retry_prompt);
+                assert!(!tui_handoff);
+            }
+            _ => panic!("unexpected jobs retry command"),
+        }
+
+        let cli = Cli::parse_from([
+            "orchestrator",
+            "jobs",
+            "retry",
+            "abcd1234",
+            "--emit-retry-prompt",
+        ]);
+        match cli.cmd {
+            Cmd::Jobs {
+                action:
+                    Some(JobsCmd::Retry {
+                        id,
+                        emit_retry_prompt,
+                        tui_handoff,
+                    }),
+                ..
+            } => {
+                assert_eq!(id, "abcd1234");
+                assert!(emit_retry_prompt);
+                assert!(!tui_handoff);
+            }
+            _ => panic!("unexpected jobs retry command"),
+        }
+
+        let cli = Cli::parse_from(["orchestrator", "jobs", "retry", "abcd1234", "--tui-handoff"]);
+        match cli.cmd {
+            Cmd::Jobs {
+                action:
+                    Some(JobsCmd::Retry {
+                        id,
+                        emit_retry_prompt,
+                        tui_handoff,
+                    }),
+                ..
+            } => {
+                assert_eq!(id, "abcd1234");
+                assert!(!emit_retry_prompt);
+                assert!(tui_handoff);
+            }
+            _ => panic!("unexpected jobs retry command"),
+        }
     }
 
     #[test]
@@ -852,13 +1078,40 @@ mod tests {
             "native-history",
             "--cwd",
             "/tmp/project",
+            "--format",
+            "text",
+            "--out",
+            "/tmp/native-history.md",
+            "--role",
+            "worker-cc",
+            "--thread",
+            "abcdef12",
+            "--native",
+            "claude-session",
+            "--kind",
+            "diff",
         ]);
 
         match cli.cmd {
             Cmd::Sessions {
-                action: SessionsCmd::NativeHistory { cwd },
+                action:
+                    SessionsCmd::NativeHistory {
+                        cwd,
+                        format,
+                        out,
+                        role,
+                        thread,
+                        native,
+                        kind,
+                    },
             } => {
                 assert_eq!(cwd.as_deref(), Some("/tmp/project"));
+                assert_eq!(format, NativeHistoryFormat::Text);
+                assert_eq!(out, Some(PathBuf::from("/tmp/native-history.md")));
+                assert_eq!(role.as_deref(), Some("worker-cc"));
+                assert_eq!(thread.as_deref(), Some("abcdef12"));
+                assert_eq!(native.as_deref(), Some("claude-session"));
+                assert_eq!(kind.as_deref(), Some("diff"));
             }
             _ => panic!("unexpected sessions native-history command"),
         }
@@ -911,5 +1164,34 @@ mod tests {
                 action: ThreadCmd::List
             }
         ));
+    }
+
+    #[test]
+    fn roles_options_and_gemini_profile_parse() {
+        let cli = Cli::parse_from(["orchestrator", "roles", "options"]);
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Roles {
+                action: RolesCmd::Options
+            }
+        ));
+
+        let cli = Cli::parse_from([
+            "orchestrator",
+            "roles",
+            "profile",
+            "dev",
+            "--worker-gemini",
+            "google/gemini-2.5-pro@gemini",
+        ]);
+        match cli.cmd {
+            Cmd::Roles {
+                action: RolesCmd::Profile { worker_gemini, .. },
+            } => assert_eq!(
+                worker_gemini.as_deref(),
+                Some("google/gemini-2.5-pro@gemini")
+            ),
+            _ => panic!("unexpected roles profile command"),
+        }
     }
 }
