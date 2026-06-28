@@ -115,6 +115,7 @@ Development entrypoints:
 - `./scripts/tiffany-check --smoke` - small debug-build, format-check the fork, verify the isolated install surface, legacy bridge, event-stream entrypoint, fake Claude/Codex/Gemini runtime e2e, and example smoke tests.
 - `./scripts/tiffany-check --dist` - run the same checks with the distributable `tiffany-dist` profile before a release.
 - `./scripts/tiffany-install-smoke --smoke|--dist` - verify `orchestrator`, `tiffany-loop`, and the `tiffany` alias in a temporary HOME without touching real user config.
+- `./scripts/tiffany-slim-smoke` - build the runtime-only no-TUI binary and verify `orchestrator`/`tiffany-loop status` still work without `codex-tui`.
 - `./scripts/tiffany-e2e-fake-runtime [--bin-dir DIR]` - no-network e2e that runs planner/critic/worker/reviewer through a fake Claude Code CLI and verifies session/thread/history persistence.
 - `./scripts/tiffany-e2e-multi-runtime [--bin-dir DIR]` - no-network e2e that drives fake Codex and Gemini workers, then verifies same-role native session resume.
 - `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]` - opt-in check for installed/logged-in native CLIs. Default mode is quota-free and reports installed tools, model/auth preflight hints, native transcript stores, the orchestrator binary, and copyable next commands; `--run` sends tiny direct native prompts, and `--adapter-run` sends the same probes through `orchestrator events --worker ...` with temporary Tiffany state. Both run modes may consume model quota.
@@ -498,6 +499,7 @@ Set `behavior.token_plan.enabled: true` to show daily token, monthly cost, and p
 | `./scripts/tiffany-check --smoke` | Run the fast local fork/install/bridge/example verification |
 | `./scripts/tiffany-check --dist` | Run the release-profile fork/install/bridge/example verification |
 | `./scripts/tiffany-install-smoke --smoke|--dist` | Verify installed command behavior in an isolated temporary HOME |
+| `./scripts/tiffany-slim-smoke` | Verify the runtime-only no-TUI multi-call binary |
 | `./scripts/tiffany-check-examples` | Run only checked-in example tests |
 | `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]` | Opt-in real native CLI/Tiffany adapter check; default is quota-free preflight for binaries, models, auth hints, transcript stores, and next commands |
 | `./scripts/tiffany-release-preflight --quick|--full [--tag vX.Y.Z]` | Run consolidated local release-readiness checks: format, clippy, tests, examples, audit, and dist checks in full mode |

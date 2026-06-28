@@ -237,6 +237,9 @@ step "release target matrix"
 step "script helpers"
 "$repo_dir/scripts/tiffany-check-script-helpers"
 
+step "tiffany slim runtime smoke"
+"$repo_dir/scripts/tiffany-slim-smoke" --quiet
+
 step "tiffany fork targeted format"
 (cd "$repo_dir/tiffany-ui/codex-rs" && tiffany_fork_cargo fmt -p codex-tui -p tiffany-cli -- --check)
 

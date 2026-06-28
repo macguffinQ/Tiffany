@@ -29,6 +29,7 @@ impl QueueSnapshot {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn new(prompts: &[String], paused: bool, preview_limit: usize) -> Self {
         Self::new_with_jobs(prompts, &[], paused, preview_limit)
     }

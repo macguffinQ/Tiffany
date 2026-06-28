@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_dir/scripts/lib/tiffany-cargo.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/tiffany-slim-smoke [cargo-build-args...]
+
+Builds the runtime-only slim tiffany-loop binary with the default TUI feature
+disabled, then smoke-checks the multi-call runtime surface:
+  - orchestrator --help
+  - orchestrator status
+  - tiffany-loop status passthrough
+  - tiffany-loop orchestrator --legacy help
+  - native TUI launch fails with the explicit no-TUI message
+
+Environment:
+  TIFFANY_SLIM_TARGET_DIR  target dir for the slim build, default: ./target/tiffany-slim
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+cargo_bin="$(tiffany_resolve_cargo)"
+cargo_cmd=("$cargo_bin")
+if "$cargo_bin" +1.95.0 --version >/dev/null 2>&1; then
+  cargo_cmd=("$cargo_bin" "+1.95.0")
+fi
+
+target_dir="${TIFFANY_SLIM_TARGET_DIR:-$repo_dir/target/tiffany-slim}"
+case "$target_dir" in
+  /*) ;;
+  *) target_dir="$repo_dir/$target_dir" ;;
+esac
+export CARGO_TARGET_DIR="$target_dir"
+
+echo "checking slim dependency tree..."
+if (cd "$repo_dir/tiffany-ui/codex-rs" && "${cargo_cmd[@]}" tree -p tiffany-cli --no-default-features) | grep -F "codex-tui" >/dev/null; then
+  echo "slim tiffany-cli dependency tree still includes codex-tui" >&2
+  exit 1
+fi
+
+echo "building slim tiffany-loop..."
+(cd "$repo_dir/tiffany-ui/codex-rs" && \
+  "${cargo_cmd[@]}" build --profile dev-small --locked -p tiffany-cli --bin tiffany-loop --no-default-features "$@")
+
+binary_dir="$target_dir/dev-small"
+exe_suffix=""
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) exe_suffix=".exe" ;;
+esac
+
+tiffany_bin="$binary_dir/tiffany-loop$exe_suffix"
+orchestrator_bin="$binary_dir/orchestrator$exe_suffix"
+tiffany_alias_bin="$binary_dir/tiffany$exe_suffix"
+
+if [[ ! -x "$tiffany_bin" ]]; then
+  echo "missing slim binary: $tiffany_bin" >&2
+  exit 1
+fi
+
+case "$exe_suffix" in
+  .exe)
+    cp "$tiffany_bin" "$orchestrator_bin"
+    cp "$tiffany_bin" "$tiffany_alias_bin"
+    ;;
+  *)
+    ln -sf "tiffany-loop" "$orchestrator_bin"
+    ln -sf "tiffany-loop" "$tiffany_alias_bin"
+    ;;
+esac
+
+tmp_root="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_root"
+}
+trap cleanup EXIT
+
+export HOME="$tmp_root/home"
+export TIFFANY_HOME="$tmp_root/tiffany"
+export TIFFANY_SQLITE_HOME="$tmp_root/tiffany-sqlite"
+export CODEX_HOME="$TIFFANY_HOME"
+export CODEX_SQLITE_HOME="$TIFFANY_SQLITE_HOME"
+mkdir -p "$HOME" "$TIFFANY_HOME" "$TIFFANY_SQLITE_HOME"
+
+run_log() {
+  local label="$1"
+  shift
+  local log="$tmp_root/$label.log"
+  echo "checking $label..." >&2
+  if ! "$@" >"$log" 2>&1; then
+    cat "$log" >&2
+    exit 1
+  fi
+  printf '%s\n' "$log"
+}
+
+assert_log_contains() {
+  local log="$1"
+  local needle="$2"
+  if ! grep -F -- "$needle" "$log" >/dev/null; then
+    echo "expected output to contain: $needle" >&2
+    echo "---- $log ----" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+}
+
+log="$(run_log orchestrator-help "$orchestrator_bin" --help)"
+assert_log_contains "$log" "Multi-agent orchestration platform"
+
+log="$(run_log orchestrator-status "$orchestrator_bin" status)"
+assert_log_contains "$log" "orchestrator"
+
+log="$(run_log tiffany-status "$tiffany_bin" status --bin "$orchestrator_bin")"
+assert_log_contains "$log" "tiffany-loop"
+
+log="$(run_log tiffany-legacy-help "$tiffany_bin" orchestrator --bin "$orchestrator_bin" --legacy help)"
+assert_log_contains "$log" "Multi-agent orchestration platform"
+
+log="$tmp_root/tiffany-native-no-tui.log"
+echo "checking tiffany-native-no-tui..."
+if "$tiffany_bin" orchestrator --bin "$orchestrator_bin" >"$log" 2>&1; then
+  echo "expected native TUI launch to fail for slim build" >&2
+  cat "$log" >&2
+  exit 1
+fi
+assert_log_contains "$log" "built without the TUI feature"
+
+echo "slim smoke passed: $binary_dir"

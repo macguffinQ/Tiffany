@@ -6,7 +6,7 @@ executes.** Each card below is a self-contained task Codex can pick up. The
 planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
 (Codex) owns implementation.
 
-## Active instructions from Claude (updated 2026-06-28, after F5 local slice)
+## Active instructions from Claude (updated 2026-06-28, after F7 local slice)
 
 - **F1, F2, F4 ✅ done and verified.** F1 (G0–G4) and F2 (`4b7848e`) as before;
   F4 landed as `15c50d2` Extract config summary into tiffany bridge.
@@ -14,8 +14,8 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   `tiffany-ui/codex-rs/tiffany-bridge/`; one pure slice moved (config YAML
   parsing + default worker readiness summary); no dep back on `codex-tui`;
   build + fast gate green. Extraction pattern proven. No push (~127 ahead).
-- **F3 ✅ implemented locally, verified, staged for the combined fallback
-  commit.** The feasible
+- **F3 ✅ done and verified.** Landed in combined fallback commit `e3d34d2`
+  with F5. The feasible
   direction was `tiffany-cli` → outer `orchestrator` lib. The probe did not hit
   the `codex-rmcp` skew in this direction; it hit a SQLite native-link mismatch
   instead, fixed by aligning root `rusqlite` to the Codex workspace's
@@ -23,19 +23,18 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   (`tiffany-loop`) and exposes `orchestrator` / `tiffany` as package/dev aliases.
   `tiffany-cli` dispatches by argv[0], and `codex-tui` is optional behind the
   default `tui` feature. No push, no release tag.
-- **F5 ✅ implemented locally, verified, staged for the combined fallback
-  commit.** Moved the
+- **F5 ✅ done and verified.** Landed in combined fallback commit `e3d34d2`
+  with F3. Moved the
   native-session path helper slice into `tiffany-bridge` as
   `src/native_session.rs`: runtime detection, Claude/Codex/Gemini transcript
   path lookup, Gemini project hash, and Gemini message count. `codex-tui`
   now uses a thin adapter in `tiffany_orchestrator.rs`; transcript parsing and
   rendering stayed in the TUI. One slice only.
 - **Commit directive resolved with the allowed combined fallback; push still
-  gated.** F3 + F5 are staged together because the F3-only split forced a fresh
+  gated.** F3 + F5 landed together because the F3-only split forced a fresh
   fork lockfile generation that rolled unrelated upstream dependencies. Do not
-  freeze that noisy intermediate. The started `scripts/tiffany-slim-smoke`
-  remains untracked F7 groundwork and is NOT bundled here. Original target was
-  TWO logical commits if each builds green —
+  freeze that noisy intermediate. Original target was TWO logical commits if
+  each builds green —
     - F3 first: `Unify tiffany-loop, orchestrator, and tiffany into one
       multi-call binary` (delete root `src/main.rs`, add `src/cli_entry.rs`,
       argv[0] dispatch in `tiffany-cli/src/main.rs`, drop
@@ -47,17 +46,20 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
     - F5 second: `Extract native session path helpers into tiffany bridge`.
   The applied fallback is ONE combined commit with a body covering both. Still
   DO NOT push.
-- **Next:** F7 is the M0-critical follow-up because F3 already made `codex-tui`
-  optional; finish the slim runtime-only smoke path and CI/preflight guard. If
-  staying on extraction instead, the next F5+ slice should be visible-output
-  formatting, not transcript parsing.
+- **F7 ✅ implemented locally and verified.** Added the
+  runtime-only no-TUI smoke script, wired it into release preflight and script
+  helper checks, documented it in both READMEs, and cleaned the no-default warning
+  path.
+- **Next:** with F7 done, the next highest-value implementation slice is F5+
+  visible-output formatting extraction, followed by F8 full `codex-tui --lib`
+  stability work.
 - **Tech debt noted (not blocking):** a full `cargo test -p codex-tui --lib` run
   hangs / has snapshot drift unrelated to F4 — Codex killed a stuck run and
   cleaned `.snap.new`. Track as queued F8 before it bites CI. Targeted fast-gate
   tests all pass.
-- **F7 is now M0-required (hard acceptance, per user 2026-06-28):** the slim
-  runtime-only build must exist and smoke-pass before M0 / `v0.2` ships. F3 must
-  declare the TUI dep `optional = true` to make this cheap.
+- **F7 was M0-required and is now satisfied locally:** the slim runtime-only
+  build exists and smoke-passes before M0 / `v0.2`; full release preflight still
+  remains gated before tagging.
 - **Still no push, no release tag.**
 
 Toolchain note for every task: cargo lives at `/Users/allendred/.cargo/bin/cargo`
@@ -76,10 +78,11 @@ git diff --check
 ```
 F1 (commit hygiene)        ── independent
 F2 (UPSTREAM.md)           ── independent, unblocks F4
-F3 (multi-call binary)     ── independent, local merge verified
+F3 (multi-call binary)     ── done in `e3d34d2`
 F4 (bridge crate + first   ── blocked by F2
      extraction slice)
-F5 (native session paths)  ── local slice verified
+F5 (native session paths)  ── done in `e3d34d2`
+F7 (slim smoke)            ── local slice verified
 PUSH (origin/main)         ── GATED, user-only, only after F1 grouping approved
 ```
 
@@ -116,10 +119,10 @@ beyond the scaffold until F2 lands.
   files/seams, and seeds a Non-Owned Vendored Edit Log (with a forward entry for
   F4 bridge wiring). Verified by Claude; no changes needed.
 
-## F3 — Single multi-call binary — ✅ STAGED IN COMBINED FALLBACK COMMIT
+## F3 — Single multi-call binary — ✅ DONE
 
-- **Status:** implemented, verified, and staged with F5 in the combined fallback
-  commit. No push or release has happened.
+- **Status:** implemented and verified in combined fallback commit `e3d34d2`
+  with F5. No push or release has happened.
 - **Previous reality:** the three command names used to be separate binaries:
   root `orchestrator`, plus `tiffany-cli`'s `tiffany-loop` and `tiffany`.
 - **Current implementation:** `tiffany-cli` is now the single Cargo binary. It
@@ -211,10 +214,10 @@ beyond the scaffold until F2 lands.
   internals hits the circular-dependency wall — which is why purity is verified
   before moving. Never big-bang; one slice, build green, then stop.
 
-## F5 — Native session path helpers — ✅ STAGED IN COMBINED FALLBACK COMMIT
+## F5 — Native session path helpers — ✅ DONE
 
-- **Status:** implemented, verified, and staged with F3 in the combined fallback
-  commit. No push or release has happened.
+- **Status:** implemented and verified in combined fallback commit `e3d34d2`
+  with F3. No push or release has happened.
 - **Moved slice:** `tiffany-ui/codex-rs/tiffany-bridge/src/native_session.rs`
   now owns runtime detection plus native transcript path lookup for Claude Code,
   Codex rollout JSONL, and Gemini chat JSON. It also owns Gemini project hashing
@@ -244,11 +247,8 @@ beyond the scaffold until F2 lands.
   deleted.
 - F6: prune vendored `codex-rs` crates that Tiffany does not use (per the
   pruning goal in the Upstream Fork Strategy), guided by `UPSTREAM.md`.
-- F7 (now M0-required — hard acceptance, per user 2026-06-28): feature-gate the
-  Codex TUI behind a cargo feature so a runtime-only slim build of the single
-  binary exists and smoke-passes (`--help`, `status` without the TUI). Depends on
-  F3; declare the TUI dep `optional = true` during F3 so this is cheap. M0 / v0.2
-  does not ship without it.
+- F7 ✅ done locally: the Codex TUI is behind the default `tui` feature and
+  `./scripts/tiffany-slim-smoke --quiet` verifies the runtime-only no-TUI binary.
 - F8: investigate the hanging/flaky full `cargo test -p codex-tui --lib` run
   (snapshot drift / app-test hang, unrelated to F4) before it bites CI. Not
   blocking; targeted fast-gate tests pass.

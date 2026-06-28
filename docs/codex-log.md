@@ -110,9 +110,9 @@ Hard rules while executing anything from `docs/execution-plan.md`:
 - Next:
   - Recommended next task: F3 Step 0 recon only, then either implement the `tiffany-cli` single-binary dispatch path if feasible, or start F5 by moving the next pure helper cluster into `tiffany-bridge`.
 
-## F3/F5 — completed locally, combined fallback staged — 2026-06-28
+## F3/F5 — completed locally, combined fallback — 2026-06-28
 - Commits:
-  - this combined commit: `Unify tiffany-loop multi-call binary and bridge native session paths`.
+  - `e3d34d2` Unify tiffany-loop multi-call binary and bridge native session paths
 - Build/tests:
   - Probe: `tiffany-cli` depending on the outer `orchestrator` lib built cleanly in this direction; the previous `codex-rmcp-client` type skew did not recur.
   - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-cli --quiet` — green, 18 passed.
@@ -149,9 +149,28 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - Kept transcript parsing, event construction, and Ratatui rendering in `codex-tui`; `tui/src/tiffany_orchestrator.rs` now adapts `TiffanyNativeCliCommand` into `tiffany_bridge::NativeSessionCommand`.
   - `tiffany_orchestrator.rs` dropped from 18,369 lines to 18,151 lines after this slice.
   - Did not touch legacy `src/tui/` behavior.
-  - Left F7 groundwork uncommitted/untracked as requested: `scripts/tiffany-slim-smoke` plus the queue warning cleanup are not part of this combined commit.
+  - Kept F7 groundwork out of the F3/F5 combined commit; it landed separately afterward.
 - Blockers / questions for Claude:
   - No F3/F5 blocker.
   - Full `cargo test -p codex-tui --lib` remains queued as F8.
 - Next:
   - Recommended next task: F7, because M0 requires the runtime-only slim build to smoke-pass and F3 already introduced the `tui` feature gate. If continuing extraction instead, move visible-output formatting as the next single slice.
+
+## F7 — completed locally — 2026-06-28
+- Commits:
+  - this commit: `Add slim runtime-only smoke check`
+- Build/tests:
+  - `./scripts/tiffany-slim-smoke --quiet` — green; no-default dependency tree did not include `codex-tui`, slim binary built under `target/tiffany-slim/dev-small`, and `orchestrator --help`, `orchestrator status`, `tiffany-loop status --bin`, `tiffany-loop orchestrator --legacy help`, and the explicit no-TUI failure message were verified.
+  - `./scripts/tiffany-check-script-helpers` — green.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-cli --no-default-features --quiet` — green, 18 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Added `scripts/tiffany-slim-smoke` as the M0 guard for the runtime-only multi-call binary.
+  - Wired the smoke into `scripts/tiffany-release-preflight` and syntax coverage into `scripts/tiffany-check-script-helpers`.
+  - Documented the slim smoke entrypoint in both READMEs.
+  - Marked `QueueSnapshot::new` test-only so no-default runtime builds do not carry that warning.
+- Blockers / questions for Claude:
+  - No F7 blocker.
+  - Full `cargo test -p codex-tui --lib` remains queued as F8.
+- Next:
+  - Recommended next task: F5+ visible-output formatting extraction, then F8 full codex-tui lib-test stabilization.
