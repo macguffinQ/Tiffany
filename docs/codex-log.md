@@ -922,3 +922,25 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M2 waterfall grouping/raw-debug separation, or keep tightening M1 `/doctor` one-line fixes.
+
+## M2 process-exit wrapper humanized — 2026-06-29
+
+- Commits:
+  - this commit: `Humanize worker process exits`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format classifies_visible_agent_output_for_ui_surfaces --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format humanizes --quiet` — green, 12 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_waterfall_normalizes_claude_tool_status_wrappers --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Failed native worker `process_exit` lines are now normalized for normal waterfall output; `claude-code process_exit: claude exited with status exit status: 1` renders as `claude process exited with status 1`.
+  - Successful native process exits still remain hidden to avoid low-value process noise.
+  - The raw process event remains available through full/raw process history; this only changes normal visible output.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M2 with more raw/debug-only separation for worker status/control wrappers, or switch to M1 provider/role setup polish.

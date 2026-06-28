@@ -1502,6 +1502,9 @@ fn normalize_agent_status_display(display: &str) -> String {
     if let Some(label) = codex_exec_compatibility_label(&lower) {
         return label.to_string();
     }
+    if let Some(label) = process_exit_status_label(trimmed) {
+        return label;
+    }
     if let Some(path) = lower
         .starts_with("file created successfully at:")
         .then(|| trimmed["file created successfully at:".len()..].trim())
@@ -1521,6 +1524,33 @@ fn normalize_agent_status_display(display: &str) -> String {
         }
     }
     trimmed.to_string()
+}
+
+fn process_exit_status_label(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    if !lower.contains("exited with status") {
+        return None;
+    }
+
+    let process = text
+        .split_whitespace()
+        .next()
+        .map(|value| value.trim_end_matches(':'))
+        .filter(|value| !value.is_empty())
+        .filter(|value| !value.eq_ignore_ascii_case("process"))
+        .unwrap_or("native")
+        .to_string();
+    let code = last_number_token(text);
+    Some(match code {
+        Some(code) => format!("{process} process exited with status {code}"),
+        None => format!("{process} process exited"),
+    })
+}
+
+fn last_number_token(text: &str) -> Option<&str> {
+    text.split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .next_back()
 }
 
 fn looks_like_codex_exec_argument_mismatch(lower: &str) -> bool {
@@ -4192,6 +4222,8 @@ mod tests {
         )
         .expect("process exit");
         assert_eq!(process_exit.kind, VisibleAgentOutputKind::Actionable);
+        assert_eq!(process_exit.display, "claude process exited with status 1");
+        assert!(!process_exit.display.contains("exit status:"));
 
         assert!(
             visible_agent_output(

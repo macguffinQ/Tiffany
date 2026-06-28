@@ -13996,6 +13996,27 @@ mod tests {
             )
         };
         assert_eq!(visible_content(&no_output), None);
+
+        let failed_exit = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            event_kind: Some("process_exit".to_string()),
+            ..worker_output_event(
+                "worker output",
+                "claude-code",
+                "claude-code process_exit: claude exited with status exit status: 1",
+            )
+        };
+        let exit_visible = visible_content(&failed_exit).expect("process exit visible");
+        let exit_text = output_event_lines(&failed_exit, &exit_visible)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(exit_text.contains("⚠ worker alert · worker-cc · claude-code"));
+        assert!(exit_text.contains("claude process exited with status 1"));
+        assert!(!exit_text.contains("process_exit"));
+        assert!(!exit_text.contains("exit status:"));
     }
 
     #[test]
