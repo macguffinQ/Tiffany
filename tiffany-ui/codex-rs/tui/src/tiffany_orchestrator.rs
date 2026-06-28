@@ -12334,6 +12334,24 @@ mod tests {
     }
 
     #[test]
+    fn controller_stderr_humanizes_codex_exec_argument_mismatch() {
+        let event = role_output_event(
+            "planner",
+            "codex stderr: error: unexpected argument '--cwd' found\nUsage: codex exec --cd <DIR> [PROMPT]",
+        );
+
+        let visible = visible_content(&event).expect("visible planner stderr");
+        let lines = output_event_lines(&event, &visible);
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("Codex CLI compatibility issue"));
+        assert!(text.contains("codex exec --cd"));
+        assert!(!text.contains("codex stderr"));
+        assert!(!text.contains("unexpected argument"));
+        assert!(!text.contains("Usage:"));
+    }
+
+    #[test]
     fn worker_output_title_keeps_route_and_runtime() {
         let event = TiffanyProgressEvent {
             worker_role: Some("worker-cc".to_string()),

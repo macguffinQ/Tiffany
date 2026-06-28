@@ -732,3 +732,24 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M2 by tightening raw/debug-only trace separation and verifying reviewer issue/suggestion detail stays visible when it changes the result.
+
+## M2 Codex controller stderr humanized — 2026-06-29
+
+- Commits:
+  - this commit: `Humanize Codex controller stderr`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format humanizes_codex_exec_argument_mismatch_for_normal_view --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui controller_stderr_humanizes_codex_exec_argument_mismatch --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format humanizes --quiet` — green, 12 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Normal waterfall now maps Codex `unexpected argument '--cwd'` / `--cd` compatibility stderr into a concise `Codex CLI compatibility issue` line instead of showing raw `codex stderr`, usage text, and internal argument wording.
+  - Failure diagnostics still preserve the raw stderr and existing `/doctor` hint path; this change only affects normal visible agent output.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M2 with more raw/debug separation and then move to M1 role/provider/session display polish once the common waterfall noise paths are covered.

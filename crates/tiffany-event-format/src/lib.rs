@@ -1499,6 +1499,13 @@ fn known_runtime_output_kind(kind: &str) -> Option<String> {
 fn normalize_agent_status_display(display: &str) -> String {
     let trimmed = strip_claude_context_note(display.trim());
     let lower = trimmed.to_ascii_lowercase();
+    if looks_like_codex_exec_argument_mismatch(&lower) {
+        return concat!(
+            "Codex CLI compatibility issue: upgrade Codex CLI or use a runtime ",
+            "that supports `codex exec --cd`"
+        )
+        .to_string();
+    }
     if let Some(path) = lower
         .starts_with("file created successfully at:")
         .then(|| trimmed["file created successfully at:".len()..].trim())
@@ -1518,6 +1525,13 @@ fn normalize_agent_status_display(display: &str) -> String {
         }
     }
     trimmed.to_string()
+}
+
+fn looks_like_codex_exec_argument_mismatch(lower: &str) -> bool {
+    (lower.contains("unexpected argument")
+        || lower.contains("unknown option")
+        || lower.contains("unrecognized option"))
+        && (lower.contains("--cwd") || lower.contains("--cd"))
 }
 
 fn strip_claude_context_note(text: &str) -> &str {
@@ -4633,6 +4647,22 @@ mod tests {
         assert!(is_low_value_output(
             "codex stderr: debug transport message without actionable details"
         ));
+    }
+
+    #[test]
+    fn humanizes_codex_exec_argument_mismatch_for_normal_view() {
+        let output = visible_agent_output(
+            "codex stderr: error: unexpected argument '--cwd' found\nUsage: codex exec --cd <DIR> [PROMPT]",
+            500,
+        )
+        .expect("compatibility stderr");
+
+        assert_eq!(output.kind, VisibleAgentOutputKind::Stderr);
+        assert!(output.display.contains("Codex CLI compatibility issue"));
+        assert!(output.display.contains("codex exec --cd"));
+        assert!(!output.display.contains("codex stderr"));
+        assert!(!output.display.contains("unexpected argument"));
+        assert!(!output.display.contains("Usage:"));
     }
 
     #[test]
