@@ -100,17 +100,13 @@ jobs:
 
       - name: Build tiffany-loop
         shell: bash
-        working-directory: tiffany-ui/codex-rs
         run: |
           set -euo pipefail
-          cargo_args=(--profile tiffany-dist --locked -p tiffany-cli --bin tiffany-loop)
+          cargo_args=(cargo build --manifest-path tiffany-ui/codex-rs/Cargo.toml --profile tiffany-dist --locked -p tiffany-cli --bin tiffany-loop)
           if [[ "${{ matrix.native }}" != "true" ]]; then
             cargo_args+=(--target "${{ matrix.target }}")
           fi
-          started_at="$(date +%s)"
-          cargo build "${cargo_args[@]}"
-          finished_at="$(date +%s)"
-          echo "tiffany-loop build took $((finished_at - started_at))s"
+          ./scripts/tiffany-build-time-gate --target "${{ matrix.target }}" -- "${cargo_args[@]}"
 
       - name: Package
         shell: bash

@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./scripts/tiffany-build-time-gate --target <target> -- <build command...>
+  ./scripts/tiffany-build-time-gate --check-baselines
+  ./scripts/tiffany-build-time-gate --self-test
+
+Measures a release build command and fails if it exceeds the checked-in
+baseline by the configured threshold.
+
+Options:
+  --target <target>       Release target key, for example x86_64-unknown-linux-gnu.
+                          Defaults to "default".
+  --baseline <path>       Baseline table. Defaults to scripts/tiffany-build-time-baselines.tsv.
+  --check-baselines       Validate the baseline table syntax and default row.
+  --self-test             Run fast fake-elapsed checks for the gate logic.
+
+Environment:
+  TIFFANY_BUILD_TIME_THRESHOLD_PERCENT  Override threshold percent for all targets.
+  TIFFANY_BUILD_TIME_ALLOW_REGRESSION=1 Warn instead of failing on a regression.
+  TIFFANY_BUILD_TIME_FAKE_ELAPSED       Test hook; use this elapsed value instead of timing.
+EOF
+}
+
+target="default"
+baseline_file="$repo_dir/scripts/tiffany-build-time-baselines.tsv"
+mode="run"
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --target)
+      [[ -n "${2:-}" ]] || { usage >&2; exit 2; }
+      target="$2"
+      shift
+      ;;
+    --target=*)
+      target="${1#--target=}"
+      ;;
+    --baseline)
+      [[ -n "${2:-}" ]] || { usage >&2; exit 2; }
+      baseline_file="$2"
+      shift
+      ;;
+    --baseline=*)
+      baseline_file="${1#--baseline=}"
+      ;;
+    --check-baselines)
+      mode="check"
+      ;;
+    --self-test)
+      mode="self-test"
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+die() {
+  echo "build-time gate: $*" >&2
+  exit 1
+}
+
+resolve_baseline_file() {
+  local file="$1"
+  case "$file" in
+    /*) printf '%s\n' "$file" ;;
+    *) printf '%s\n' "$repo_dir/$file" ;;
+  esac
+}
+
+baseline_file="$(resolve_baseline_file "$baseline_file")"
+
+read_baseline_row() {
+  local wanted="$1"
+  local file="$2"
+  awk -v target="$wanted" '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    NF < 3 {
+      printf "invalid baseline row %d: expected target baseline_seconds threshold_percent\n", NR > "/dev/stderr"
+      exit 2
+    }
+    $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ {
+      printf "invalid baseline row %d: baseline and threshold must be integers\n", NR > "/dev/stderr"
+      exit 2
+    }
+    $1 == target {
+      print $1, $2, $3
+      found = 1
+      exit
+    }
+    END {
+      if (!found) exit 1
+    }
+  ' "$file"
+}
+
+check_baselines() {
+  [[ -f "$baseline_file" ]] || die "missing baseline file: $baseline_file"
+  read_baseline_row default "$baseline_file" >/dev/null \
+    || die "baseline file must contain a valid default row"
+  awk '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    NF < 3 { exit 2 }
+    $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ { exit 2 }
+    $2 < 1 || $3 < 100 { exit 2 }
+  ' "$baseline_file" || die "invalid baseline file: $baseline_file"
+  echo "build-time baselines ok: $baseline_file"
+}
+
+if [[ "$mode" == "check" ]]; then
+  check_baselines
+  exit 0
+fi
+
+if [[ "$mode" == "self-test" ]]; then
+  check_baselines
+  tmp_self="$(mktemp -d)"
+  baseline_self="$tmp_self/baselines.tsv"
+  cat >"$baseline_self" <<'EOF'
+default 10 150
+linux-test 20 125
+EOF
+  TIFFANY_BUILD_TIME_FAKE_ELAPSED=15 "$0" --baseline "$baseline_self" --target default -- true >/dev/null
+  TIFFANY_BUILD_TIME_FAKE_ELAPSED=25 "$0" --baseline "$baseline_self" --target linux-test -- true >/dev/null
+  if TIFFANY_BUILD_TIME_FAKE_ELAPSED=16 "$0" --baseline "$baseline_self" --target default -- true >/dev/null 2>&1; then
+    echo "expected fake 16s build to fail against 10s baseline at 150%" >&2
+    rm -rf "$tmp_self"
+    exit 1
+  fi
+  rm -rf "$tmp_self"
+  echo "build-time gate self-test passed"
+  exit 0
+fi
+
+[[ "$mode" == "run" ]] || die "unknown mode: $mode"
+[[ "$#" -gt 0 ]] || { usage >&2; exit 2; }
+check_baselines >/dev/null
+
+row="$(read_baseline_row "$target" "$baseline_file" || true)"
+if [[ -z "$row" ]]; then
+  row="$(read_baseline_row default "$baseline_file")" \
+    || die "missing baseline for target '$target' and no default row"
+  echo "build-time gate: no baseline for $target; using default" >&2
+fi
+
+read -r baseline_target baseline_seconds threshold_percent <<<"$row"
+threshold_percent="${TIFFANY_BUILD_TIME_THRESHOLD_PERCENT:-$threshold_percent}"
+[[ "$threshold_percent" =~ ^[0-9]+$ ]] || die "threshold percent must be an integer"
+(( threshold_percent >= 100 )) || die "threshold percent must be >= 100"
+limit_seconds=$(((baseline_seconds * threshold_percent + 99) / 100))
+
+started_at="$(date +%s)"
+if [[ -n "${TIFFANY_BUILD_TIME_FAKE_ELAPSED:-}" ]]; then
+  "$@"
+  elapsed_seconds="$TIFFANY_BUILD_TIME_FAKE_ELAPSED"
+else
+  "$@"
+  finished_at="$(date +%s)"
+  elapsed_seconds=$((finished_at - started_at))
+fi
+[[ "$elapsed_seconds" =~ ^[0-9]+$ ]] || die "elapsed seconds must be an integer"
+
+summary="target=$target baseline=$baseline_target elapsed=${elapsed_seconds}s limit=${limit_seconds}s threshold=${threshold_percent}%"
+echo "build-time gate: $summary"
+
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  {
+    echo "### Tiffany build-time gate"
+    echo
+    echo "- $summary"
+  } >>"$GITHUB_STEP_SUMMARY"
+fi
+
+if (( elapsed_seconds > limit_seconds )); then
+  message="release build time regression: ${elapsed_seconds}s > ${limit_seconds}s (${baseline_seconds}s baseline, ${threshold_percent}% threshold)"
+  if [[ "${TIFFANY_BUILD_TIME_ALLOW_REGRESSION:-0}" == "1" ]]; then
+    echo "build-time gate warning: $message" >&2
+    exit 0
+  fi
+  die "$message"
+fi

@@ -6,7 +6,35 @@ executes.** Each card below is a self-contained task Codex can pick up. The
 planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
 (Codex) owns implementation.
 
-## Active instructions from Claude (updated 2026-06-28, after F7 local slice)
+## Active instructions from Claude (updated 2026-06-28 — phase decision)
+
+- **PHASE DECISION (supersedes the stale F7-era bullets below): foundation push
+  is substantially complete — STOP grinding extraction.** Tree clean, 146 ahead,
+  no push. god-file 18,545 → 14,945; the easy pure slices are extracted, the rest
+  is rendering/app-server-entangled and not worth forcing (Codex flagged this).
+  F1–F8 all done and committed.
+- **M0 close-out status:** F9 is implemented locally: CI release builds now run
+  through the checked-in build-time regression gate, the baseline table is
+  validated by release target checks, and a clean local `tiffany-dist` build was
+  measured at 347s against a 1575s default gate limit. The two previously
+  unchecked M0 items also have targeted tests: upstream update prompts are
+  disabled in Tiffany mode, and Tiffany config/state defaults to `~/.tiffany`
+  instead of `~/.codex`.
+- **Next priority — pivot to M3 (the differentiator):** Claude/Codex/Gemini
+  session capture + resume across restarts with REAL runtimes (the required M3
+  gate, not fake-runtime). Provider 429 rate-limiting and slow Claude startup may
+  block some live checks — do what is possible now, log what is quota-blocked,
+  and make the harness re-runnable when quota recovers.
+- **F5+ extraction is PAUSED** (diminishing returns). Resume only if a slice
+  unblocks M3 or a later milestone; do not force entangled rendering/app-server
+  slices.
+- **Push + `v0.2` AUTHORIZED (user, 2026-06-28; supersedes the older "Gated /
+  user-only" text further down):** after the F9 commit exists and a full
+  `./scripts/tiffany-release-preflight --full --tag v0.2` passes, push `main`,
+  then tag `v0.2` and push the tag — the tag fires the release workflow (build
+  artifacts + Homebrew tap update). Do NOT ask again before pushing; the green
+  gates ARE the authorization. If ANY gate fails, STOP and report; do not push or
+  tag. Real-runtime check is NOT required for v0.2 (that is the M3 / v0.5 gate).
 
 - **F1, F2, F4 ✅ done and verified.** F1 (G0–G4) and F2 (`4b7848e`) as before;
   F4 landed as `15c50d2` Extract config summary into tiffany bridge.

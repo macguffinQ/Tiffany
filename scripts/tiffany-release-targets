@@ -162,10 +162,29 @@ check_docs() {
     "Chinese README must state the prebuilt release boundary"
 }
 
+check_build_time_baselines() {
+  local baseline_file="$repo_dir/scripts/tiffany-build-time-baselines.tsv"
+  local row target
+  "$repo_dir/scripts/tiffany-build-time-gate" --check-baselines >/dev/null
+  for row in "${prebuilt_targets[@]}"; do
+    target="$(target_field "$row" 1)"
+    if ! awk -v target="$target" '
+      /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+      $1 == target { found = 1 }
+      END { exit found ? 0 : 1 }
+    ' "$baseline_file"; then
+      echo "release target check failed: build-time baseline missing target $target" >&2
+      echo "Add $target to ${baseline_file#$repo_dir/}." >&2
+      exit 1
+    fi
+  done
+}
+
 check_targets() {
   check_release_workflow_targets
   check_homebrew_scripts
   check_docs
+  check_build_time_baselines
   echo "release target checks passed"
 }
 

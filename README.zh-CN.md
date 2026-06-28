@@ -122,6 +122,7 @@ orchestrator run "Add a lucas(n) function to fibonacci.py, add unit tests, and r
 - `./scripts/tiffany-install-smoke --smoke|--dist`：在临时 HOME 中验证 `orchestrator`、`tiffany-loop` 和 `tiffany` 兼容别名，不触碰真实用户配置。
 - `./scripts/tiffany-slim-smoke`：构建 runtime-only no-TUI binary，并验证没有 `codex-tui` 时 `orchestrator` / `tiffany-loop status` 仍可用。
 - `./scripts/tiffany-codex-tui-lib-test`：串行运行完整 `codex-tui --lib` 测试；这个检查较慢，`tiffany-release-preflight` 会在 `--full` 或带 tag 的发布检查中运行它。
+- `./scripts/tiffany-build-time-gate --target default -- ./scripts/tiffany-build --fast-release --locked`：记录完整 multi-call release 构建耗时，超过 `scripts/tiffany-build-time-baselines.tsv` 中的基线阈值就失败。CI 对 release asset 也使用同一个 gate；只有明确重校准阈值时才设置 `TIFFANY_BUILD_TIME_THRESHOLD_PERCENT`。
 - `./scripts/tiffany-e2e-fake-runtime [--bin-dir DIR]`：无网络 e2e，用 fake Claude Code CLI 跑 planner/critic/worker/reviewer，并验证 session/thread/history 持久化。
 - `./scripts/tiffany-e2e-multi-runtime [--bin-dir DIR]`：无网络 e2e，用 fake Codex 和 Gemini worker 跑真实 adapter，并验证同角色 native session 复用。
 - `./scripts/tiffany-real-runtime-check [--run|--adapter-run] [--runtime claude|codex|gemini|all]`：可选真实 CLI 检查。默认模式不消耗额度，会报告本机 binary、model/auth 预检线索、原生 transcript store、orchestrator binary 和可复制下一步命令；`--run` 直接发送很小的原生 prompt，`--adapter-run` 通过临时 Tiffany 状态执行 `orchestrator events --worker ...` 检查 adapter 路径。两种运行模式都可能消耗模型额度。
@@ -613,6 +614,7 @@ cargo build --release
 ./scripts/tiffany-build --fast-release --locked --prune-dist-cache
 ./scripts/tiffany-install-smoke --smoke
 ./scripts/tiffany-codex-tui-lib-test
+./scripts/tiffany-build-time-gate --target default -- ./scripts/tiffany-build --fast-release --locked
 ./scripts/tiffany-release-preflight --quick
 ./scripts/tiffany-release-preflight --full --tag vX.Y.Z     # 打 tag 前
 # 同日连续 tag 默认会被阻止；只在紧急修复时覆盖：

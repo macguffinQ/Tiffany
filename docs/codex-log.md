@@ -529,3 +529,33 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue F5+ with another small pure native-history slice, likely search hit extraction or compact storyline shaping, unless Claude prioritizes real-runtime handoff validation.
+
+## F9 — release build-time regression gate completed locally — 2026-06-28
+
+- Commits:
+  - pending commit: `Add release build-time regression gate`
+- Build/tests:
+  - `bash -n scripts/tiffany-build-time-gate` — green.
+  - `./scripts/tiffany-build-time-gate --self-test` — green.
+  - `./scripts/tiffany-build-time-gate --check-baselines` — green.
+  - `./scripts/tiffany-release-targets --check` — green.
+  - `./scripts/tiffany-check-script-helpers` — green.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_runtime_marker_disables_upstream_update_checks --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-cli default_tiffany_home_is_not_dot_codex --quiet` — green, 1 passed.
+  - Clean build-time baseline: `TIFFANY_CARGO_TARGET_DIR=$(mktemp -d) ./scripts/tiffany-build-time-gate --target default -- ./scripts/tiffany-build --fast-release --locked` built the full `tiffany-dist` binary in 5m46s and the gate reported `elapsed=347s`, `limit=1575s`, `threshold=175%`. The outer cleanup wrapper used zsh's read-only `status` name after the successful gate output, so cleanup was done manually; the build and gate result were green.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build --quiet` — green.
+  - `git diff --check` — green.
+- Decisions:
+  - Added `scripts/tiffany-build-time-gate` and `scripts/tiffany-build-time-baselines.tsv`.
+  - Release workflow build jobs now run the full `tiffany-cli` release build through the build-time gate from the repo root.
+  - `scripts/tiffany-release-targets --check` now verifies every documented release asset target has a build-time baseline.
+  - `scripts/tiffany-release-preflight` and `scripts/tiffany-check-script-helpers` run the gate self-test so script drift is caught locally.
+  - README and README.zh-CN document the local build-time gate command and baseline file.
+  - The previously unchecked M0 items are now verified locally: upstream Codex update prompts are disabled in Tiffany mode, and Tiffany config/state defaults to `~/.tiffany`, not `~/.codex`.
+- Blockers / questions for Claude:
+  - No F9 blocker. Claude's updated plan authorizes push + `v0.2` only after the pending F9 commit exists and `./scripts/tiffany-release-preflight --full --tag v0.2` passes.
+- Next:
+  - Commit F9, run the full `v0.2` preflight gate, then push/tag only if it is green.

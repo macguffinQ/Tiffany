@@ -235,6 +235,9 @@ step "homebrew tap helper"
 step "release target matrix"
 "$repo_dir/scripts/tiffany-release-targets" --check
 
+step "release build-time gate self-test"
+"$repo_dir/scripts/tiffany-build-time-gate" --self-test
+
 step "script helpers"
 "$repo_dir/scripts/tiffany-check-script-helpers"
 
