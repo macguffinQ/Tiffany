@@ -775,3 +775,22 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M2 with raw/debug-only trace separation, then reassess whether M1 provider/role polish should become the next active slice.
+
+## M1 doctor endpoint repair step preserved with failures — 2026-06-29
+
+- Commits:
+  - this commit: `Preserve doctor endpoint repair step`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop report_next_steps_include_openai_compatible_endpoint_fix_with_failures --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - `/doctor` now keeps the OpenAI-compatible endpoint repair hint even when required failures such as missing provider auth are also present.
+  - The normal next-step path now tells users to run `/provider endpoint <provider> <url>` instead of losing the endpoint fix behind other failures.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M1 provider/role setup polish or switch back to M2 worker waterfall cleanup depending on the next plan update.

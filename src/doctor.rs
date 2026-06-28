@@ -323,6 +323,15 @@ impl DoctorReport {
                 "Configure provider auth: run `tiffany-loop` then `/provider`, or `orchestrator config provider setup <provider> --env <ENV_NAME>`.",
             );
         }
+        if messages
+            .iter()
+            .any(|message| message.contains("OpenAI-compatible provider has no base_url"))
+        {
+            push_unique(
+                &mut steps,
+                "Set missing OpenAI-compatible endpoints with `/provider endpoint <provider> <url>` before running workers.",
+            );
+        }
         if messages.iter().any(|message| {
             message.contains("missing role config")
                 || message.contains("no worker role")
@@ -2665,6 +2674,37 @@ mod tests {
         assert!(rendered.contains("Upgrade Codex CLI"));
         assert!(rendered.contains("codex exec --cd"));
         assert!(rendered.contains("Rerun `orchestrator doctor`"));
+    }
+
+    #[test]
+    fn report_next_steps_include_openai_compatible_endpoint_fix_with_failures() {
+        let report = test_report(
+            vec![
+                DoctorLine {
+                    level: DoctorLevel::Fail,
+                    message: "minimax: api key missing".into(),
+                },
+                DoctorLine {
+                    level: DoctorLevel::Warn,
+                    message:
+                        "minimax: OpenAI-compatible provider has no base_url; requests will use https://api.openai.com/v1"
+                            .into(),
+                },
+            ],
+            1,
+        );
+
+        let steps = report.next_steps();
+        let rendered = report.render_text();
+
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.contains("/provider endpoint <provider> <url>")),
+            "expected endpoint repair step, got {steps:?}"
+        );
+        assert!(rendered.contains("Configure provider auth"));
+        assert!(rendered.contains("Set missing OpenAI-compatible endpoints"));
     }
 
     #[test]
