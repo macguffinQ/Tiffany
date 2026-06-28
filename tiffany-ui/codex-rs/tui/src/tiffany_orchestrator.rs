@@ -7882,6 +7882,16 @@ mod tests {
         }
     }
 
+    fn temp_launchable_runtime(
+        dir: &std::path::Path,
+        name: &str,
+    ) -> std::io::Result<std::path::PathBuf> {
+        let runtime = dir.join(executable_name(name));
+        std::fs::write(&runtime, "")?;
+        make_launchable(&runtime)?;
+        Ok(runtime)
+    }
+
     fn test_launch(
         user_prompt: impl Into<String>,
         prompt: impl Into<String>,
@@ -8073,9 +8083,8 @@ mod tests {
     fn intro_lines_show_role_runtime_readiness() -> std::io::Result<()> {
         let temp = tempfile::tempdir()?;
         let config_path = temp.path().join("config.yaml");
-        let runtime = temp.path().join(executable_name("claude"));
-        std::fs::write(&runtime, "")?;
-        make_launchable(&runtime)?;
+        let orchestrator_runtime = temp_launchable_runtime(temp.path(), "orchestrator")?;
+        let runtime = temp_launchable_runtime(temp.path(), "claude")?;
         std::fs::write(
             &config_path,
             format!(
@@ -8083,7 +8092,10 @@ mod tests {
                 runtime.display()
             ),
         )?;
-        let config = test_config("orchestrator", Some(config_path.display().to_string()));
+        let config = test_config(
+            orchestrator_runtime.display().to_string(),
+            Some(config_path.display().to_string()),
+        );
         let readiness = startup_readiness(Some(&config));
 
         let lines = idle_intro_lines_with_readiness(1, Some(&readiness));
@@ -8098,11 +8110,15 @@ mod tests {
     fn intro_lines_show_worker_runtime_missing() -> std::io::Result<()> {
         let temp = tempfile::tempdir()?;
         let config_path = temp.path().join("config.yaml");
+        let orchestrator_runtime = temp_launchable_runtime(temp.path(), "orchestrator")?;
         std::fs::write(
             &config_path,
             "providers:\n  minimax:\n    type: openai\nruntimes:\n  codex:\n    type: subprocess\n    binary: definitely-missing-codex\nmodels:\n  - id: minimax-m3-codex\n    provider: minimax\n    name: MiniMax-M3\nroles:\n  worker-codex:\n    model: minimax-m3-codex\n    runtime: codex\nbehavior: {}\n",
         )?;
-        let config = test_config("orchestrator", Some(config_path.display().to_string()));
+        let config = test_config(
+            orchestrator_runtime.display().to_string(),
+            Some(config_path.display().to_string()),
+        );
         let readiness = startup_readiness(Some(&config));
 
         let lines = idle_intro_lines_with_readiness(0, Some(&readiness));
@@ -8120,9 +8136,8 @@ mod tests {
     fn intro_lines_show_gemini_worker_runtime_readiness() -> std::io::Result<()> {
         let temp = tempfile::tempdir()?;
         let config_path = temp.path().join("config.yaml");
-        let runtime = temp.path().join(executable_name("gemini"));
-        std::fs::write(&runtime, "")?;
-        make_launchable(&runtime)?;
+        let orchestrator_runtime = temp_launchable_runtime(temp.path(), "orchestrator")?;
+        let runtime = temp_launchable_runtime(temp.path(), "gemini")?;
         std::fs::write(
             &config_path,
             format!(
@@ -8130,7 +8145,10 @@ mod tests {
                 runtime.display()
             ),
         )?;
-        let config = test_config("orchestrator", Some(config_path.display().to_string()));
+        let config = test_config(
+            orchestrator_runtime.display().to_string(),
+            Some(config_path.display().to_string()),
+        );
         let readiness = startup_readiness(Some(&config));
 
         let lines = idle_intro_lines_with_readiness(0, Some(&readiness));
@@ -8144,11 +8162,15 @@ mod tests {
     fn intro_lines_show_worker_provider_missing() -> std::io::Result<()> {
         let temp = tempfile::tempdir()?;
         let config_path = temp.path().join("config.yaml");
+        let orchestrator_runtime = temp_launchable_runtime(temp.path(), "orchestrator")?;
         std::fs::write(
             &config_path,
             "providers: {}\nruntimes:\n  codex:\n    type: subprocess\nmodels:\n  - id: minimax-m3-codex\n    provider: minimax\n    name: MiniMax-M3\nroles:\n  worker-codex:\n    model: minimax-m3-codex\n    runtime: codex\nbehavior: {}\n",
         )?;
-        let config = test_config("orchestrator", Some(config_path.display().to_string()));
+        let config = test_config(
+            orchestrator_runtime.display().to_string(),
+            Some(config_path.display().to_string()),
+        );
         let readiness = startup_readiness(Some(&config));
 
         let lines = idle_intro_lines_with_readiness(0, Some(&readiness));
@@ -8186,11 +8208,15 @@ mod tests {
     fn startup_health_actions_group_default_worker_provider_missing() -> std::io::Result<()> {
         let temp = tempfile::tempdir()?;
         let config_path = temp.path().join("config.yaml");
+        let orchestrator_runtime = temp_launchable_runtime(temp.path(), "orchestrator")?;
         std::fs::write(
             &config_path,
             "providers: {}\nruntimes:\n  codex:\n    type: subprocess\nmodels:\n  - id: minimax-m3-codex\n    provider: minimax\n    name: MiniMax-M3\nroles:\n  worker-codex:\n    model: minimax-m3-codex\n    runtime: codex\nbehavior: {}\n",
         )?;
-        let config = test_config("orchestrator", Some(config_path.display().to_string()));
+        let config = test_config(
+            orchestrator_runtime.display().to_string(),
+            Some(config_path.display().to_string()),
+        );
         let readiness = startup_readiness(Some(&config));
 
         let lines = startup_health_action_lines(&readiness);
@@ -8207,17 +8233,19 @@ mod tests {
     fn startup_health_actions_report_ok_when_ready() -> std::io::Result<()> {
         let temp = tempfile::tempdir()?;
         let config_path = temp.path().join("config.yaml");
-        let runtime = temp.path().join(executable_name("claude"));
-        std::fs::write(&runtime, "")?;
-        make_launchable(&runtime)?;
+        let orchestrator_runtime = temp_launchable_runtime(temp.path(), "orchestrator")?;
+        let worker_runtime = temp_launchable_runtime(temp.path(), "claude")?;
         std::fs::write(
             &config_path,
             format!(
                 "providers:\n  anthropic:\n    type: anthropic\nruntimes:\n  claude-code:\n    type: subprocess\n    binary: {}\nmodels:\n  - id: sonnet\n    provider: anthropic\n    name: claude-sonnet-4-6\nroles:\n  worker-cc:\n    model: sonnet\n    runtime: claude-code\nbehavior: {{}}\n",
-                runtime.display()
+                worker_runtime.display()
             ),
         )?;
-        let config = test_config("orchestrator", Some(config_path.display().to_string()));
+        let config = test_config(
+            orchestrator_runtime.display().to_string(),
+            Some(config_path.display().to_string()),
+        );
         let readiness = startup_readiness(Some(&config));
 
         let lines = startup_health_action_lines(&readiness);

@@ -6,7 +6,21 @@ executes.** Each card below is a self-contained task Codex can pick up. The
 planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
 (Codex) owns implementation.
 
-## Active instructions from Claude (updated 2026-06-28 — phase decision)
+## Active instructions from Claude (updated 2026-06-29 — v0.2 CI failure)
+
+- **⚠ v0.2 CI FAILURE — HOLD the tag move; user decision pending.** v0.2 was
+  pushed + tagged; GitHub Actions FAILED before publishing artifacts (no
+  artifacts, no Homebrew tap update → no user-facing damage). Two failures:
+  (1) `startup_health_actions_report_ok_when_ready` assumed an adjacent standalone
+  `orchestrator` binary — a consequence of the F3 merge making `orchestrator` an
+  alias; (2) the release workflow's preflight step. Codex's hermetic-test fix
+  (temp launchable binaries) + CI/preflight `--lib` alignment is correct. Before
+  any re-push: (a) rerun `./scripts/tiffany-release-preflight --full --tag v0.2`
+  green; (b) grep for OTHER tests/code with the same ambient-`orchestrator`
+  assumption and fix them; (c) confirm the WHOLE release.yml passes, not just the
+  one test; (d) **DO NOT move or force-push the v0.2 tag until the user picks
+  force-move-v0.2 vs cut-v0.2.1** — force-pushing a tag is destructive and beyond
+  the original clean push+tag authorization.
 
 - **PHASE DECISION (supersedes the stale F7-era bullets below): foundation push
   is substantially complete — STOP grinding extraction.** Tree clean, 146 ahead,

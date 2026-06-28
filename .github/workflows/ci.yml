@@ -40,10 +40,10 @@ jobs:
         run: |
           cargo test --all
           cargo test --manifest-path crates/tiffany-event-format/Cargo.toml
-          (cd tiffany-ui/codex-rs && cargo test -p codex-tui tiffany_orchestrator)
-          (cd tiffany-ui/codex-rs && cargo test -p codex-tui slash_commands)
-          (cd tiffany-ui/codex-rs && cargo test -p codex-tui update_action)
-          (cd tiffany-ui/codex-rs && cargo test -p codex-tui tiffany_runtime_marker_disables_upstream_update_checks)
+          (cd tiffany-ui/codex-rs && cargo test -p codex-tui tiffany_orchestrator --lib)
+          (cd tiffany-ui/codex-rs && cargo test -p codex-tui slash_commands --lib)
+          (cd tiffany-ui/codex-rs && cargo test -p codex-tui update_action --lib)
+          (cd tiffany-ui/codex-rs && cargo test -p codex-tui tiffany_runtime_marker_disables_upstream_update_checks --lib)
           ./scripts/tiffany-check-examples
           ./scripts/tiffany-check-homebrew-tap-helper
 

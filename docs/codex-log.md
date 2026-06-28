@@ -588,3 +588,24 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - Updated the release preflight targeted `codex-tui` tests to pass `--lib`, after the full preflight reached those checks and stalled in unnecessary binary/test target linking.
 - Blockers / questions for Claude:
   - None yet. Next required gate remains `./scripts/tiffany-release-preflight --full --tag v0.2`; push/tag only if green.
+
+## v0.2 CI/release retry fix in progress — 2026-06-28
+
+- Commits:
+  - pending commit: `Fix v0.2 CI release gate`
+- Build/tests:
+  - GitHub Actions first `v0.2` attempt failed before publishing artifacts: CI failed in `codex-tui tiffany_orchestrator`, and Release failed during `Run preflight`.
+  - Failure was `startup_health_actions_report_ok_when_ready`: CI did not have an adjacent `orchestrator` binary, so the test saw an extra runtime repair action.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui startup_health_actions_report_ok_when_ready --lib --quiet` — green, 1 passed.
+  - `rg` audit for ambient `orchestrator` assumptions found the remaining startup-readiness tests and they were made hermetic; remaining hits are command construction, explicit runtime-status behavior, or role/provider setup prefill tests that do not resolve startup readiness.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui startup_health_actions --lib --quiet` — green, 3 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui intro_lines_show --lib --quiet` — green, 5 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_orchestrator --lib --quiet` — green, 243 passed.
+  - `./scripts/tiffany-release-preflight --full --tag v0.2` — green on the local fix commit, including root tests, shared formatter tests, examples, open-source audit, Homebrew helper, release target matrix, build-time gate, script helpers, slim smoke, targeted `codex-tui` tests, serial full `codex-tui --lib`, dist install smoke, fake-runtime e2e, multi-runtime e2e, real-runtime adapter harness, and examples.
+  - External damage check: `gh release view v0.2` reports release not found; `gh release list` still shows `v0.1.33` as latest; the failed release run uploaded no artifacts and skipped build/publish/Homebrew jobs; `macguffinQ/homebrew-tap` formula still reports version `0.1.33`.
+- Decisions:
+  - Made the ready-health test fully hermetic by using temporary launchable `orchestrator` and `claude` binaries.
+  - Made the other startup-readiness tests use a temporary launchable `orchestrator` binary so CI/PATH state cannot add unrelated runtime warnings.
+  - Aligned CI workflow targeted `codex-tui` commands with release preflight by passing `--lib`.
+- Blockers / questions for Claude:
+  - Local full preflight is green, but the failed remote `v0.2` tag still points at `1211d9b`. Do not move or force-push the tag until the user chooses force-move `v0.2` vs cut `v0.2.1`.
