@@ -248,3 +248,27 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Resume F5+ with the next small pure bridge slice from `tui/src/tiffany_orchestrator.rs`.
+
+## F5+ — contextual prompt extraction completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Extract contextual prompt builder into tiffany bridge`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 15 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui contextual_prompt --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+  - No `.snap.new` files remain.
+- Decisions:
+  - Added `tiffany-bridge/src/context_prompt.rs` with a small borrowed `ContextPromptTurn` view.
+  - Moved multi-turn contextual prompt assembly and truncation rules out of `tui/src/tiffany_orchestrator.rs`.
+  - Kept memory file IO, schema normalization, and `TiffanyOrchestratorTurn` storage inside `codex-tui`; the TUI now adapts turns into bridge views.
+  - Added bridge tests for empty history, recent-turn inclusion, six-turn limiting, and long-text truncation.
+  - `tiffany_orchestrator.rs` is now 17,887 lines.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue F5+ with another pure helper slice, likely command argument parsing or native-history display shaping.

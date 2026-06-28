@@ -250,7 +250,7 @@ beyond the scaffold until F2 lands.
 - F5+: continue `tiffany_orchestrator.rs` extraction into `tiffany-bridge`,
   one module per task, build green each time, until the god-file is empty and
   deleted. Completed slices: config summary, native session paths, visible
-  output formatting/dedupe.
+  output formatting/dedupe, contextual prompt assembly.
 - F6: prune vendored `codex-rs` crates that Tiffany does not use (per the
   pruning goal in the Upstream Fork Strategy), guided by `UPSTREAM.md`.
 - F7 ✅ done locally: the Codex TUI is behind the default `tui` feature and

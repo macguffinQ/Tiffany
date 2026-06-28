@@ -1,9 +1,11 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
+mod context_prompt;
 mod native_session;
 mod visible_output;
 
+pub use context_prompt::{ContextPromptTurn, contextual_prompt};
 pub use native_session::{
     NativeSessionCommand, NativeSessionPath, NativeSessionRuntime, claude_session_jsonl_path,
     codex_session_jsonl_path, find_codex_rollout_path_by_id, find_gemini_chat_path_by_id,

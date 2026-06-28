@@ -15,6 +15,7 @@ use ratatui::text::Span;
 use serde::Deserialize;
 use serde::Serialize;
 use tiffany_bridge::ConfigSummary as TiffanyConfigSummary;
+use tiffany_bridge::ContextPromptTurn as TiffanyContextPromptTurn;
 use tiffany_bridge::NativeSessionCommand as TiffanyBridgeNativeSessionCommand;
 use tiffany_bridge::NativeSessionRuntime as TiffanyNativeTranscriptRuntime;
 use tiffany_bridge::PendingVisibleOutput as TiffanyBridgePendingVisibleOutput;
@@ -1042,46 +1043,14 @@ pub(crate) fn contextual_prompt(
     turns: &VecDeque<TiffanyOrchestratorTurn>,
     current_prompt: &str,
 ) -> String {
-    let current_prompt = current_prompt.trim();
-    if turns.is_empty() {
-        return current_prompt.to_string();
-    }
-
-    let recent = turns
+    let turns = turns
         .iter()
-        .rev()
-        .take(6)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .map(|turn| {
-            format!(
-                "user:\n{}\n\nassistant result:\n{}",
-                truncate_context_text(&turn.user_prompt, 1_200),
-                truncate_context_text(&turn.result, 3_000)
-            )
+        .map(|turn| TiffanyContextPromptTurn {
+            user_prompt: turn.user_prompt.as_str(),
+            result: turn.result.as_str(),
         })
-        .collect::<Vec<_>>()
-        .join("\n\n---\n\n");
-
-    format!(
-        "You are continuing a multi-turn tiffany-loop orchestrator conversation.\n\
-         Use the previous turns to resolve follow-ups, pronouns, and references.\n\
-         The current user request below is the highest priority.\n\n\
-         Previous turns:\n{recent}\n\n\
-         ---\n\
-         Current user request:\n{current_prompt}",
-    )
-}
-
-fn truncate_context_text(text: &str, max_chars: usize) -> String {
-    let trimmed = text.trim();
-    if trimmed.chars().count() <= max_chars {
-        return trimmed.to_string();
-    }
-    let mut out = trimmed.chars().take(max_chars).collect::<String>();
-    out.push('…');
-    out
+        .collect::<Vec<_>>();
+    tiffany_bridge::contextual_prompt(&turns, current_prompt)
 }
 
 pub(crate) fn load_memory_turns(
