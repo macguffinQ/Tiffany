@@ -14495,6 +14495,50 @@ mod tests {
         assert!(!visible.contains("planner>"));
     }
 
+    #[test]
+    fn humanizes_unclosed_json_fence_without_raw_leakage() {
+        let planner = TiffanyProgressEvent {
+            role: "planner".to_string(),
+            status: "output".to_string(),
+            message: "planner output".to_string(),
+            task_id: None,
+            agent: None,
+            worker_role: None,
+            runtime: None,
+            cc_agent: None,
+            model: None,
+            provider: None,
+            worker_thread_id: None,
+            native_session_id: None,
+            reused: None,
+            recovery: None,
+            event_kind: None,
+            task_prompt: None,
+            content: Some(
+                "```json\n{\"sub_tasks\":[{\"prompt\":\"Answer in Chinese\",\"agent_hint\":\"worker-cc\"}]}"
+                    .to_string(),
+            ),
+            approved: None,
+            issues: None,
+            count: None,
+            duration_ms: None,
+            reason: None,
+            route: None,
+            route_label: None,
+            route_reason_label: None,
+            flow_steps: None,
+        };
+
+        let visible = visible_content(&planner).expect("visible planner output");
+
+        assert!(visible.contains("plan ready - 1 worker run(s)"));
+        assert!(visible.contains("Answer in Chinese"));
+        assert!(visible.contains("worker-cc"));
+        assert!(!visible.contains("```"));
+        assert!(!visible.contains('{'));
+        assert!(!visible.contains("\"sub_tasks\""));
+    }
+
     #[cfg(unix)]
     #[test]
     fn failure_lines_include_stderr_and_next_step() {

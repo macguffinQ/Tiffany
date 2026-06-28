@@ -691,3 +691,25 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M2 by adding more focused coverage for long worker tool runs: JSON reviewer/planner leakage, duplicate assistant/tool-result chunks, and final-answer completeness.
+
+## M2 unclosed JSON fence leakage fixed — 2026-06-29
+
+- Commits:
+  - this commit: `Humanize unclosed JSON fences`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format humanizes_unclosed_json_fence_without_fence_leakage --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui humanizes_unclosed_json_fence_without_raw_leakage --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format humanizes --quiet` — green, 11 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Updated shared `tiffany-event-format` JSON-ish humanization so incomplete Markdown JSON fences no longer leak ` ```json ` lines into normal planner/critic/reviewer waterfall output.
+  - Allowed a single JSON line left after fence filtering to be summarized, and stripped JSON fence-only prefix/suffix context around embedded JSON values.
+  - Added both formatter-level and native TUI visible-content regressions for unclosed planner JSON fences.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M2 with remaining normal-view cleanup: raw/debug-only trace separation, reviewer issue display completeness, and duplicate worker answer/result stream handling.

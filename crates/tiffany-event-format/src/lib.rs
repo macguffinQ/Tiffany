@@ -3184,10 +3184,11 @@ fn summarize_jsonish_lines(s: &str) -> Option<String> {
     let lines = s
         .lines()
         .map(str::trim)
+        .filter(|line| !is_jsonish_markdown_fence_line(line))
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
     if lines.len() < 2 {
-        return None;
+        return lines.first().and_then(|line| summarize_jsonish_line(line));
     }
 
     let mut parsed = 0usize;
@@ -3226,6 +3227,19 @@ fn summarize_jsonish_line(line: &str) -> Option<String> {
     summarize_embedded_json_with_context(line)
 }
 
+fn is_jsonish_markdown_fence_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("```") {
+        return false;
+    }
+    let lang = trimmed.trim_start_matches('`').trim();
+    lang.is_empty()
+        || lang.eq_ignore_ascii_case("json")
+        || lang.eq_ignore_ascii_case("jsonc")
+        || lang.eq_ignore_ascii_case("javascript")
+        || lang.eq_ignore_ascii_case("js")
+}
+
 fn push_unique_summary_line(out: &mut Vec<String>, line: String) {
     let line = line.trim();
     if line.is_empty() {
@@ -3244,14 +3258,23 @@ fn summarize_embedded_json_with_context(s: &str) -> Option<String> {
     let value = iter.next()?.ok()?;
     let end = start + iter.byte_offset();
     let summary = summarize_json_value(&value);
-    let prefix = s[..start].trim();
-    let suffix = s[end..].trim();
+    let prefix = strip_jsonish_fence_context(&s[..start]);
+    let suffix = strip_jsonish_fence_context(&s[end..]);
     match (prefix.is_empty(), suffix.is_empty()) {
         (true, true) => Some(summary),
         (false, true) => Some(format!("{prefix} {summary}")),
         (true, false) => Some(format!("{summary} {suffix}")),
         (false, false) => Some(format!("{prefix} {summary} {suffix}")),
     }
+}
+
+fn strip_jsonish_fence_context(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !is_jsonish_markdown_fence_line(line))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn summarize_loose_structured_json(s: &str) -> Option<String> {
@@ -4369,6 +4392,21 @@ mod tests {
 
         assert_eq!(display, "needs changes: 1 issue(s)\n  - missing test");
         assert!(!display.contains('{'));
+    }
+
+    #[test]
+    fn humanizes_unclosed_json_fence_without_fence_leakage() {
+        let display = humanize_jsonish(
+            "```json\n{\"sub_tasks\":[{\"prompt\":\"Answer in Chinese\",\"agent_hint\":\"worker-cc\"}]}",
+            500,
+        );
+
+        assert!(display.contains("plan ready: 1 worker run(s)"));
+        assert!(display.contains("Answer in Chinese"));
+        assert!(display.contains("worker-cc"));
+        assert!(!display.contains("```"));
+        assert!(!display.contains('{'));
+        assert!(!display.contains("\"sub_tasks\""));
     }
 
     #[test]
