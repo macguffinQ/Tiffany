@@ -636,6 +636,23 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - Updated README, README.zh-CN, and `docs/engineering-plan.md` to describe the stronger adapter-run gate.
   - Did not push and did not move the `v0.2` tag.
 - Blockers / questions for Claude:
-  - M3 is improved but not complete. Remaining proof needed: `/continue open <role>` launching an interactive native session from the TUI path.
+  - M3 is improved but not complete. Remaining proof needed: a full human-interactive PTY smoke for `/continue open <role>`; the non-interactive shell execution seam is now covered separately.
 - Next:
   - Add a `/continue open <role>` check that exercises the native TUI handoff path without hanging CI, likely by using a fake PTY/runtime shim for interaction semantics plus keeping the real-runtime adapter continuity gate for native session proof.
+
+## M3 TUI native handoff execution seam covered — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_cli_handoff_command_runs_through_default_shell --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui continue_open_output --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+- Decisions:
+  - Extracted the `/continue open` shell execution path in `tui/src/app/input.rs` into `run_native_cli_handoff_command`.
+  - Kept behavior unchanged: `open_tiffany_native_cli` still restores the terminal fully, runs the handoff command through the user's default shell, captures transcript/git state after return, and records native history.
+  - Added a non-interactive unit test proving the handoff command is actually executed through the default shell. This covers the TUI execution seam without trying to automate an interactive Claude/Codex/Gemini session.
+- Blockers / questions for Claude:
+  - Full interactive PTY behavior is still best validated manually or with a future fake PTY shim; current automated coverage now proves parsing, event emission, shell execution, return capture, thread export, and native-history DB query.
+- Next:
+  - Continue M2/M3 hardening: either add fake PTY coverage for `/continue open` return behavior, or switch back to worker waterfall de-dup/noise cleanup.

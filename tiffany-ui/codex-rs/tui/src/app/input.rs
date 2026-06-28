@@ -6,7 +6,7 @@
 use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 
 #[cfg(windows)]
 fn default_shell_program() -> &'static str {
@@ -60,6 +60,18 @@ async fn git_output(cwd: &Path, args: &[&str]) -> Option<String> {
     }
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!text.is_empty()).then_some(text)
+}
+
+async fn run_native_cli_handoff_command(command_text: &str) -> std::io::Result<ExitStatus> {
+    let mut shell = tokio::process::Command::new(default_shell_program());
+    shell
+        .arg(default_shell_flag())
+        .arg(command_text)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await
 }
 
 impl App {
@@ -118,15 +130,7 @@ impl App {
         let transcript_cursor = crate::tiffany_orchestrator::native_cli_transcript_cursor(&command);
         let status = tui
             .with_restored(tui::RestoreMode::Full, || async move {
-                let mut shell = tokio::process::Command::new(default_shell_program());
-                shell
-                    .arg(default_shell_flag())
-                    .arg(&command_text)
-                    .stdin(Stdio::inherit())
-                    .stdout(Stdio::inherit())
-                    .stderr(Stdio::inherit())
-                    .status()
-                    .await
+                run_native_cli_handoff_command(&command_text).await
             })
             .await;
 
@@ -425,6 +429,23 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::make_test_app;
+
+    #[tokio::test]
+    async fn native_cli_handoff_command_runs_through_default_shell() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let marker = temp.path().join("native-open-marker.txt");
+        let command = format!("printf tiffany-native-open > '{}'", marker.display());
+
+        let status = super::run_native_cli_handoff_command(&command)
+            .await
+            .expect("native handoff command should run");
+
+        assert!(status.success());
+        assert_eq!(
+            std::fs::read_to_string(marker).expect("marker"),
+            "tiffany-native-open"
+        );
+    }
 
     #[tokio::test]
     async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {

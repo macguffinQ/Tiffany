@@ -417,8 +417,9 @@ before any release tag.
 - M3 Session Continuity — partial. Real-runtime adapter continuity now verifies
   same-role Tiffany/native session reuse for Claude Code, Codex, and Gemini
   locally, checks `/thread export` handoff output, and proves native history can
-  import into/query from the session DB; `/continue open` interactive recovery
-  still needs scripted proof.
+  import into/query from the session DB. `/continue open` has unit proof for the
+  TUI handoff command execution seam; a full human-interactive PTY smoke is
+  still not automated.
 - M4 Queue/Background Jobs — partial. `/jobs` and `/queue` visual states for
   paused/retry/recover still needed.
 - M5 Release/Open-Source — partial. Milestone-based versioning not enforced;
