@@ -88,6 +88,11 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   schema, conversation/turn/event structs, conversation id hashing, and
   normalization. `codex-tui` keeps file IO, Ratatui rendering, and session-db
   import orchestration local.
+- **F5+ native history graph rendering slice ✅ implemented locally and
+  verified.** A new `tiffany-bridge/src/native_history_render.rs` owns pure
+  native history text graph and Mermaid rendering plus compact tool-event graph
+  labels. `codex-tui` keeps file IO, export path handling, Ratatui lines, and
+  Markdown rendering local.
 - **F8 ✅ implemented locally and verified.** Full `codex-tui --lib` now passes
   serially after stabilizing no-active-turn app-server paths, no-turn side-thread
   discard behavior, large-stack test wrappers, Tiffany snapshot drift, and

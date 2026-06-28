@@ -44,6 +44,7 @@ use tiffany_bridge::job_state_summary;
 use tiffany_bridge::jobs_command_args;
 use tiffany_bridge::native_conversation_id;
 use tiffany_bridge::native_history_kind_matches;
+use tiffany_bridge::native_history_tool_event_label;
 use tiffany_bridge::normalize_native_chat_store;
 use tiffany_bridge::normalize_native_event as bridge_normalize_native_event;
 use tiffany_bridge::parse_claude_native_transcript_events;
@@ -64,6 +65,8 @@ use tiffany_bridge::parse_thread_fields;
 use tiffany_bridge::parse_thread_list_summaries;
 use tiffany_bridge::parse_worker_thread_title;
 use tiffany_bridge::provider_command_args;
+use tiffany_bridge::render_native_history_mermaid;
+use tiffany_bridge::render_native_history_text_graph;
 use tiffany_bridge::retry_prompt_from_jobs_retry_output;
 use tiffany_bridge::roles_command_args;
 use tiffany_bridge::thread_command_args;
@@ -1903,7 +1906,7 @@ fn native_turn_compact_event_story(turn: &NativeHistoryTurnView<'_>) -> Vec<Stri
             "answer" | "final" => "answer".to_string(),
             "question" => "question".to_string(),
             "output" | "reasoning" => "reasoning".to_string(),
-            "tool_call" => tool_event_label("tool", event),
+            "tool_call" => native_history_tool_event_label("tool", event),
             "tool_result" => "tool result".to_string(),
             "approval" => "approval needed".to_string(),
             "diff" => "diff captured".to_string(),
@@ -2456,210 +2459,6 @@ fn default_native_history_graph_path(codex_home: &Path, cwd: &Path, mermaid: boo
         ))
 }
 
-fn render_native_history_text_graph(
-    conversation: &TiffanyNativeChatConversation,
-    limit: usize,
-) -> String {
-    let mut out = String::from("Conversation flow\n");
-    out.push_str(&format!("cwd: {}\n", conversation.cwd));
-    out.push_str(&format!("session: {}\n", conversation.id));
-    let turns = conversation
-        .turns
-        .iter()
-        .rev()
-        .take(limit)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
-    let first_turn_number = conversation.turns.len().saturating_sub(turns.len()) + 1;
-    for (idx, turn) in turns.iter().enumerate() {
-        let turn_number = first_turn_number + idx;
-        out.push_str(&format!("\n{}. user -> answer\n", turn_number));
-        out.push_str(&format!(
-            "   user: {}\n",
-            truncate_text(&one_line(&turn.user_prompt), 120)
-        ));
-        out.push_str(&format!(
-            "   answer: {}\n",
-            truncate_text(&one_line(&turn.result), 140)
-        ));
-        let summary = native_turn_event_summary(turn);
-        if !summary.is_empty() {
-            out.push_str(&format!("   events: {}\n", summary.join(" -> ")));
-        }
-    }
-    out
-}
-
-fn render_native_history_mermaid(
-    conversation: &TiffanyNativeChatConversation,
-    limit: usize,
-    raw: bool,
-) -> String {
-    let turns = conversation
-        .turns
-        .iter()
-        .rev()
-        .take(limit)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
-    let first_turn_number = conversation.turns.len().saturating_sub(turns.len()) + 1;
-    let mut out = String::new();
-    if !raw {
-        out.push_str("```mermaid\n");
-    }
-    out.push_str("flowchart TD\n");
-    out.push_str("  start([Tiffany conversation])\n");
-    let mut previous = "start".to_string();
-    for (idx, turn) in turns.iter().enumerate() {
-        let turn_number = first_turn_number + idx;
-        let user_id = format!("u{turn_number}");
-        let answer_id = format!("a{turn_number}");
-        out.push_str(&format!(
-            "  {user_id}[\"{}\"]\n",
-            escape_mermaid_label(&format!(
-                "user: {}",
-                truncate_text(&one_line(&turn.user_prompt), 72)
-            ))
-        ));
-        out.push_str(&format!(
-            "  {answer_id}[\"{}\"]\n",
-            escape_mermaid_label(&format!(
-                "answer: {}",
-                truncate_text(&one_line(&turn.result), 72)
-            ))
-        ));
-        out.push_str(&format!("  {previous} --> {user_id}\n"));
-        out.push_str(&format!("  {user_id} --> {answer_id}\n"));
-        let mut event_previous = answer_id.clone();
-        for (event_idx, label) in native_turn_event_summary(turn)
-            .into_iter()
-            .take(6)
-            .enumerate()
-        {
-            let event_id = format!("e{turn_number}_{event_idx}");
-            out.push_str(&format!(
-                "  {event_id}[\"{}\"]\n",
-                escape_mermaid_label(&label)
-            ));
-            out.push_str(&format!("  {event_previous} --> {event_id}\n"));
-            event_previous = event_id;
-        }
-        previous = event_previous;
-    }
-    if !raw {
-        out.push_str("```\n");
-    }
-    out
-}
-
-fn native_turn_event_summary(turn: &TiffanyNativeChatTurn) -> Vec<String> {
-    let mut labels = Vec::new();
-    for event in &turn.events {
-        let kind = event.kind.as_deref().unwrap_or(event.status.as_str());
-        let label = match kind {
-            "answer" | "final" | "question" => kind.to_string(),
-            "tool_call" => tool_event_label("tool", event),
-            "tool_result" => "tool result".to_string(),
-            "diff" => "diff".to_string(),
-            "patch" => "patch".to_string(),
-            "file_update" => "file update".to_string(),
-            "approval" => "approval".to_string(),
-            "stderr" => "stderr".to_string(),
-            other => other.replace('_', " "),
-        };
-        if labels.last().map(String::as_str) != Some(label.as_str()) {
-            labels.push(label);
-        }
-    }
-    labels
-}
-
-fn tool_event_label(prefix: &str, event: &TiffanyNativeChatEvent) -> String {
-    event
-        .content
-        .as_deref()
-        .and_then(nonempty_trimmed)
-        .map(|content| {
-            compact_tool_event_text(content)
-                .unwrap_or_else(|| event_format::humanize_jsonish(content, 120))
-        })
-        .map(|content| one_line(&content))
-        .map(|content| truncate_text(&content, 60))
-        .map(|content| format!("{prefix}: {content}"))
-        .unwrap_or_else(|| prefix.to_string())
-}
-
-fn compact_tool_event_text(content: &str) -> Option<String> {
-    let trimmed = content.trim();
-    let json_start = trimmed.find('{')?;
-    let prefix = trimmed[..json_start].trim();
-    let value = serde_json::from_str::<serde_json::Value>(&trimmed[json_start..]).ok()?;
-    let detail = compact_tool_json_detail(&value)?;
-    Some(if prefix.is_empty() {
-        detail
-    } else {
-        format!("{prefix} {detail}")
-    })
-}
-
-fn compact_tool_json_detail(value: &serde_json::Value) -> Option<String> {
-    let object = value.as_object()?;
-    for key in [
-        "command",
-        "cmd",
-        "file_path",
-        "path",
-        "url",
-        "query",
-        "pattern",
-    ] {
-        if let Some(text) = object.get(key).and_then(compact_json_text_value) {
-            return Some(text);
-        }
-    }
-    for key in ["input", "parameters", "args", "arguments"] {
-        if let Some(text) = object.get(key).and_then(compact_json_text_value) {
-            return Some(text);
-        }
-        if let Some(detail) = object.get(key).and_then(compact_tool_json_detail) {
-            return Some(detail);
-        }
-    }
-    None
-}
-
-fn compact_json_text_value(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::String(text) => trimmed_string(text.clone()),
-        serde_json::Value::Number(number) => Some(number.to_string()),
-        serde_json::Value::Bool(flag) => Some(flag.to_string()),
-        serde_json::Value::Array(items) => {
-            let text = items
-                .iter()
-                .filter_map(compact_json_text_value)
-                .collect::<Vec<_>>()
-                .join(" ");
-            trimmed_string(text)
-        }
-        _ => None,
-    }
-}
-
-fn escape_mermaid_label(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('[', "(")
-        .replace(']', ")")
-        .replace('{', "(")
-        .replace('}', ")")
-        .replace('\n', " ")
-}
-
 fn render_native_history_markdown(
     conversation: &TiffanyNativeChatConversation,
     turns: &[NativeHistoryTurnView<'_>],
@@ -2839,11 +2638,6 @@ fn now_unix_seconds() -> u64 {
 
 fn normalize_native_event(event: TiffanyNativeChatEvent) -> Option<TiffanyNativeChatEvent> {
     bridge_normalize_native_event(event, CONTROL_SUMMARY_MAX_CHARS)
-}
-
-fn trimmed_string(value: String) -> Option<String> {
-    let value = value.trim().to_string();
-    (!value.is_empty()).then_some(value)
 }
 
 fn memory_turn_into_turn(turn: TiffanyOrchestratorMemoryTurn) -> Option<TiffanyOrchestratorTurn> {

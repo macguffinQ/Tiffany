@@ -476,3 +476,30 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue F5+ with a small pure native-history rendering/search slice, or switch to real-runtime handoff verification if validation is the priority.
+
+## F5+ — native history graph rendering extraction completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Extract native history graph rendering into tiffany bridge`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge native_history_render --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_history_graph --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_history_mermaid --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_history --lib --quiet` — green, 26 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 42 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build --quiet` — green.
+  - `git diff --check` — green.
+- Decisions:
+  - Added `tiffany-bridge/src/native_history_render.rs` for pure native history text graph rendering, Mermaid rendering, event summaries, and compact tool-event labels.
+  - `codex-tui` now calls bridge renderers from `/history graph` and `/history mermaid`, while retaining local file IO, export path handling, Ratatui `Line` construction, and Markdown export.
+  - Kept `/history compact` behavior by reusing the bridge tool-event label helper instead of duplicating JSON compaction in the TUI.
+  - `tiffany_orchestrator.rs` is now 15,018 lines.
+  - No push and no release.
+- Blockers / questions for Claude:
+  - No blocker. Claude Code 2.1.193 is installed locally; `--help` confirms `stream-json`, `--verbose`, `--resume`, and `--session-id` semantics remain available. A live minimal `claude --print` smoke command produced no output within the short timeout and was cancelled, so this slice did not rely on live Claude network behavior.
+- Next:
+  - Continue F5+ with another small pure native-history/search/export slice, or switch to real-runtime Claude/Codex/Gemini handoff verification if validation is now the priority.

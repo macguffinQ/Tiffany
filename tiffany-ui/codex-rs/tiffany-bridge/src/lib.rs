@@ -5,6 +5,7 @@ mod command_args;
 mod context_prompt;
 mod native_chat_store;
 mod native_history;
+mod native_history_render;
 mod native_session;
 mod native_transcript;
 mod output_parse;
@@ -24,6 +25,10 @@ pub use native_chat_store::{
 pub use native_history::{
     NativeHistoryCommand, NativeHistoryEventView, NativeHistoryFilter, NativeHistoryOptions,
     native_history_kind_matches,
+};
+pub use native_history_render::{
+    native_history_tool_event_label, native_turn_event_summary, render_native_history_mermaid,
+    render_native_history_text_graph,
 };
 pub use native_session::{
     NativeSessionCommand, NativeSessionPath, NativeSessionRuntime, claude_session_jsonl_path,
