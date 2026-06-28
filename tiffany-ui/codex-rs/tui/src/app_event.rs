@@ -233,10 +233,19 @@ pub(crate) enum AppEvent {
     /// A tiffany-loop orchestrator run spawned from the tiffany-loop TUI adapter has ended.
     TiffanyOrchestratorRunFinished,
 
+    /// Stream visible Tiffany worker answer text through Codex's native assistant stream cell.
+    TiffanyOrchestratorAnswerDelta {
+        delta: String,
+    },
+
+    /// Finalize the current Tiffany worker answer stream, if one is active.
+    TiffanyOrchestratorAnswerFinished,
+
     /// A tiffany-loop orchestrator run captured a usable assistant result for future follow-ups.
     TiffanyOrchestratorTurnCaptured {
         user_prompt: String,
         result: String,
+        result_already_visible: bool,
         native_events: Vec<crate::tiffany_orchestrator::TiffanyNativeChatEvent>,
     },
 
@@ -258,6 +267,17 @@ pub(crate) enum AppEvent {
     /// Inspect or clear stable worker thread/native CLI sessions from the TUI.
     TiffanyOrchestratorThreadCommand {
         args: String,
+    },
+
+    /// Inspect persisted Tiffany queue/job state from the TUI.
+    TiffanyOrchestratorJobsCommand {
+        args: String,
+    },
+
+    /// Add a prompt produced by a Tiffany command back into the current TUI queue.
+    TiffanyOrchestratorQueuePrompt {
+        prompt: String,
+        source: String,
     },
 
     /// Show the native CLI command for continuing a stable worker session.

@@ -7888,6 +7888,26 @@ mod tests {
     }
 
     #[test]
+    fn tiffany_orchestrator_popup_hides_upstream_model_prefix() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask tiffany-loop to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_tiffany_orchestrator_shell(true);
+        type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
+
+        assert!(
+            matches!(composer.popups.active, ActivePopup::None),
+            "Tiffany mode should hide upstream-only /model completion"
+        );
+    }
+
+    #[test]
     fn slash_popup_resume_for_res_ui() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
@@ -7966,6 +7986,39 @@ mod tests {
                 None => panic!("no selected command for '/res'"),
             },
             _ => panic!("slash popup not active after typing '/res'"),
+        }
+    }
+
+    #[test]
+    fn tiffany_orchestrator_popup_hides_upstream_resume_command() {
+        use super::super::command_popup::CommandItem;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask tiffany-loop to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_tiffany_orchestrator_shell(true);
+        type_chars_humanlike(&mut composer, &['/', 'r', 'e', 's']);
+
+        match &composer.popups.active {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => assert_ne!(
+                    cmd.command(),
+                    "resume",
+                    "Tiffany mode should hide upstream-only /resume completion"
+                ),
+                Some(CommandItem::ServiceTier(command)) => {
+                    panic!("Tiffany mode should hide service tier completion, got {command:?}")
+                }
+                None => {}
+            },
+            ActivePopup::None => {}
+            _ => panic!("unexpected non-command popup after typing '/res'"),
         }
     }
 
@@ -8161,6 +8214,75 @@ mod tests {
                 description: "Fastest inference with increased plan usage".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn tiffany_orchestrator_popup_hides_service_tier_prefix() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask tiffany-loop to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_tiffany_orchestrator_shell(true);
+        composer.set_service_tier_commands_enabled(/*enabled*/ true);
+        composer.set_service_tier_commands(vec![ServiceTierCommand {
+            id: "priority".to_string(),
+            name: "fast".to_string(),
+            description: "Fastest inference with increased plan usage".to_string(),
+        }]);
+        type_chars_humanlike(&mut composer, &['/', 'f', 'a', 's', 't']);
+
+        assert!(
+            matches!(composer.popups.active, ActivePopup::None),
+            "Tiffany mode should hide Codex service-tier completions"
+        );
+    }
+
+    #[test]
+    fn tiffany_orchestrator_popup_keeps_wired_command_prefixes() {
+        use super::super::command_popup::CommandItem;
+
+        for (typed, expected) in [
+            ("/ro", "role"),
+            ("/que", "queue"),
+            ("/con", "continue"),
+            ("/proc", "process"),
+            ("/o", "o"),
+        ] {
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask tiffany-loop to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            );
+            composer.set_tiffany_orchestrator_shell(true);
+            let chars: Vec<char> = typed.chars().collect();
+            type_chars_humanlike(&mut composer, &chars);
+
+            match &composer.popups.active {
+                ActivePopup::Command(popup) => match popup.selected_item() {
+                    Some(CommandItem::Builtin(cmd)) => {
+                        assert_eq!(
+                            cmd.command(),
+                            expected,
+                            "typed prefix {typed:?} selected the wrong Tiffany command"
+                        );
+                    }
+                    Some(CommandItem::ServiceTier(command)) => {
+                        panic!("expected /{expected}, got service tier {command:?}")
+                    }
+                    None => panic!("no selected command for Tiffany prefix {typed:?}"),
+                },
+                _ => panic!("slash popup not active for Tiffany prefix {typed:?}"),
+            }
+        }
     }
 
     fn flush_after_paste_burst(composer: &mut ChatComposer) -> bool {

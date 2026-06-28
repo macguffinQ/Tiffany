@@ -348,12 +348,25 @@ impl App {
             AppEvent::TiffanyOrchestratorRunFinished => {
                 self.handle_tiffany_orchestrator_run_finished(tui);
             }
+            AppEvent::TiffanyOrchestratorAnswerDelta { delta } => {
+                self.chat_widget
+                    .stream_tiffany_orchestrator_result_delta(&delta);
+            }
+            AppEvent::TiffanyOrchestratorAnswerFinished => {
+                self.chat_widget.finish_tiffany_orchestrator_result_stream();
+            }
             AppEvent::TiffanyOrchestratorTurnCaptured {
                 user_prompt,
                 result,
+                result_already_visible,
                 native_events,
             } => {
-                self.handle_tiffany_orchestrator_turn_captured(user_prompt, result, native_events);
+                self.handle_tiffany_orchestrator_turn_captured(
+                    user_prompt,
+                    result,
+                    result_already_visible,
+                    native_events,
+                );
             }
             AppEvent::TiffanyOrchestratorRolesCommand { args } => {
                 self.handle_tiffany_orchestrator_roles_command(tui, args);
@@ -366,6 +379,12 @@ impl App {
             }
             AppEvent::TiffanyOrchestratorThreadCommand { args } => {
                 self.handle_tiffany_orchestrator_thread_command(tui, args);
+            }
+            AppEvent::TiffanyOrchestratorJobsCommand { args } => {
+                self.handle_tiffany_orchestrator_jobs_command(tui, args);
+            }
+            AppEvent::TiffanyOrchestratorQueuePrompt { prompt, source } => {
+                self.handle_tiffany_orchestrator_queue_prompt(tui, prompt, source);
             }
             AppEvent::TiffanyOrchestratorContinueCommand { args } => {
                 self.handle_tiffany_orchestrator_continue_command(tui, args);
@@ -2324,6 +2343,7 @@ impl App {
         &mut self,
         user_prompt: String,
         result: String,
+        result_already_visible: bool,
         native_events: Vec<crate::tiffany_orchestrator::TiffanyNativeChatEvent>,
     ) {
         let user_prompt = user_prompt.trim().to_string();
@@ -2331,8 +2351,11 @@ impl App {
         if user_prompt.is_empty() || result.is_empty() {
             return;
         }
-        self.chat_widget
-            .record_tiffany_orchestrator_result_for_copy(&result);
+        if result_already_visible {
+            self.chat_widget.record_tiffany_orchestrator_result(&result);
+        } else {
+            self.chat_widget.add_tiffany_orchestrator_result(&result);
+        }
         self.tiffany_orchestrator_turns.push_back(
             crate::tiffany_orchestrator::TiffanyOrchestratorTurn {
                 user_prompt,
@@ -2436,6 +2459,43 @@ impl App {
             return;
         };
         crate::tiffany_orchestrator::spawn_thread_command(self.app_event_tx.clone(), config, args);
+        tui.frame_requester().schedule_frame();
+    }
+
+    fn handle_tiffany_orchestrator_jobs_command(&mut self, tui: &mut tui::Tui, args: String) {
+        let Some(config) = self.tiffany_orchestrator.clone() else {
+            self.insert_history_cell(
+                tui,
+                Box::new(history_cell::PlainHistoryCell::new(vec![
+                    "✗ tiffany-loop orchestrator mode is not active"
+                        .red()
+                        .into(),
+                ])),
+            );
+            return;
+        };
+        crate::tiffany_orchestrator::spawn_jobs_command(self.app_event_tx.clone(), config, args);
+        tui.frame_requester().schedule_frame();
+    }
+
+    fn handle_tiffany_orchestrator_queue_prompt(
+        &mut self,
+        tui: &mut tui::Tui,
+        prompt: String,
+        source: String,
+    ) {
+        if self.tiffany_orchestrator.is_none() {
+            return;
+        }
+        let prompt = prompt.trim().to_string();
+        if prompt.is_empty() {
+            return;
+        }
+        self.chat_widget.queue_tiffany_orchestrator_prompt(prompt);
+        self.chat_widget.add_info_message(
+            format!("{source} queued. Run /queue run to start it."),
+            Some("/queue run".to_string()),
+        );
         tui.frame_requester().schedule_frame();
     }
 

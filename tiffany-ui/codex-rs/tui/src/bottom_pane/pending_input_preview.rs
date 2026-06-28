@@ -24,6 +24,7 @@ pub(crate) struct PendingInputPreview {
     pub pending_steers: Vec<String>,
     pub rejected_steers: Vec<String>,
     pub queued_messages: Vec<String>,
+    queued_batch_mode: bool,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
     edit_binding: Option<key_hint::KeyBinding>,
@@ -39,9 +40,14 @@ impl PendingInputPreview {
             pending_steers: Vec::new(),
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
+            queued_batch_mode: false,
             edit_binding: Some(key_hint::alt(KeyCode::Up)),
             interrupt_binding: Some(key_hint::plain(KeyCode::Esc)),
         }
+    }
+
+    pub(crate) fn set_queued_batch_mode(&mut self, enabled: bool) {
+        self.queued_batch_mode = enabled;
     }
 
     /// Replace the keybinding shown in the hint line at the bottom of the
@@ -134,7 +140,12 @@ impl PendingInputPreview {
             if !lines.is_empty() {
                 lines.push(Line::from(""));
             }
-            Self::push_section_header(&mut lines, width, "Queued follow-up inputs".into());
+            let header = if self.queued_batch_mode {
+                "Queued batch: runs together after current orchestration"
+            } else {
+                "Queued follow-up inputs"
+            };
+            Self::push_section_header(&mut lines, width, header.into());
 
             for message in &self.queued_messages {
                 let wrapped = adaptive_wrap_lines(
@@ -154,14 +165,12 @@ impl PendingInputPreview {
         if !self.queued_messages.is_empty()
             && let Some(edit_binding) = self.edit_binding
         {
-            lines.push(
-                Line::from(vec![
-                    "    ".into(),
-                    edit_binding.into(),
-                    " edit last queued message".into(),
-                ])
-                .dim(),
-            );
+            let hint = if self.queued_batch_mode {
+                " edit last queued item before batch runs"
+            } else {
+                " edit last queued message"
+            };
+            lines.push(Line::from(vec!["    ".into(), edit_binding.into(), hint.into()]).dim());
         }
 
         Paragraph::new(lines).into()
@@ -239,6 +248,24 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         queue.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!("render_two_messages", format!("{buf:?}"));
+    }
+
+    #[test]
+    fn render_tiffany_batch_messages() {
+        let mut queue = PendingInputPreview::new();
+        queue.set_queued_batch_mode(true);
+        queue.queued_messages.push("first follow-up".to_string());
+        queue.queued_messages.push("second follow-up".to_string());
+        let width = 62;
+        let height = queue.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        queue.render(Rect::new(0, 0, width, height), &mut buf);
+
+        let rendered = format!("{buf:?}");
+        assert!(rendered.contains("Queued batch: runs together after current orchestration"));
+        assert!(rendered.contains("first follow-up"));
+        assert!(rendered.contains("second follow-up"));
+        assert!(rendered.contains("edit last queued item before batch runs"));
     }
 
     #[test]

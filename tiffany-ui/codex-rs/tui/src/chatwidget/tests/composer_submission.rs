@@ -1286,6 +1286,64 @@ async fn tiffany_orchestrator_running_submission_queues_without_pending_steer() 
 }
 
 #[tokio::test]
+async fn tiffany_orchestrator_run_finished_merges_queued_followups() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.on_tiffany_orchestrator_run_started();
+
+    for prompt in ["first follow up", "second follow up"] {
+        chat.bottom_pane
+            .set_composer_text(prompt.to_string(), Vec::new(), Vec::new());
+        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 2);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.on_tiffany_orchestrator_run_finished();
+
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected merged Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0],
+        UserInput::Text {
+            text: "1. first follow up\n2. second follow up".to_string(),
+            text_elements: Vec::new(),
+        }
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn tiffany_orchestrator_run_finished_keeps_single_queued_followup_plain() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.on_tiffany_orchestrator_run_started();
+
+    chat.bottom_pane
+        .set_composer_text("only follow up".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    chat.on_tiffany_orchestrator_run_finished();
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        items[0],
+        UserInput::Text {
+            text: "only follow up".to_string(),
+            text_elements: Vec::new(),
+        }
+    );
+}
+
+#[tokio::test]
 async fn tiffany_orchestrator_intercept_clears_stale_pending_steers() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.input_queue

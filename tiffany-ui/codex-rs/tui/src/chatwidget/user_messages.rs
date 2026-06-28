@@ -523,6 +523,71 @@ pub(super) fn merge_user_messages_with_history_record(
     )
 }
 
+pub(super) fn merge_tiffany_queued_user_messages_with_history_record(
+    messages: Vec<(UserMessage, UserMessageHistoryRecord)>,
+) -> (UserMessage, UserMessageHistoryRecord) {
+    let count = messages.len();
+    if count <= 1 {
+        return merge_user_messages_with_history_record(messages);
+    }
+
+    let numbered = messages
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (message, history_record))| {
+            (
+                number_user_message_text(message, idx + 1),
+                number_user_message_history_record(history_record, idx + 1),
+            )
+        })
+        .collect();
+    merge_user_messages_with_history_record(numbered)
+}
+
+fn number_user_message_text(mut message: UserMessage, number: usize) -> UserMessage {
+    if message.text.trim().is_empty() {
+        return message;
+    }
+    prefix_text_and_elements(
+        &mut message.text,
+        &mut message.text_elements,
+        &format!("{number}. "),
+    );
+    message
+}
+
+fn number_user_message_history_record(
+    history_record: UserMessageHistoryRecord,
+    number: usize,
+) -> UserMessageHistoryRecord {
+    match history_record {
+        UserMessageHistoryRecord::UserMessageText => UserMessageHistoryRecord::UserMessageText,
+        UserMessageHistoryRecord::Override(history) if history.text.trim().is_empty() => {
+            UserMessageHistoryRecord::Override(history)
+        }
+        UserMessageHistoryRecord::Override(mut history) => {
+            prefix_text_and_elements(
+                &mut history.text,
+                &mut history.text_elements,
+                &format!("{number}. "),
+            );
+            UserMessageHistoryRecord::Override(history)
+        }
+    }
+}
+
+fn prefix_text_and_elements(text: &mut String, text_elements: &mut [TextElement], prefix: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let offset = prefix.len();
+    text.insert_str(0, prefix);
+    for element in text_elements {
+        element.byte_range.start += offset;
+        element.byte_range.end += offset;
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct UserMessageDisplay {
     pub(super) message: String,
@@ -637,5 +702,113 @@ impl ChatWidget {
             local_images,
             remote_image_urls,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message_with_elements(text: &str, text_elements: Vec<TextElement>) -> UserMessage {
+        UserMessage {
+            text: text.to_string(),
+            local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
+            text_elements,
+            mention_bindings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn tiffany_queued_merge_keeps_single_message_plain() {
+        let (message, history_record) =
+            merge_tiffany_queued_user_messages_with_history_record(vec![(
+                UserMessage::from("only follow up"),
+                UserMessageHistoryRecord::UserMessageText,
+            )]);
+
+        assert_eq!(message.text, "only follow up");
+        assert_eq!(history_record, UserMessageHistoryRecord::UserMessageText);
+    }
+
+    #[test]
+    fn tiffany_queued_merge_numbers_multiple_plain_messages() {
+        let (message, history_record) =
+            merge_tiffany_queued_user_messages_with_history_record(vec![
+                (
+                    UserMessage::from("first follow up"),
+                    UserMessageHistoryRecord::UserMessageText,
+                ),
+                (
+                    UserMessage::from("second follow up"),
+                    UserMessageHistoryRecord::UserMessageText,
+                ),
+            ]);
+
+        assert_eq!(message.text, "1. first follow up\n2. second follow up");
+        assert_eq!(history_record, UserMessageHistoryRecord::UserMessageText);
+    }
+
+    #[test]
+    fn tiffany_queued_merge_rebases_numbered_message_text_elements() {
+        let message = message_with_elements(
+            "ask $figma",
+            vec![TextElement::new((4..10).into(), Some("$figma".to_string()))],
+        );
+
+        let (message, _history_record) =
+            merge_tiffany_queued_user_messages_with_history_record(vec![
+                (message, UserMessageHistoryRecord::UserMessageText),
+                (
+                    UserMessage::from("second follow up"),
+                    UserMessageHistoryRecord::UserMessageText,
+                ),
+            ]);
+
+        let element_start = message.text.find("$figma").unwrap();
+        assert_eq!(message.text, "1. ask $figma\n2. second follow up");
+        assert_eq!(
+            message.text_elements,
+            vec![TextElement::new(
+                (element_start..element_start + "$figma".len()).into(),
+                Some("$figma".to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn tiffany_queued_merge_numbers_history_overrides_and_rebases_elements() {
+        let (message, history_record) =
+            merge_tiffany_queued_user_messages_with_history_record(vec![
+                (
+                    UserMessage::from("internal first"),
+                    UserMessageHistoryRecord::UserMessageText,
+                ),
+                (
+                    UserMessage::from("internal second"),
+                    UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+                        text: "show $figma".to_string(),
+                        text_elements: vec![TextElement::new(
+                            (5..11).into(),
+                            Some("$figma".to_string()),
+                        )],
+                    }),
+                ),
+            ]);
+
+        assert_eq!(message.text, "1. internal first\n2. internal second");
+
+        let UserMessageHistoryRecord::Override(history) = history_record else {
+            panic!("expected numbered override history");
+        };
+        let element_start = history.text.find("$figma").unwrap();
+        assert_eq!(history.text, "1. internal first\n2. show $figma");
+        assert_eq!(
+            history.text_elements,
+            vec![TextElement::new(
+                (element_start..element_start + "$figma".len()).into(),
+                Some("$figma".to_string())
+            )]
+        );
     }
 }

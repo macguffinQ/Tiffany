@@ -156,7 +156,10 @@ pub(crate) use provider_setup_view::ProviderSetupView;
 pub(crate) use role_profile_setup_view::RoleProfileSetupDraft;
 pub(crate) use role_profile_setup_view::RoleProfileSetupView;
 pub(crate) use role_profile_setup_view::role_profile_setup_draft_args;
+pub(crate) use role_setup_view::RoleSetupCatalog;
+pub(crate) use role_setup_view::RoleSetupChoice;
 pub(crate) use role_setup_view::RoleSetupDraft;
+pub(crate) use role_setup_view::RoleSetupModelChoice;
 pub(crate) use role_setup_view::RoleSetupView;
 pub(crate) use selection_tabs::SelectionTab;
 
@@ -1025,6 +1028,7 @@ impl BottomPane {
 
     pub(crate) fn set_tiffany_orchestrator_shell(&mut self, enabled: bool) {
         self.composer.set_tiffany_orchestrator_shell(enabled);
+        self.pending_input_preview.set_queued_batch_mode(enabled);
         self.request_redraw();
     }
 

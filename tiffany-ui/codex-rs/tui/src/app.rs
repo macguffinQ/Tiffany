@@ -834,8 +834,9 @@ impl App {
         let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
         let initial_plan_type = bootstrap.plan_type;
+        let tiffany_tui_session_id = ThreadId::new();
         let session_telemetry = SessionTelemetry::new(
-            ThreadId::new(),
+            tiffany_tui_session_id,
             model.as_str(),
             model.as_str(),
             /*account_id*/ None,
@@ -1017,9 +1018,29 @@ See the Codex keymap documentation for supported actions and examples."
         } else {
             crate::updates::get_upgrade_version(&config)
         };
+        let tiffany_worker_scope = tiffany_orchestrator_mode.then(|| {
+            std::env::var("TIFFANY_WORKER_SCOPE")
+                .ok()
+                .map(|scope| scope.trim().to_string())
+                .filter(|scope| !scope.is_empty())
+                .unwrap_or_else(|| {
+                    crate::tiffany_orchestrator::new_tiffany_worker_scope(
+                        config.cwd.as_path(),
+                        &tiffany_tui_session_id.to_string(),
+                    )
+                })
+        });
         let tiffany_orchestrator_config = tiffany_orchestrator
             .as_ref()
-            .map(crate::tiffany_orchestrator::TiffanyOrchestratorLaunch::config);
+            .map(crate::tiffany_orchestrator::TiffanyOrchestratorLaunch::config)
+            .map(|mut config| {
+                if config.worker_scope.trim().is_empty()
+                    && let Some(scope) = &tiffany_worker_scope
+                {
+                    config.worker_scope.clone_from(scope);
+                }
+                config
+            });
         let tiffany_orchestrator_turns = if tiffany_orchestrator_mode {
             match crate::tiffany_orchestrator::load_memory_turns(
                 config.codex_home.as_path(),

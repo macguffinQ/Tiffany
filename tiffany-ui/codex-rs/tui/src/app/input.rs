@@ -28,7 +28,9 @@ fn default_shell_flag() -> &'static str {
     "-lc"
 }
 
-async fn native_cli_return_snapshot(worktree: Option<&str>) -> crate::tiffany_orchestrator::TiffanyNativeCliReturn {
+async fn native_cli_return_snapshot(
+    worktree: Option<&str>,
+) -> crate::tiffany_orchestrator::TiffanyNativeCliReturn {
     let Some(worktree) = worktree.map(str::trim).filter(|value| !value.is_empty()) else {
         return crate::tiffany_orchestrator::TiffanyNativeCliReturn::default();
     };
@@ -113,8 +115,7 @@ impl App {
         command: crate::tiffany_orchestrator::TiffanyNativeCliCommand,
     ) {
         let command_text = command.command.clone();
-        let transcript_cursor =
-            crate::tiffany_orchestrator::native_cli_transcript_cursor(&command);
+        let transcript_cursor = crate::tiffany_orchestrator::native_cli_transcript_cursor(&command);
         let status = tui
             .with_restored(tui::RestoreMode::Full, || async move {
                 let mut shell = tokio::process::Command::new(default_shell_program());
@@ -130,45 +131,62 @@ impl App {
             .await;
 
         match status {
-            Ok(status) if status.success() => {
+            Ok(status) => {
                 let outcome = native_cli_return_snapshot(command.worktree.as_deref()).await;
                 let transcript_events =
-                    crate::tiffany_orchestrator::native_cli_transcript_events_since(
+                    crate::tiffany_orchestrator::native_cli_transcript_events_after_return(
                         &command,
                         transcript_cursor.as_ref(),
                     );
                 let transcript_preview =
-                    crate::tiffany_orchestrator::native_cli_transcript_preview(
-                        &transcript_events,
-                    );
+                    crate::tiffany_orchestrator::native_cli_transcript_preview(&transcript_events);
                 let outcome = crate::tiffany_orchestrator::TiffanyNativeCliReturn {
                     transcript_event_count: transcript_events.len(),
                     transcript_preview,
                     ..outcome
                 };
-                self.chat_widget.add_plain_history_lines(
-                    crate::tiffany_orchestrator::native_cli_return_lines(&command, &outcome),
-                );
-                if let Ok(Some(path)) = crate::tiffany_orchestrator::append_native_cli_return(
+                let mut history_path = None;
+                let mut history_error = None;
+                let mut session_db_import_queued = false;
+                match crate::tiffany_orchestrator::append_native_cli_return(
                     self.config.codex_home.as_path(),
                     self.config.cwd.as_path(),
                     &command,
                     &outcome,
                     transcript_events,
-                ) && let Some(config) = self.tiffany_orchestrator.clone()
-                {
-                    crate::tiffany_orchestrator::spawn_native_history_import(config, path);
+                ) {
+                    Ok(Some(path)) => {
+                        if let Some(config) = self.tiffany_orchestrator.clone() {
+                            crate::tiffany_orchestrator::spawn_native_history_import(
+                                config,
+                                path.clone(),
+                            );
+                            session_db_import_queued = true;
+                        }
+                        history_path = Some(path);
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        history_error = Some(format!("{err:#}"));
+                    }
                 }
-            }
-            Ok(status) => {
-                self.chat_widget.add_to_history(history_cell::new_error_event(
-                    format!("{} native CLI exited with {status}", command.role),
-                ));
+                self.chat_widget.add_plain_history_lines(
+                    crate::tiffany_orchestrator::native_cli_return_lines_with_history_status(
+                        &command,
+                        &outcome,
+                        Some(&status),
+                        history_path.as_deref(),
+                        session_db_import_queued,
+                        history_error.as_deref(),
+                    ),
+                );
             }
             Err(err) => {
-                self.chat_widget.add_to_history(history_cell::new_error_event(
-                    format!("Failed to open {} native CLI: {err}", command.role),
-                ));
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to open {} native CLI: {err}",
+                        command.role
+                    )));
             }
         }
         tui.frame_requester().schedule_frame();
