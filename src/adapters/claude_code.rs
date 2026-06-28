@@ -489,6 +489,13 @@ mod tests {
             "do the work",
         );
 
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--output-format", "stream-json"]));
+        assert!(
+            args.iter().any(|arg| arg == "--verbose"),
+            "Claude Code 2.1.193+ requires --verbose with stream-json output"
+        );
         assert!(args.windows(2).any(|pair| pair == ["--agent", "reviewer"]));
         assert!(args
             .windows(2)

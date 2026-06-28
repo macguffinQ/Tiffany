@@ -272,3 +272,26 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue F5+ with another pure helper slice, likely command argument parsing or native-history display shaping.
+
+## Claude Code 2.1.193 compatibility check — completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Guard claude stream json verbose flag`
+- Build/tests:
+  - `claude --version` — `2.1.193 (Claude Code)`.
+  - `claude --help` still exposes `--print`, `--output-format`, `--resume`, `--continue`, `--fork-session`, `--session-id`, `--permission-mode`, and `--setting-sources`.
+  - Manual smoke without `--verbose` confirmed the new CLI error: `--output-format=stream-json requires --verbose`.
+  - Manual smoke with `--verbose` emitted valid `stream-json` init including `session_id` and `claude_code_version`, then stopped on API `429 rate_limit`; this is provider rate limiting, not CLI protocol failure.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop claude_worker_args --lib --quiet` — green, 3 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop claude_role_args --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop claude --lib --quiet` — green, 27 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Root Claude worker and role subprocess code already passed `--verbose` with `--output-format stream-json`.
+  - Added regression assertions so future refactors do not remove `--verbose`.
+  - No push and no release.
+- Blockers / questions for Claude:
+  - No code blocker.
+  - Real provider calls currently hit `429 rate_limit`; retest end-to-end once provider quota recovers.
+- Next:
+  - Resume F5+ command-argument parser extraction into `tiffany-bridge`.
