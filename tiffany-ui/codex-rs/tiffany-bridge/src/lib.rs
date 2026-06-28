@@ -5,6 +5,7 @@ mod command_args;
 mod context_prompt;
 mod native_history;
 mod native_session;
+mod native_transcript;
 mod output_parse;
 mod visible_output;
 
@@ -23,6 +24,10 @@ pub use native_session::{
     gemini_project_hash, gemini_session_json_path_in_home, gemini_session_message_count,
     native_session_command_is_claude, native_session_command_is_codex,
     native_session_command_is_gemini, native_session_path_in_home,
+};
+pub use native_transcript::{
+    NativeTranscriptEvent, parse_claude_native_transcript_events,
+    parse_codex_native_transcript_events, parse_gemini_native_transcript_events,
 };
 pub use output_parse::{
     JobSummary, JobsRetryHandoff, NativeCliHandoff, ProviderSummary, RoleOptionSummary,

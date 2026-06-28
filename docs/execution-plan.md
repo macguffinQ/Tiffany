@@ -78,6 +78,11 @@ planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
   into a native CLI handoff command, including native session id, runtime,
   Tiffany worker thread id, command, and worktree. `codex-tui` adapts the bridge
   result into its local return/transcript workflow.
+- **F5+ native transcript parsing slice ✅ implemented locally and verified.**
+  A new `tiffany-bridge/src/native_transcript.rs` owns pure Claude Code JSONL,
+  Codex JSONL, and Gemini chat JSON parsing into normalized native transcript
+  events. `codex-tui` only attaches Tiffany role/session metadata and persists
+  the events.
 - **F8 ✅ implemented locally and verified.** Full `codex-tui --lib` now passes
   serially after stabilizing no-active-turn app-server paths, no-turn side-thread
   discard behavior, large-stack test wrappers, Tiffany snapshot drift, and

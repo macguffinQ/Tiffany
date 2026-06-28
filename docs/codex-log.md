@@ -426,3 +426,28 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue F5+ with another pure helper slice; likely native CLI transcript event parsing is next, but only if it can be separated without pulling Ratatui or app-server state into the bridge.
+
+## F5+ — native transcript parsing extraction completed locally — 2026-06-28
+
+- Commits:
+  - this commit: `Extract native transcript parsing into tiffany bridge`
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml --all` — completed; same stable-rust `imports_granularity = Item` warning as before.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge native_transcript --quiet` — green, 3 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_cli_transcript --lib --quiet` — green, 9 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge --quiet` — green, 39 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build --quiet` — green.
+  - `git diff --check` — green.
+- Decisions:
+  - Added `tiffany-bridge/src/native_transcript.rs` for pure Claude Code JSONL, Codex JSONL, and Gemini chat JSON parsing.
+  - The bridge now returns normalized native transcript events with `kind`, `title`, and `content`; `codex-tui` attaches Tiffany role/session metadata and persists local/native history.
+  - Preserved existing TUI transcript behavior through the `native_cli_transcript` test set, including tool calls, tool results, patches, diffs, approvals, and Gemini skipped-message handling.
+  - `tiffany_orchestrator.rs` is now 15,408 lines.
+  - No push and no release.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue F5+ with another small pure slice, or pause extraction and start real-runtime handoff verification for M3 if Claude wants validation over more god-file reduction.
