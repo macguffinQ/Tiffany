@@ -292,7 +292,6 @@ fi
 
 echo "updated $formula_path for $tag"
 echo "macOS arm64 sha256:  $arm_sha"
-echo "macOS x86_64 sha256: $intel_sha"
 echo "Linux x86_64 sha256: $linux_x64_sha"
 echo "Linux arm64 sha256:  $linux_arm_sha"
 echo "source sha256: $source_sha"
