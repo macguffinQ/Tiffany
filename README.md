@@ -320,17 +320,17 @@ both commands are actually visible on `PATH`. They also compare the installed
 package, local tap formula, and remote tap formula when Homebrew appears stuck
 on an older release.
 
-Prebuilt release archives are published for macOS, Linux, and Windows after each `v*` tag. Archives expose the same multi-call binary as `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias. Source install remains available for unsupported CPU/OS combinations or local development.
+Prebuilt release archives are published for macOS Apple Silicon and Linux after each `v*` tag. Archives expose the same multi-call binary as `tiffany-loop`, `orchestrator`, and the compatibility `tiffany` alias. Intel Mac, Windows, unsupported CPU/OS combinations, and local development use the source install path until their release build cost is low enough for the blocking matrix again.
 
 Current release target status:
 
 | Target | Platform | Current install path | Release asset |
 | --- | --- | --- | --- |
 | `aarch64-apple-darwin` | macOS Apple Silicon | Homebrew and GitHub Release archive | `tiffany-loop-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
-| `x86_64-apple-darwin` | Intel Mac | Homebrew and GitHub Release archive | `tiffany-loop-vX.Y.Z-x86_64-apple-darwin.tar.gz` |
 | `x86_64-unknown-linux-gnu` | Linux x86_64 | Homebrew and GitHub Release archive | `tiffany-loop-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
 | `aarch64-unknown-linux-gnu` | Linux ARM64 | Homebrew and GitHub Release archive | `tiffany-loop-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
-| `x86_64-pc-windows-msvc` | Windows x86_64 | GitHub Release archive | `tiffany-loop-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
+| `x86_64-apple-darwin` | Intel Mac | cargo install | deferred until release build cost drops |
+| `x86_64-pc-windows-msvc` | Windows x86_64 | cargo install | deferred until release build cost drops |
 | `other targets` | Other CPU/OS combinations | cargo install | not published yet |
 
 Source checkout for contributors:
@@ -366,7 +366,7 @@ chmod +x orchestrator tiffany-loop tiffany
 ```
 
 The `tiffany-loop` package installs `tiffany-loop`, `orchestrator`, and the compatibility alias `tiffany`; the current GitHub repository name remains `Tiffany`.
-Tag releases publish macOS Apple Silicon, Intel Mac, Linux x86_64, Linux ARM64, and Windows x86_64 archives. Homebrew uses the macOS/Linux archives when the current CPU/OS matches and falls back to source builds for unsupported targets.
+Tag releases publish macOS Apple Silicon, Linux x86_64, and Linux ARM64 archives. Homebrew uses those archives when the current CPU/OS matches and falls back to source builds for Intel Mac, Windows, and unsupported targets.
 Public Homebrew installs require the `macguffinQ/Tiffany` repository and release assets to be public.
 
 ## Quickstart
@@ -908,9 +908,9 @@ Current beta status:
 - [x] CC agent invocation from orchestrator (`--agent reviewer`)
 - [x] Untruncated final response capture in terminal chat
 - [x] Legacy root `src/tui/codex_*` shim provenance/boundary audit in release preflight
-- [x] Release target manifest and preflight guard for macOS/Linux/Windows archives
+- [x] Release target manifest and preflight guard for macOS Apple Silicon/Linux archives
 - [x] Native Tiffany worker answer/final chunks render through Codex's active assistant stream cell
-- [x] Intel Mac, Linux, and Windows prebuilt release archive matrix
+- [x] macOS Apple Silicon and Linux prebuilt release archive matrix
 - [ ] Remove copied partial TUI modules after the fork adapter is stable
 - [ ] Live token-by-token final response rendering in terminal chat
 - [ ] VS Code extension

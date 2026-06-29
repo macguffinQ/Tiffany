@@ -5,10 +5,9 @@
 #
 # The gate fails when elapsed_seconds > ceil(baseline_seconds * threshold_percent / 100).
 # Baselines are intentionally per release asset target so CI catches platform-specific
-# build-cost regressions in the full default tiffany-loop binary.
+# build-cost regressions in the full default tiffany-loop binary. The platform rows
+# track cold hosted-runner release builds; use the default row for local smoke gates.
 default 900 175
-aarch64-apple-darwin 900 175
-x86_64-apple-darwin 900 175
-x86_64-unknown-linux-gnu 900 175
-aarch64-unknown-linux-gnu 900 175
-x86_64-pc-windows-msvc 1200 175
+aarch64-apple-darwin 1400 150
+x86_64-unknown-linux-gnu 1160 150
+aarch64-unknown-linux-gnu 820 150

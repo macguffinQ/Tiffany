@@ -1640,3 +1640,89 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - None for local release readiness after full preflight; remote release still requires the explicit push/tag step.
 - Next:
   - If the user approves publishing, push `main`, then create and push `v0.2.1`.
+
+## v0.2.1 GitHub release attempt failed on build-time gate — 2026-06-29
+
+- Commits:
+  - `34c6dba` Prepare v0.2.1 release was pushed to `origin/main` and tagged as `v0.2.1`.
+- Build/tests:
+  - GitHub CI on `main` for `34c6dba` — green.
+  - GitHub Tiffany Integration on `main` for `34c6dba` — green.
+  - GitHub Release run `28344473621` for tag `v0.2.1` — failed.
+  - Release preflight job — green.
+  - Release build artifacts that completed successfully before the matrix failure:
+    - `aarch64-apple-darwin` — green, 23m20s.
+    - `x86_64-unknown-linux-gnu` — green, 19m19s.
+    - `aarch64-unknown-linux-gnu` — green, 13m39s.
+  - Release build failures:
+    - `x86_64-apple-darwin` compiled successfully, then failed the build-time gate:
+      elapsed `2720s`, limit `1575s`, baseline `900s`, threshold `175%`.
+    - `x86_64-pc-windows-msvc` compiled successfully, then failed the build-time gate:
+      elapsed `2167s`, limit `2100s`, baseline `1200s`, threshold `175%`.
+  - GitHub Release publish and Homebrew tap update were skipped because the build matrix failed.
+- Decisions:
+  - Stopped after CI failure, per Claude's release instruction: do not auto-fix and retag without direction.
+  - Did not move or delete the existing broken `v0.2` tag.
+  - Did not move `v0.2.1`; it currently points to `34c6dba`.
+  - Did not submit a follow-up fix commit yet.
+- Blockers / questions for Claude:
+  - The failure is not a compile failure; it is a release-build-time policy failure on slow hosted runners.
+  - Recommended next decision: either raise per-target baselines/thresholds based on this measured CI data and cut `v0.2.2`, or remove slow targets from blocking publish until build cost is reduced.
+- Next:
+  - Wait for Claude/user direction before changing build-time baselines, release matrix, or tagging a replacement release.
+
+## Release build-time baseline recalibration prepared locally — 2026-06-29
+
+- Commits:
+  - none yet.
+- Build/tests:
+  - `./scripts/tiffany-build-time-gate --check-baselines` — green.
+  - `./scripts/tiffany-build-time-gate --self-test` — green.
+  - `./scripts/tiffany-release-targets --check` — green.
+  - `TIFFANY_BUILD_TIME_FAKE_ELAPSED=2720 ./scripts/tiffany-build-time-gate --target x86_64-apple-darwin -- true` — green; this matches the failed CI runner's successful compile time.
+  - `TIFFANY_BUILD_TIME_FAKE_ELAPSED=2167 ./scripts/tiffany-build-time-gate --target x86_64-pc-windows-msvc -- true` — green; this matches the failed CI runner's successful compile time.
+  - Reverse guard checks still fail as intended:
+    - `x86_64-apple-darwin` at `4081s` fails over the new `4080s` limit.
+    - `x86_64-pc-windows-msvc` at `3252s` fails over the new `3251s` limit.
+- Decisions:
+  - Recalibrated `scripts/tiffany-build-time-baselines.tsv` to use real cold hosted-runner release build measurements for each release asset target instead of the local/default `900s` baseline.
+  - Kept the local/default row at `900 175` for smoke-style local release checks.
+  - Set platform rows to a stricter `150%` threshold while raising the baseline seconds to match observed CI cold builds:
+    - `aarch64-apple-darwin 1400 150`
+    - `x86_64-apple-darwin 2720 150`
+    - `x86_64-unknown-linux-gnu 1160 150`
+    - `aarch64-unknown-linux-gnu 820 150`
+    - `x86_64-pc-windows-msvc 2167 150`
+  - Did not move, delete, or recreate `v0.2.1`.
+  - Did not push this follow-up fix.
+- Blockers / questions for Claude:
+  - If accepted, this should be committed as a follow-up release fix and shipped as a new tag, likely `v0.2.2`, because `v0.2.1` has already failed on GitHub Actions.
+  - Confirm whether `v0.2.2` should include only this baseline recalibration plus the release-failure log, or also correct the stale `docs/execution-plan.md` hash before release.
+- Next:
+  - Await direction before bumping version, committing, pushing, or tagging a replacement release.
+
+## v0.2.2 Option C release prep — 2026-06-29
+
+- Commits:
+  - none yet.
+- Build/tests:
+  - `./scripts/tiffany-release-targets --check` — green.
+  - `./scripts/tiffany-check-homebrew-tap-helper` — green.
+  - `./scripts/tiffany-build-time-gate --check-baselines` — green.
+  - `./scripts/tiffany-build-time-gate --self-test` — green.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui status_snapshot_includes_enterprise_monthly_credit_limit --lib --quiet` — green, 1 passed.
+  - `./scripts/tiffany-check-script-helpers` — green.
+  - `git diff --check` — green.
+- Decisions:
+  - Implemented the user's Option C direction: `v0.2.2` keeps prebuilt release artifacts only for `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu`.
+  - Dropped `x86_64-apple-darwin` and `x86_64-pc-windows-msvc` from the blocking release workflow matrix, public target manifest, Homebrew tap generator, post-release checker, and helper tests.
+  - Left Intel Mac and Windows visible in README tables as source-install/deferred targets instead of pretending they disappeared.
+  - Removed the stale `v0.2.1` PUSH NOW block from `docs/execution-plan.md`; `v0.2` and `v0.2.1` remain untouched.
+  - Bumped root `tiffany-loop`, `tiffany-cli`, and `codex-tui` to `0.2.2`, refreshed the root and fork lockfiles with only local package-version changes, and updated Tiffany version snapshots.
+- Blockers / questions for Claude:
+  - None for local `v0.2.2` prep before full preflight.
+- Next:
+  - Commit as `Prepare v0.2.2 release`, run `TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full --tag v0.2.2` on that exact commit, then push/tag only if the full preflight is green.

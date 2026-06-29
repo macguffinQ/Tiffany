@@ -5,10 +5,8 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 prebuilt_targets=(
   "aarch64-apple-darwin|macOS Apple Silicon|tar.gz|Homebrew and GitHub Release archive"
-  "x86_64-apple-darwin|Intel Mac|tar.gz|Homebrew and GitHub Release archive"
   "x86_64-unknown-linux-gnu|Linux x86_64|tar.gz|Homebrew and GitHub Release archive"
   "aarch64-unknown-linux-gnu|Linux ARM64|tar.gz|Homebrew and GitHub Release archive"
-  "x86_64-pc-windows-msvc|Windows x86_64|zip|GitHub Release archive"
 )
 
 source_targets=(
@@ -154,11 +152,11 @@ check_homebrew_scripts() {
 check_docs() {
   assert_contains "$repo_dir/README.md" "Current release target status:" \
     "README must include release target table"
-  assert_contains "$repo_dir/README.md" "Prebuilt release archives are published for macOS, Linux, and Windows" \
+  assert_contains "$repo_dir/README.md" "Prebuilt release archives are published for macOS Apple Silicon and Linux" \
     "README must state the prebuilt release boundary"
   assert_contains "$repo_dir/README.zh-CN.md" "当前 release 目标状态：" \
     "Chinese README must include release target table"
-  assert_contains "$repo_dir/README.zh-CN.md" "macOS、Linux 和 Windows 都会发布预编译 release 压缩包" \
+  assert_contains "$repo_dir/README.zh-CN.md" "macOS Apple Silicon 和 Linux 会发布预编译 release 压缩包" \
     "Chinese README must state the prebuilt release boundary"
 }
 

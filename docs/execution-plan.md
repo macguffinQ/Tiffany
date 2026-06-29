@@ -6,43 +6,34 @@ executes.** Each card below is a self-contained task Codex can pick up. The
 planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
 (Codex) owns implementation.
 
-## Active instructions from Claude (updated 2026-06-29 — STOP polish, ship v0.2.1 NOW)
+## Active instructions from Claude (updated 2026-06-29 — v0.2.1 blocked by build-time gate; user chose C → ship v0.2.2 = drop slow targets)
 
-- **⛔ STOP all M1/M2/M3/M4/M5 polish. Pivot to the `v0.2.1` release NOW — it is
-  the next and ONLY action.** You have done roughly 30 polish slices since the CI
-  failure; that is more than enough for v0.2.1. Any further polish waits for
-  v0.2.2. Do NOT start another polish slice. Execute the `v0.2.1` release
-  procedure in the next bullet immediately: commit all pending work → bump
-  `0.2.1` + CHANGELOG → `./scripts/tiffany-release-preflight --full --tag v0.2.1`
-  → push `main` + tag. The release is gated ONLY on a green full preflight —
-  nothing else is pending.
-
-- **Decision (user, 2026-06-29): cut `v0.2.1`; leave the broken `v0.2` tag alone.**
-  The failed `v0.2` tag stays at `1211d9b` — do NOT force-move, rewrite, or delete
-  it. Release the fix as a new `v0.2.1`. Good work holding the tag through ~30
-  slices; the wait was used well: the CI root cause is fixed thoroughly (hermetic
-  startup tests, e2e scripts accept tiffany-loop-only bin dirs, release.yml now
-  runs the FULL preflight on tag, preflight guards against stale existing tags),
-  plus large M1/M2/M3/M4/M5 polish and real M3 runtime-continuity evidence
-  (Claude/Codex/Gemini adapter runs reuse worker thread + native session across
-  separate processes).
-- **`v0.2.1` release procedure — execute now:**
-  1. **Commit all pending M1–M5 work first** so the tree is clean (many slices are
-     still uncommitted). Group logically; every commit builds green. Do not tag
-     over a dirty tree.
-  2. **Bump to `0.2.1`** (root `tiffany-loop`, `tiffany-cli`, `codex-tui`), refresh
-     both lockfiles, add a `## [0.2.1] - 2026-06-29` CHANGELOG entry. Commit as
-     `Prepare v0.2.1 release`.
-  3. **Run `./scripts/tiffany-release-preflight --full --tag v0.2.1`** on that
-     exact commit. `v0.2.1` is a NEW tag → the existing-tag guard will NOT block
-     and NO `TIFFANY_RELEASE_ALLOW_TAG_REWRITE` is needed.
-  4. **Green →** `git push origin main`, then `git tag v0.2.1 && git push origin
-     v0.2.1`. The tag fires release.yml (full preflight on CI → artifacts +
-     Homebrew tap update). If ANY gate fails, STOP and report; do not tag.
-- **The broken `v0.2` tag is intentionally left in place** (user chose the
-  non-destructive path). If CI/preflight ever complains about the stale `v0.2`,
-  use the `TIFFANY_RELEASE_ALLOW_TAG_REWRITE` override ONLY on `v0.2.1` work, never
-  touch `v0.2`.
+- **⚠ SUPERSEDES the v0.2.1 PUSH bullet below (which WAS executed — push
+  succeeded, then CI FAILED).** v0.2.1 CI failed: NOT a code bug — the F9
+  build-time gate blocked two slow cross-compile targets (Intel macOS 2720s vs
+  1575s limit; Windows MSVC 2167s vs 2100s). Baselines were measured on a fast
+  local machine, not GH's slow hosted runners. 3/5 targets + preflight + all
+  tests were green; release did NOT publish. Broken `v0.2` and `v0.2.1` tags
+  stay as-is.
+- **User decision (2026-06-29): Option C — drop the slow targets; ship only
+  Linux (x64+arm64) + arm64 macOS as `v0.2.2`.** (You started Option A / baseline
+  recalibration before the choice landed — pivot to C, but KEEP your recalibrated
+  baselines for the targets that remain.)
+- **`v0.2.2` fix procedure:**
+  1. Drop `x86_64-apple-darwin` + `x86_64-pc-windows-msvc` from the release
+     matrix: `.github/workflows/release.yml`, `scripts/tiffany-release-targets`,
+     Homebrew formula + tap script, README supported-platforms. Keep
+     `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`.
+  2. Keep your recalibrated baselines for the 3 remaining targets (CI-real, a
+     strict improvement); REMOVE the baseline rows for the 2 dropped targets.
+  3. CHANGELOG `## [0.2.2]` noting Intel macOS + Windows are deferred until build
+     cost drops; fix any stale doc/hash you flagged; commit the dirty
+     `docs/execution-plan.md` too.
+  4. `TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full
+     --tag v0.2.2`. The build-time gate now only runs on the 3 kept targets →
+     should pass.
+  5. Green → push `main` + tag `v0.2.2` (authorized, green-gate rule). Report CI
+     outcome. If it fails again, STOP and report — do not auto-retag.
 
 - **PHASE DECISION (supersedes the stale F7-era bullets below): foundation push
   is substantially complete — STOP grinding extraction.** Tree clean, 146 ahead,

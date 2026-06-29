@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.2.2] - 2026-06-29
+
+- Recut the failed `v0.2.1` release as a non-destructive follow-up so the
+  existing `v0.2` and `v0.2.1` tags remain untouched.
+- Deferred Intel macOS and Windows prebuilt archives until their hosted-runner
+  release build cost drops below the blocking gate threshold.
+- Limited the blocking GitHub Release matrix to macOS Apple Silicon, Linux
+  x86_64, and Linux ARM64, with Homebrew falling back to source builds for
+  Intel Mac, Windows, and unsupported targets.
+- Recalibrated release build-time baselines for the kept prebuilt targets using
+  cold GitHub hosted-runner measurements with a stricter per-platform threshold.
+
 ## [0.2.1] - 2026-06-29
 
 - Hardened the release path so tag-triggered CI runs the full Tiffany preflight

@@ -144,14 +144,11 @@ fi
 version="${tag#v}"
 assets=(
   "tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
-  "tiffany-loop-${tag}-x86_64-apple-darwin.tar.gz"
   "tiffany-loop-${tag}-x86_64-unknown-linux-gnu.tar.gz"
   "tiffany-loop-${tag}-aarch64-unknown-linux-gnu.tar.gz"
-  "tiffany-loop-${tag}-x86_64-pc-windows-msvc.zip"
 )
 homebrew_assets=(
   "tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
-  "tiffany-loop-${tag}-x86_64-apple-darwin.tar.gz"
   "tiffany-loop-${tag}-x86_64-unknown-linux-gnu.tar.gz"
   "tiffany-loop-${tag}-aarch64-unknown-linux-gnu.tar.gz"
 )

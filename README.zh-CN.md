@@ -221,17 +221,17 @@ tiffany-loop doctor
 `tiffany-loop doctor` 和 `orchestrator doctor` 会检查 Homebrew package
 prefix、实际安装的 `tiffany-loop` / `orchestrator` 二进制，以及这两个命令是否真的在 `PATH` 上可见。
 
-每个 `v*` tag 发布后，macOS、Linux 和 Windows 都会发布预编译 release 压缩包，里面把同一个 multi-call binary 暴露为 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。不在矩阵内的 CPU/OS 组合仍可用源码安装。
+每个 `v*` tag 发布后，macOS Apple Silicon 和 Linux 会发布预编译 release 压缩包，里面把同一个 multi-call binary 暴露为 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`。Intel Mac、Windows、不在矩阵内的 CPU/OS 组合，以及本地开发，暂时走源码安装路径，直到这些目标的 release 构建成本降到可以重新进入阻塞矩阵。
 
 当前 release 目标状态：
 
 | Target | 平台 | 当前安装方式 | Release asset |
 | --- | --- | --- | --- |
 | `aarch64-apple-darwin` | macOS Apple Silicon | Homebrew 和 GitHub Release 压缩包 | `tiffany-loop-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
-| `x86_64-apple-darwin` | Intel Mac | Homebrew 和 GitHub Release 压缩包 | `tiffany-loop-vX.Y.Z-x86_64-apple-darwin.tar.gz` |
 | `x86_64-unknown-linux-gnu` | Linux x86_64 | Homebrew 和 GitHub Release 压缩包 | `tiffany-loop-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
 | `aarch64-unknown-linux-gnu` | Linux ARM64 | Homebrew 和 GitHub Release 压缩包 | `tiffany-loop-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
-| `x86_64-pc-windows-msvc` | Windows x86_64 | GitHub Release 压缩包 | `tiffany-loop-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
+| `x86_64-apple-darwin` | Intel Mac | cargo install | 暂缓，等 release 构建成本下降 |
+| `x86_64-pc-windows-msvc` | Windows x86_64 | cargo install | 暂缓，等 release 构建成本下降 |
 | `other targets` | 其它 CPU/OS 组合 | cargo install | 暂未发布 |
 
 贡献者源码运行：
@@ -267,7 +267,7 @@ chmod +x orchestrator tiffany-loop tiffany
 ```
 
 `tiffany-loop` 安装包会提供 `tiffany-loop`、`orchestrator` 和兼容别名 `tiffany`；当前 GitHub 仓库名仍是 `Tiffany`。
-tag release 会发布 macOS Apple Silicon、Intel Mac、Linux x86_64、Linux ARM64 和 Windows x86_64 压缩包。Homebrew 在当前 CPU/OS 有匹配压缩包时直接安装预编译包，其它目标回退源码构建。
+tag release 会发布 macOS Apple Silicon、Linux x86_64 和 Linux ARM64 压缩包。Homebrew 在当前 CPU/OS 有匹配压缩包时直接安装预编译包；Intel Mac、Windows 和其它目标回退源码构建。
 公开 Homebrew 安装要求 `macguffinQ/Tiffany` 仓库和 release assets 对外公开。
 
 ## 快速开始
@@ -686,9 +686,9 @@ cargo run -- config
 - orchestrator 调用 Claude Code 子 agent（`--agent reviewer`）
 - terminal chat 最终答案不再按字符截断
 - 根工程旧 `src/tui/codex_*` shim 的上游来源和边界审计已接入发布前检查
-- release target 清单和发布前检查会校验 macOS/Linux/Windows 压缩包矩阵
+- release target 清单和发布前检查会校验 macOS Apple Silicon/Linux 压缩包矩阵
 - 原生 Tiffany worker 的 answer/final chunk 已接入 Codex active assistant stream cell
-- Intel Mac、Linux 和 Windows 预编译 release 压缩包矩阵
+- macOS Apple Silicon 和 Linux 预编译 release 压缩包矩阵
 
 计划中：
 

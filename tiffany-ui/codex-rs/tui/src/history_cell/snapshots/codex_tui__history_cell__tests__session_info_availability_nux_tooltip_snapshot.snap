@@ -4,7 +4,7 @@ assertion_line: 640
 expression: rendered
 ---
 ╭─────────────────────────────────────╮
-│ >_ tiffany-loop (v0.2.1)            │
+│ >_ tiffany-loop (v0.2.2)            │
 │                                     │
 │ model:     gpt-5   /model to change │
 │ directory: /tmp/project             │

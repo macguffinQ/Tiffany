@@ -163,33 +163,28 @@ asset_digest_for() {
 }
 
 arm_asset="tiffany-loop-${tag}-aarch64-apple-darwin.tar.gz"
-intel_asset="tiffany-loop-${tag}-x86_64-apple-darwin.tar.gz"
 linux_x64_asset="tiffany-loop-${tag}-x86_64-unknown-linux-gnu.tar.gz"
 linux_arm_asset="tiffany-loop-${tag}-aarch64-unknown-linux-gnu.tar.gz"
 source_url="https://github.com/${release_repo}/archive/refs/tags/${tag}.tar.gz"
 arm_sha="$(asset_digest_for "$arm_asset")"
-intel_sha="$(asset_digest_for "$intel_asset")"
 linux_x64_sha="$(asset_digest_for "$linux_x64_asset")"
 linux_arm_sha="$(asset_digest_for "$linux_arm_asset")"
 arm_sha="${arm_sha#sha256:}"
-intel_sha="${intel_sha#sha256:}"
 linux_x64_sha="${linux_x64_sha#sha256:}"
 linux_arm_sha="${linux_arm_sha#sha256:}"
 source_sha="$(curl -fsSL "$source_url" | sha256_stream)"
 
 if [[ -z "$arm_sha" || "$arm_sha" == "null" \
-   || -z "$intel_sha" || "$intel_sha" == "null" \
    || -z "$linux_x64_sha" || "$linux_x64_sha" == "null" \
    || -z "$linux_arm_sha" || "$linux_arm_sha" == "null" \
    || -z "$source_sha" ]]; then
   echo "Failed to calculate checksums for $tag in $release_repo" >&2
   echo "Expected assets:" >&2
-  printf '  %s\n' "$arm_asset" "$intel_asset" "$linux_x64_asset" "$linux_arm_asset" >&2
+  printf '  %s\n' "$arm_asset" "$linux_x64_asset" "$linux_arm_asset" >&2
   exit 1
 fi
 
 arm_url="https://github.com/${release_repo}/releases/download/${tag}/${arm_asset}"
-intel_url="https://github.com/${release_repo}/releases/download/${tag}/${intel_asset}"
 linux_x64_url="https://github.com/${release_repo}/releases/download/${tag}/${linux_x64_asset}"
 linux_arm_url="https://github.com/${release_repo}/releases/download/${tag}/${linux_arm_asset}"
 tap_name="$(homebrew_tap_name "$tap_repo")"
@@ -210,9 +205,6 @@ class TiffanyLoop < Formula
   if OS.mac? && Hardware::CPU.arm?
     url "${arm_url}"
     sha256 "${arm_sha}"
-  elsif OS.mac? && Hardware::CPU.intel?
-    url "${intel_url}"
-    sha256 "${intel_sha}"
   elsif OS.linux? && Hardware::CPU.intel?
     url "${linux_x64_url}"
     sha256 "${linux_x64_sha}"
@@ -226,7 +218,7 @@ class TiffanyLoop < Formula
   end
 
   def install
-    if (OS.mac? || OS.linux?) && (Hardware::CPU.arm? || Hardware::CPU.intel?)
+    if (OS.mac? && Hardware::CPU.arm?) || (OS.linux? && (Hardware::CPU.arm? || Hardware::CPU.intel?))
       bin.install "tiffany-loop"
       bin.install_symlink "tiffany-loop" => "orchestrator"
       bin.install_symlink "tiffany-loop" => "tiffany"
