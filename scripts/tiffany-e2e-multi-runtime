@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_dir/scripts/lib/tiffany-binaries.sh"
 
 usage() {
   cat <<'EOF'
@@ -14,7 +15,7 @@ It verifies:
   - both roles persist worker/native session state
   - a second same-role run resumes the saved native session handle
 
-Default binaries: ./target/dev-small/orchestrator
+Default binaries: ./target/dev-small/orchestrator, or ./target/dev-small/tiffany-loop with an auto-created alias
 EOF
 }
 
@@ -55,31 +56,21 @@ case "$bin_dir" in
   *) bin_dir="$repo_dir/$bin_dir" ;;
 esac
 
-exe_suffix=""
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) exe_suffix=".exe" ;;
-esac
+tmp_root="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_root"
+}
+trap cleanup EXIT
 
-orchestrator_bin="$bin_dir/orchestrator$exe_suffix"
+orchestrator_bin="$(tiffany_runtime_alias_from_bin_dir "$bin_dir" "$tmp_root/bin")"
 fake_codex="$repo_dir/scripts/tests/fake-codex"
 fake_gemini="$repo_dir/scripts/tests/fake-gemini"
-if [[ ! -x "$orchestrator_bin" ]]; then
-  echo "missing executable: $orchestrator_bin" >&2
-  echo "build first with ./scripts/tiffany-build --small" >&2
-  exit 1
-fi
 for fake in "$fake_codex" "$fake_gemini"; do
   if [[ ! -x "$fake" ]]; then
     echo "missing executable: $fake" >&2
     exit 1
   fi
 done
-
-tmp_root="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmp_root"
-}
-trap cleanup EXIT
 
 export HOME="$tmp_root/home"
 export TIFFANY_HOME="$tmp_root/tiffany"

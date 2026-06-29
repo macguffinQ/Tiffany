@@ -20,6 +20,9 @@ Options:
            Tagged release checks also enforce a 24-hour cooldown after the
            previous release tag. Use TIFFANY_RELEASE_ALLOW_FREQUENT=1 only for
            urgent installer, startup, or security fixes.
+           If the tag already exists and does not point at HEAD, the check
+           fails unless TIFFANY_RELEASE_ALLOW_TAG_REWRITE=1 is set after an
+           explicit decision to force-move that tag.
 
 Default: --quick
 EOF
@@ -170,6 +173,27 @@ git_tag_timestamp() {
   printf '%s\n' "$timestamp"
 }
 
+check_existing_release_tag_points_at_head() {
+  local tag="$1"
+  local tag_sha head_sha
+  tag_sha="$(git -C "$repo_dir" rev-parse -q --verify "refs/tags/$tag" 2>/dev/null || true)"
+  [[ -n "$tag_sha" ]] || return 0
+  head_sha="$(git -C "$repo_dir" rev-parse HEAD)"
+  if [[ "$tag_sha" == "$head_sha" ]]; then
+    echo "tag $tag points at HEAD"
+    return 0
+  fi
+  if [[ "${TIFFANY_RELEASE_ALLOW_TAG_REWRITE:-}" == "1" ]]; then
+    echo "tag $tag currently points at $tag_sha; continuing because TIFFANY_RELEASE_ALLOW_TAG_REWRITE=1"
+    return 0
+  fi
+  echo "Tag $tag already exists but does not point at HEAD." >&2
+  echo "tag:  $tag_sha" >&2
+  echo "HEAD: $head_sha" >&2
+  echo "Cut a new tag, or set TIFFANY_RELEASE_ALLOW_TAG_REWRITE=1 only after the user explicitly chooses to force-move $tag." >&2
+  exit 1
+}
+
 if [[ -n "$release_tag" ]]; then
   step "release tag version"
   package_version="$(root_package_version)"
@@ -184,6 +208,7 @@ if [[ -n "$release_tag" ]]; then
     exit 1
   fi
   echo "tag $release_tag matches package version $package_version"
+  check_existing_release_tag_points_at_head "$release_tag"
   check_release_version_sync "$package_version"
   check_changelog_release_entry "$package_version"
 

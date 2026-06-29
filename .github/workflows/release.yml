@@ -36,7 +36,7 @@ jobs:
             tiffany-ui/codex-rs -> ../../target
 
       - name: Run preflight
-        run: ./scripts/tiffany-release-preflight --quick --tag "${GITHUB_REF_NAME}"
+        run: ./scripts/tiffany-release-preflight --full --tag "${GITHUB_REF_NAME}"
 
   build:
     name: Build ${{ matrix.target }}

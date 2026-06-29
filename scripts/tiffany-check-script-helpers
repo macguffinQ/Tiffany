@@ -76,6 +76,7 @@ fi
 
 echo "tap name helper checks passed"
 
+bash -n "$repo_dir/scripts/lib/tiffany-binaries.sh"
 bash -n "$repo_dir/scripts/tiffany-check-legacy-tui-shims"
 bash -n "$repo_dir/scripts/tiffany-slim-smoke"
 bash -n "$repo_dir/scripts/tiffany-codex-tui-lib-test"
@@ -85,6 +86,39 @@ bash -n "$repo_dir/scripts/tiffany-real-runtime-check"
 "$repo_dir/scripts/tiffany-build-time-gate" --self-test >/dev/null
 "$repo_dir/scripts/tiffany-real-runtime-check" --self-test >/dev/null
 echo "script smoke helper checks passed"
+
+runtime_alias_bin_dir="$tmp_root/runtime-alias-bin"
+runtime_alias_tmp="$tmp_root/runtime-alias-tmp"
+mkdir -p "$runtime_alias_bin_dir" "$runtime_alias_tmp"
+runtime_alias_suffix="$(
+  bash -c "source '$repo_dir/scripts/lib/tiffany-binaries.sh'; tiffany_exe_suffix"
+)"
+runtime_tiffany_bin="$runtime_alias_bin_dir/tiffany-loop$runtime_alias_suffix"
+cat >"$runtime_tiffany_bin" <<'EOF'
+#!/usr/bin/env bash
+printf 'fake tiffany-loop invoked as %s\n' "$(basename "$0")"
+EOF
+chmod +x "$runtime_tiffany_bin"
+
+runtime_alias="$(
+  bash -c "source '$repo_dir/scripts/lib/tiffany-binaries.sh'; tiffany_runtime_alias_from_bin_dir '$runtime_alias_bin_dir' '$runtime_alias_tmp'"
+)"
+if [[ "$(basename "$runtime_alias")" != "orchestrator$runtime_alias_suffix" ]]; then
+  echo "expected tiffany runtime alias to be named orchestrator$runtime_alias_suffix" >&2
+  echo "actual: $runtime_alias" >&2
+  exit 1
+fi
+if [[ ! -x "$runtime_alias" ]]; then
+  echo "expected tiffany runtime alias to be executable: $runtime_alias" >&2
+  exit 1
+fi
+runtime_alias_output="$("$runtime_alias")"
+if ! grep -F -- "fake tiffany-loop invoked as orchestrator" <<<"$runtime_alias_output" >/dev/null; then
+  echo "expected tiffany-loop-only alias to preserve orchestrator argv[0]" >&2
+  echo "$runtime_alias_output" >&2
+  exit 1
+fi
+echo "runtime alias helper checks passed"
 
 tiffany_dev_help="$("$repo_dir/scripts/tiffany-dev" --help)"
 for expected in \

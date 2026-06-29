@@ -793,6 +793,10 @@ assert_same_adapter_state() {
     echo "second: $second_native" >&2
     return 1
   fi
+
+  echo "✓ $role restart continuity: Tiffany thread and native session reused"
+  echo "  Tiffany thread: $second_thread"
+  echo "  native session: $second_native"
 }
 
 write_adapter_native_history_file() {
@@ -908,11 +912,15 @@ inspect_adapter_jobs() {
   local config="$2"
   local workdir="$3"
   local role="$4"
-  local expected="$5"
+  local state="$5"
+  local expected="$6"
+  local tiffany_thread="${state%%|*}"
+  local native_session="${state#*|}"
   run_adapter_command "jobs-$role" "$role" "$orchestrator_bin" "$config" "$workdir" jobs --limit 10
   assert_log_contains "jobs-$role" "role $role"
   assert_log_contains "jobs-$role" "session "
   assert_log_contains "jobs-$role" "native "
+  assert_log_contains "jobs-$role" "$native_session"
   assert_log_contains "jobs-$role" "result "
   assert_log_contains "jobs-$role" "$expected"
 
@@ -926,6 +934,7 @@ inspect_adapter_jobs() {
     thread export "$role" --out "$export_path"
   assert_log_contains "thread-export-$role" "Worker thread session exported"
   assert_log_contains "thread-export-$role" "role: $role"
+  assert_log_contains "thread-export-$role" "Tiffany thread: $tiffany_thread"
   assert_log_contains "thread-export-$role" "target: $export_path"
   if [[ ! -s "$export_path" ]]; then
     echo "thread export did not write a handoff file: $export_path" >&2
@@ -1011,7 +1020,7 @@ if [[ "$mode" == "adapter-run" ]]; then
       "$expected"
     second_state="$(capture_adapter_role_state "$orchestrator_bin" "$config" "$workdir" worker-cc after-second)"
     assert_same_adapter_state worker-cc "$first_state" "$second_state"
-    inspect_adapter_jobs "$orchestrator_bin" "$config" "$workdir" worker-cc "$expected"
+    inspect_adapter_jobs "$orchestrator_bin" "$config" "$workdir" worker-cc "$second_state" "$expected"
     inspect_adapter_native_history "$orchestrator_bin" "$config" "$workdir" worker-cc "$second_state" "$expected"
     ran=1
   fi
@@ -1036,7 +1045,7 @@ if [[ "$mode" == "adapter-run" ]]; then
       "$expected"
     second_state="$(capture_adapter_role_state "$orchestrator_bin" "$config" "$workdir" worker-codex after-second)"
     assert_same_adapter_state worker-codex "$first_state" "$second_state"
-    inspect_adapter_jobs "$orchestrator_bin" "$config" "$workdir" worker-codex "$expected"
+    inspect_adapter_jobs "$orchestrator_bin" "$config" "$workdir" worker-codex "$second_state" "$expected"
     inspect_adapter_native_history "$orchestrator_bin" "$config" "$workdir" worker-codex "$second_state" "$expected"
     ran=1
   fi
@@ -1061,7 +1070,7 @@ if [[ "$mode" == "adapter-run" ]]; then
       "$expected"
     second_state="$(capture_adapter_role_state "$orchestrator_bin" "$config" "$workdir" worker-gemini after-second)"
     assert_same_adapter_state worker-gemini "$first_state" "$second_state"
-    inspect_adapter_jobs "$orchestrator_bin" "$config" "$workdir" worker-gemini "$expected"
+    inspect_adapter_jobs "$orchestrator_bin" "$config" "$workdir" worker-gemini "$second_state" "$expected"
     inspect_adapter_native_history "$orchestrator_bin" "$config" "$workdir" worker-gemini "$second_state" "$expected"
     ran=1
   fi
