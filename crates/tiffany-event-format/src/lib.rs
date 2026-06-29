@@ -991,7 +991,11 @@ pub fn clean_visible_agent_output(content: &str, max: usize) -> Option<String> {
             if trimmed == "thinking" || trimmed.ends_with(" system: system") {
                 return None;
             }
-            Some(strip_runtime_output_prefix(line))
+            let stripped = strip_runtime_output_prefix(line);
+            if is_low_value_tool_notice_line(strip_secondary_output_prefix(stripped.trim())) {
+                return None;
+            }
+            Some(stripped)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -1409,6 +1413,10 @@ pub fn normalized_output_key(content: &str, max: usize) -> Option<String> {
 
 pub fn normalize_output_summary(display: &str) -> String {
     let trimmed = display.trim();
+    let secondary_lines = strip_secondary_output_prefix_lines(trimmed);
+    if secondary_lines != trimmed {
+        return humanize_user_visible_text(&secondary_lines, usize::MAX);
+    }
     let secondary = strip_secondary_output_prefix(trimmed);
     if secondary != trimmed {
         return humanize_user_visible_text(secondary, usize::MAX);
@@ -1418,10 +1426,35 @@ pub fn normalize_output_summary(display: &str) -> String {
     };
 
     match runtime_output_kind_from_prefix(prefix) {
-        Some(_) => {
-            humanize_user_visible_text(strip_secondary_output_prefix(body.trim()), usize::MAX)
-        }
+        Some(_) => humanize_user_visible_text(
+            &strip_secondary_output_prefix_lines(strip_secondary_output_prefix(body.trim())),
+            usize::MAX,
+        ),
         None => humanize_user_visible_text(trimmed, usize::MAX),
+    }
+}
+
+fn strip_secondary_output_prefix_lines(body: &str) -> String {
+    let mut changed = false;
+    let lines = body
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let prefix_len = line.len().saturating_sub(trimmed.len());
+            let stripped = strip_secondary_output_prefix(trimmed);
+            if stripped != trimmed {
+                changed = true;
+                format!("{}{}", &line[..prefix_len], stripped)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if changed {
+        lines.join("\n")
+    } else {
+        body.to_string()
     }
 }
 
@@ -1502,28 +1535,209 @@ fn normalize_agent_status_display(display: &str) -> String {
     if let Some(label) = codex_exec_compatibility_label(&lower) {
         return label.to_string();
     }
+    if let Some(label) = python_externally_managed_label(&lower) {
+        return label.to_string();
+    }
+    if let Some(label) = provider_model_error_label(trimmed, &lower) {
+        return label;
+    }
     if let Some(label) = process_exit_status_label(trimmed) {
         return label;
     }
-    if let Some(path) = lower
-        .starts_with("file created successfully at:")
-        .then(|| trimmed["file created successfully at:".len()..].trim())
-        .filter(|path| !path.is_empty())
-    {
-        return format!("file created: {path}");
-    }
-    if lower.starts_with("the file ") && lower.contains(" has been updated successfully") {
-        if let Some(path) = trimmed
-            .strip_prefix("The file ")
-            .or_else(|| trimmed.strip_prefix("the file "))
-            .and_then(|rest| rest.split(" has been updated successfully").next())
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-        {
-            return format!("file updated: {path}");
-        }
+    if let Some(label) = file_operation_status_label(trimmed) {
+        return label;
     }
     trimmed.to_string()
+}
+
+fn file_operation_status_label(text: &str) -> Option<String> {
+    let trimmed = strip_claude_context_note(text.trim());
+    let lower = trimmed.to_ascii_lowercase();
+
+    for (prefix, label) in [
+        ("file created successfully at:", "file created"),
+        ("file updated successfully at:", "file updated"),
+        ("file modified successfully at:", "file updated"),
+        ("file deleted successfully at:", "file deleted"),
+        ("file removed successfully at:", "file deleted"),
+        ("file created successfully:", "file created"),
+        ("file updated successfully:", "file updated"),
+        ("file modified successfully:", "file updated"),
+        ("file deleted successfully:", "file deleted"),
+        ("file removed successfully:", "file deleted"),
+        ("created file:", "file created"),
+        ("updated file:", "file updated"),
+        ("modified file:", "file updated"),
+        ("deleted file:", "file deleted"),
+        ("removed file:", "file deleted"),
+    ] {
+        if lower.starts_with(prefix) {
+            let path = trimmed[prefix.len()..].trim();
+            if !path.is_empty() {
+                return Some(format!("{label}: {path}"));
+            }
+        }
+    }
+
+    let rest = trimmed
+        .strip_prefix("The file ")
+        .or_else(|| trimmed.strip_prefix("the file "))?;
+    let lower_rest = rest.to_ascii_lowercase();
+    for (needle, label) in [
+        (" has been created successfully", "file created"),
+        (" has been updated successfully", "file updated"),
+        (" has been modified successfully", "file updated"),
+        (" has been deleted successfully", "file deleted"),
+        (" has been removed successfully", "file deleted"),
+    ] {
+        if let Some(idx) = lower_rest.find(needle) {
+            let path = rest[..idx].trim();
+            if !path.is_empty() {
+                return Some(format!("{label}: {path}"));
+            }
+        }
+    }
+    None
+}
+
+fn is_low_value_tool_notice_line(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    lower.starts_with("[notice] a new release of pip is available")
+        || lower.starts_with("notice: a new release of pip is available")
+        || (lower.starts_with("[notice] to update, run:")
+            && lower.contains("pip")
+            && lower.contains("install")
+            && lower.contains("--upgrade"))
+        || lower == "npm notice"
+        || (lower.starts_with("npm notice new ")
+            && lower.contains("version")
+            && lower.contains("available"))
+        || lower.starts_with("npm notice changelog:")
+        || lower.starts_with("npm notice to update")
+}
+
+fn python_externally_managed_label(lower: &str) -> Option<&'static str> {
+    if lower.contains("externally-managed-environment")
+        || lower.contains("externally managed environment")
+        || lower.contains("this environment is externally managed")
+        || lower.contains("peps.python.org/pep-0668")
+    {
+        return Some(concat!(
+            "Python package install blocked by externally managed environment ",
+            "(PEP 668); create a virtual environment and install dependencies there"
+        ));
+    }
+    None
+}
+
+fn provider_model_error_label(text: &str, lower: &str) -> Option<String> {
+    if !contains_any(
+        lower,
+        &[
+            "model not found",
+            "unknown model",
+            "invalid model",
+            "model does not exist",
+            "模型不存在",
+            "模型代码",
+            "1211",
+        ],
+    ) {
+        return None;
+    }
+
+    let code = first_bracketed_segment(text, |segment| {
+        segment.chars().all(|ch| ch.is_ascii_digit())
+    });
+    let message = first_bracketed_segment(text, |segment| {
+        let lower = segment.to_ascii_lowercase();
+        !segment.chars().all(|ch| ch.is_ascii_digit())
+            && contains_any(
+                &lower,
+                &[
+                    "model",
+                    "模型",
+                    "模型代码",
+                    "not found",
+                    "does not exist",
+                    "invalid",
+                    "unknown",
+                ],
+            )
+    })
+    .or_else(|| {
+        text.split_once("API Error:")
+            .map(|(_, rest)| rest)
+            .or_else(|| text.split_once("error:").map(|(_, rest)| rest))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.trim_matches(['[', ']']).to_string())
+    })
+    .or_else(|| trailing_model_message_after_code(text));
+
+    if code.is_none()
+        && message.is_none()
+        && lower.starts_with("model not found")
+        && text.trim().len() > "model not found".len()
+    {
+        return Some(text.trim().to_string());
+    }
+
+    let mut label = "model not found".to_string();
+    if let Some(message) = message {
+        let message = message.trim();
+        if !message.is_empty() && !message.eq_ignore_ascii_case("model not found") {
+            label.push_str(": ");
+            label.push_str(message);
+        }
+    }
+    if let Some(code) = code {
+        if !label.contains(&format!("({code})")) {
+            label.push_str(&format!(" ({code})"));
+        }
+    }
+    Some(label)
+}
+
+fn trailing_model_message_after_code(text: &str) -> Option<String> {
+    let end = text.find(']')?;
+    let trailing = text[end + 1..].trim().trim_matches(['[', ']']).trim();
+    if trailing.is_empty() {
+        return None;
+    }
+    let lower = trailing.to_ascii_lowercase();
+    contains_any(
+        &lower,
+        &[
+            "model",
+            "模型",
+            "模型代码",
+            "not found",
+            "does not exist",
+            "invalid",
+            "unknown",
+        ],
+    )
+    .then(|| trailing.to_string())
+}
+
+fn first_bracketed_segment<F>(text: &str, predicate: F) -> Option<String>
+where
+    F: Fn(&str) -> bool,
+{
+    let mut rest = text;
+    while let Some(start) = rest.find('[') {
+        let after_start = &rest[start + 1..];
+        let Some(end) = after_start.find(']') else {
+            return None;
+        };
+        let segment = after_start[..end].trim();
+        if !segment.is_empty() && predicate(segment) {
+            return Some(segment.to_string());
+        }
+        rest = &after_start[end + 1..];
+    }
+    None
 }
 
 fn process_exit_status_label(text: &str) -> Option<String> {
@@ -1617,6 +1831,13 @@ pub fn humanize_jsonish(content: &str, max: usize) -> String {
         return humanize_user_visible_text(&summary, max);
     }
     humanize_user_visible_text(trimmed, max)
+}
+
+pub fn humanize_agent_status_text(content: &str, max: usize) -> String {
+    let display = humanize_jsonish(content, max);
+    let normalized = normalize_output_summary(&display);
+    let status = normalize_agent_status_display(&normalized);
+    sanitize_text(&status, max)
 }
 
 pub fn is_low_value_output(text: &str) -> bool {
@@ -1845,8 +2066,11 @@ fn classify_failure_category(lower: &str) -> Option<AgentFailureCategory> {
             "malformed",
             "invalid json",
             "expected value",
+            "no json found",
             "no sub_tasks",
+            "no_sub_tasks",
             "returned no sub_tasks",
+            "returned no_sub_tasks",
         ],
     ) {
         return Some(AgentFailureCategory::Parse);
@@ -1892,7 +2116,8 @@ pub fn control_fallback_display(
     max: usize,
 ) -> ControlFallbackDisplay {
     let role_label = control_role_label(role);
-    let reason = humanize_jsonish(reason, max);
+    let reason = normalize_control_reason_display(reason);
+    let reason = humanize_jsonish(&reason, max);
     let reason = normalize_control_reason_display(&reason);
     let reason = reason.trim();
     let message = message.trim();
@@ -1920,6 +2145,27 @@ fn normalize_control_reason_display(reason: &str) -> String {
     let lower = trimmed.to_ascii_lowercase();
     if let Some(label) = codex_exec_compatibility_label(&lower) {
         return label.to_string();
+    }
+    if lower.contains("no sub_tasks")
+        || lower.contains("no_sub_tasks")
+        || lower.contains("no sub tasks")
+        || lower.contains("returned no sub_tasks")
+        || lower.contains("returned no_sub_tasks")
+        || lower.contains("returned no sub tasks")
+        || lower.contains("no worker runs")
+        || lower.contains("no usable worker runs")
+    {
+        return "planner returned no worker runs".to_string();
+    }
+    if lower.contains("no json found")
+        || lower.contains("expected value at line")
+        || lower.contains("invalid json")
+        || lower.contains("malformed json")
+    {
+        return "returned plain text".to_string();
+    }
+    if lower.contains("parse failed") || lower.contains("parse error") {
+        return "could not parse structured response".to_string();
     }
     trimmed.to_string()
 }
@@ -2619,11 +2865,13 @@ fn codex_exec_command_summary(value: &Value) -> Option<String> {
 fn codex_exec_result_summary(value: &Value) -> Option<String> {
     let object = value.as_object()?;
     let mut parts = Vec::new();
-    if let Some(exit_code) = object
+    let exit_code = object
         .get("exit_code")
         .or_else(|| object.get("exitCode"))
-        .and_then(value_to_text)
-    {
+        .and_then(value_to_text);
+    let failed = exit_code.as_deref().is_some_and(|code| code.trim() != "0");
+    let succeeded = exit_code.as_deref().is_some_and(|code| code.trim() == "0");
+    if let Some(exit_code) = exit_code.filter(|_| failed) {
         parts.push(format!("exit {exit_code}"));
     }
     if let Some(stdout) = object.get("stdout").and_then(output_body_text) {
@@ -2632,12 +2880,14 @@ fn codex_exec_result_summary(value: &Value) -> Option<String> {
     if let Some(stderr) = object.get("stderr").and_then(output_body_text) {
         parts.push(stderr);
     }
-    let detail = if parts.is_empty() {
+    let detail = if parts.is_empty() && succeeded {
+        None
+    } else if parts.is_empty() {
         output_body_text(value)
     } else {
         Some(parts.join("\n"))
     };
-    Some(format_tool_result_summary(Some("shell"), detail, false))
+    Some(format_tool_result_summary(None, detail, failed))
 }
 
 fn patch_summary_text(value: &Value) -> Option<String> {
@@ -3828,10 +4078,45 @@ mod tests {
         assert_eq!(classify_json_line(&result), "tool_result");
         let summary = summarize_cli_stream_line(&result, 500).unwrap();
         assert_eq!(summary.kind, "tool_result");
-        assert!(summary.text.contains("tool shell result"));
-        assert!(summary.text.contains("exit 0"));
+        assert_eq!(summary.text, "tool result: ok");
+        assert!(!summary.text.contains("exit 0"));
         assert!(summary.text.contains("ok"));
         assert!(!summary.text.contains('{'));
+
+        let success_no_output = serde_json::json!({
+            "timestamp": "2026-06-26T00:00:02Z",
+            "item": {
+                "event_msg": {
+                    "exec_command_end": {
+                        "exit_code": 0,
+                        "stdout": "",
+                        "stderr": ""
+                    }
+                }
+            }
+        })
+        .to_string();
+        let summary = summarize_cli_stream_line(&success_no_output, 500).unwrap();
+        assert_eq!(summary.kind, "tool_result");
+        assert_eq!(summary.text, "tool result");
+        assert!(visible_agent_output(&success_no_output, 500).is_none());
+
+        let failure = serde_json::json!({
+            "timestamp": "2026-06-26T00:00:02Z",
+            "item": {
+                "event_msg": {
+                    "exec_command_end": {
+                        "exit_code": 2,
+                        "stderr": "tests failed"
+                    }
+                }
+            }
+        })
+        .to_string();
+        let summary = summarize_cli_stream_line(&failure, 500).unwrap();
+        assert_eq!(summary.kind, "tool_result");
+        assert!(summary.text.contains("tool error: exit 2"));
+        assert!(summary.text.contains("tests failed"));
 
         let diff = serde_json::json!({
             "timestamp": "2026-06-26T00:00:03Z",
@@ -4197,6 +4482,23 @@ mod tests {
                 .expect("user tool result");
         assert_eq!(user_tool_result.kind, VisibleAgentOutputKind::ToolResult);
         assert_eq!(user_tool_result.display, "tests passed");
+
+        let repeated_tool_result = visible_agent_output(
+            "claude-code user: tool result: first line\nclaude-code user: tool result: second line\ntool result: third line",
+            500,
+        )
+        .expect("repeated tool result");
+        assert_eq!(
+            repeated_tool_result.kind,
+            VisibleAgentOutputKind::ToolResult
+        );
+        assert_eq!(
+            repeated_tool_result.display,
+            "first line\nsecond line\nthird line"
+        );
+        assert!(!repeated_tool_result.display.contains("tool result:"));
+        assert!(!repeated_tool_result.display.contains("claude-code user:"));
+
         assert!(visible_agent_output("claude-code user: tool result", 500).is_none());
 
         let recovery = visible_agent_output(
@@ -4380,11 +4682,58 @@ mod tests {
         assert_eq!(updated.kind, VisibleAgentOutputKind::FileUpdate);
         assert_eq!(updated.display, "file updated: /tmp/requirements.txt");
 
+        let updated_at = visible_agent_output(
+            "claude-code user: tool result: File updated successfully at: /tmp/README.md (file state is current in your context -- no need to Read it back)",
+            500,
+        )
+        .expect("file updated at path");
+        assert_eq!(updated_at.kind, VisibleAgentOutputKind::FileUpdate);
+        assert_eq!(updated_at.display, "file updated: /tmp/README.md");
+
+        let deleted_at = visible_agent_output(
+            "claude-code user: tool result: File deleted successfully at: /tmp/old.py (file state is current in your context -- no need to Read it back)",
+            500,
+        )
+        .expect("file deleted at path");
+        assert_eq!(deleted_at.kind, VisibleAgentOutputKind::FileUpdate);
+        assert_eq!(deleted_at.display, "file deleted: /tmp/old.py");
+
+        let deleted_file = visible_agent_output(
+            "claude-code user: tool result: The file /tmp/stale.py has been deleted successfully. (file state is current in your context -- no need to Read it back)",
+            500,
+        )
+        .expect("file deleted");
+        assert_eq!(deleted_file.kind, VisibleAgentOutputKind::FileUpdate);
+        assert_eq!(deleted_file.display, "file deleted: /tmp/stale.py");
+
         assert!(visible_agent_output(
             "claude-code user: tool result: (Bash completed with no output)",
             500
         )
         .is_none());
+
+        assert!(visible_agent_output(
+            "claude-code user: tool result: [notice] A new release of pip is available: 26.1.1 -> 26.1.2\n[notice] To update, run: /tmp/.venv/bin/python -m pip install --upgrade pip",
+            500
+        )
+        .is_none());
+
+        assert!(visible_agent_output(
+            "claude-code user: tool result: npm notice\nnpm notice New major version of npm available! 10.8.2 -> 11.0.0\nnpm notice Changelog: https://github.com/npm/cli/releases/tag/v11.0.0\nnpm notice To update run: npm install -g npm@11.0.0\nnpm notice",
+            500
+        )
+        .is_none());
+
+        let pep_668 = visible_agent_output(
+            "claude-code user: tool result: error: externally-managed-environment\n\n× This environment is externally managed\n\nRead more about this behavior here: <https://peps.python.org/pep-0668/>",
+            500,
+        )
+        .expect("pep 668 summary");
+        assert_eq!(pep_668.kind, VisibleAgentOutputKind::ToolResult);
+        assert_eq!(
+            pep_668.display,
+            "Python package install blocked by externally managed environment (PEP 668); create a virtual environment and install dependencies there"
+        );
     }
 
     #[test]
@@ -4665,7 +5014,7 @@ mod tests {
         );
         assert_eq!(
             replan.summary,
-            "single-worker fallback · replanner returned no usable worker runs; using original task"
+            "single-worker fallback · planner returned no worker runs"
         );
 
         let critic = control_fallback_display(
@@ -4680,6 +5029,30 @@ mod tests {
             "critique unavailable; continuing with current plan · Codex CLI compatibility issue: upgrade Codex CLI or use a runtime that supports `codex exec --cd`"
         );
         assert!(!critic.summary.contains("unsupported"));
+
+        let plain_text = control_fallback_display(
+            "reviewer",
+            "review unavailable; continuing with completed output",
+            "no JSON found in CLI response (first 500 chars)",
+            200,
+        );
+        assert_eq!(
+            plain_text.summary,
+            "review unavailable; continuing with completed output · returned plain text"
+        );
+        assert!(!plain_text.summary.contains("JSON"));
+
+        let parse = control_fallback_display(
+            "planner",
+            "planning unavailable; using original task",
+            "planner returned no_sub_tasks (parse failed)",
+            200,
+        );
+        assert_eq!(
+            parse.summary,
+            "single-worker fallback · planner returned no worker runs"
+        );
+        assert!(!parse.summary.contains("parse failed"));
     }
 
     #[test]
@@ -4692,6 +5065,24 @@ mod tests {
             200
         )
         .contains("模型不存在"));
+        let visible = visible_agent_output(
+            "codex stderr: API Error: 400 [1211][模型不存在，请检查模型代码。]",
+            500,
+        )
+        .expect("visible model error");
+        assert_eq!(visible.kind, VisibleAgentOutputKind::Stderr);
+        assert_eq!(
+            visible.display,
+            "model not found: 模型不存在，请检查模型代码。 (1211)"
+        );
+        let bare_visible = visible_agent_output("worker-codex stderr: [1211] 模型不存在", 500)
+            .expect("visible bare model error");
+        assert_eq!(bare_visible.display, "model not found: 模型不存在 (1211)");
+        assert_eq!(
+            normalize_agent_status_display("model not found with several words"),
+            "model not found with several words"
+        );
+        assert!(!visible.display.contains("API Error"));
         assert!(!is_low_value_output(
             "claude-code stderr: authentication failed: invalid api key"
         ));

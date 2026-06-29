@@ -4189,9 +4189,11 @@ fn concise_jobs_success(
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     if is_jobs_retry_command(command_args)
-        && let Some(mut lines) = jobs_retry_handoff_lines(&stdout)
+        && let Some(handoff) = parse_jobs_retry_handoff(&stdout)
     {
-        if let Some(summary) = jobs_summary_lines(&stdout) {
+        let mut lines = jobs_retry_handoff_lines_from_handoff(&handoff);
+        if let Some(summary) = jobs_summary_lines_excluding(&stdout, Some(handoff.job_id.as_str()))
+        {
             lines.extend(summary);
         }
         return Some(lines);
@@ -4231,10 +4233,7 @@ fn is_jobs_recover_command(command_args: &[String]) -> bool {
 }
 
 fn jobs_cancel_result_lines(text: &str) -> Option<Vec<Line<'static>>> {
-    let header = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())?;
+    let header = text.lines().map(str::trim).find(|line| !line.is_empty())?;
     let rest = header.strip_prefix("Job ")?;
     let (job_id, detail) = rest.split_once(' ')?;
     let message = if detail == "cancelled" {
@@ -4305,8 +4304,9 @@ fn jobs_recover_result_lines(text: &str) -> Option<Vec<Line<'static>>> {
     Some(out)
 }
 
-fn jobs_retry_handoff_lines(text: &str) -> Option<Vec<Line<'static>>> {
-    let handoff = parse_jobs_retry_handoff(text)?;
+fn jobs_retry_handoff_lines_from_handoff(
+    handoff: &tiffany_bridge::JobsRetryHandoff,
+) -> Vec<Line<'static>> {
     let mut lines = vec![status_line(
         "✓",
         TIFFANY_BLUE,
@@ -4324,7 +4324,7 @@ fn jobs_retry_handoff_lines(text: &str) -> Option<Vec<Line<'static>>> {
     lines.push(session_card_detail_line("task", &handoff.prompt));
     lines.push(session_card_detail_line(
         "state",
-        "restored from persisted job; runs as the next Tiffany prompt",
+        "restored from persisted job; stays in the bottom queue until it runs",
     ));
     lines.push(session_card_detail_line(
         "prompt",
@@ -4347,7 +4347,7 @@ fn jobs_retry_handoff_lines(text: &str) -> Option<Vec<Line<'static>>> {
         "/queue show",
         "review queued prompts before running",
     ));
-    Some(lines)
+    lines
 }
 
 fn concise_continue_success(
@@ -4733,13 +4733,23 @@ fn thread_export_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
 }
 
 fn jobs_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
+    jobs_summary_lines_excluding(text, None)
+}
+
+fn jobs_summary_lines_excluding(
+    text: &str,
+    exclude_job_id: Option<&str>,
+) -> Option<Vec<Line<'static>>> {
     if !text.lines().any(|line| line.trim() == "Jobs") {
         return None;
     }
 
-    let jobs = parse_job_summaries(text);
+    let mut jobs = parse_job_summaries(text);
+    if let Some(exclude_job_id) = exclude_job_id {
+        jobs.retain(|job| job.id != exclude_job_id);
+    }
     if jobs.is_empty() {
-        if text.contains("no persisted jobs yet") {
+        if exclude_job_id.is_none() && text.contains("no persisted jobs yet") {
             return Some(vec![
                 status_line("✓", TIFFANY_BLUE, "jobs", "queue is empty"),
                 body_line("queued and background runs will appear here", true),
@@ -4749,12 +4759,19 @@ fn jobs_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
         return None;
     }
 
-    let (active, shown) = parse_jobs_header_counts(text).unwrap_or_else(|| {
+    let (active, shown) = if exclude_job_id.is_some() {
         (
             jobs.iter().filter(|job| job.status == "running").count(),
             jobs.len(),
         )
-    });
+    } else {
+        parse_jobs_header_counts(text).unwrap_or_else(|| {
+            (
+                jobs.iter().filter(|job| job.status == "running").count(),
+                jobs.len(),
+            )
+        })
+    };
     let mut lines = vec![status_line(
         "✓",
         TIFFANY_BLUE,
@@ -4790,6 +4807,9 @@ fn job_summary_card_lines(job: &JobSummary) -> Vec<Line<'static>> {
         lines.push(session_card_detail_line("task", prompt));
     }
     lines.push(session_card_detail_line("state", &job_state_summary(job)));
+    if let Some(next) = job_next_step_label(job) {
+        lines.push(session_card_detail_line("next", &next));
+    }
     if let Some(task) = job.task.as_deref().and_then(nonempty_trimmed) {
         lines.push(session_card_detail_line("task id", task));
     }
@@ -4824,6 +4844,40 @@ fn job_summary_card_lines(job: &JobSummary) -> Vec<Line<'static>> {
     lines
 }
 
+fn job_next_step_label(job: &JobSummary) -> Option<String> {
+    match job.status.as_str() {
+        "queued" => Some("/queue run · start queued work when ready".to_string()),
+        "running" => {
+            Some("/process 200 · inspect live worker events; /jobs recover if stale".to_string())
+        }
+        "failed" => Some(format!(
+            "/jobs retry {} · restore retry prompt into the current TUI queue",
+            job.id
+        )),
+        "done" if job.native.as_deref().and_then(nonempty_trimmed).is_some() => {
+            let role = job
+                .role
+                .as_deref()
+                .and_then(nonempty_trimmed)
+                .unwrap_or("<role>");
+            Some(format!(
+                "/continue open {role} · resume the native CLI session"
+            ))
+        }
+        "done" => job
+            .session
+            .as_deref()
+            .and_then(nonempty_trimmed)
+            .map(|session| format!("/history session {session} · inspect saved result"))
+            .or_else(|| Some("/jobs show <id> · inspect saved result".to_string())),
+        "cancelled" | "removed" | "skipped" => Some(format!(
+            "/jobs retry {} · queue this job again if still needed",
+            job.id
+        )),
+        _ => None,
+    }
+}
+
 fn job_status_style(status: &str) -> (&'static str, Color, &'static str) {
     match status {
         "done" => ("✓", TIFFANY_BLUE, "done"),
@@ -4850,7 +4904,7 @@ fn provider_summary_lines(text: &str) -> Option<Vec<Line<'static>>> {
         &format!("{} configured", providers.len()),
     )];
     for provider in providers.iter().take(8) {
-        lines.push(provider_summary_line(provider));
+        lines.extend(provider_summary_card_lines(provider));
     }
     if providers.len() > 8 {
         lines.push(body_line(&format!("… {} more", providers.len() - 8), true));
@@ -4954,8 +5008,34 @@ fn role_option_card_lines(option: &RoleOptionSummary) -> Vec<Line<'static>> {
     lines
 }
 
-fn provider_summary_line(provider: &ProviderSummary) -> Line<'static> {
+fn provider_summary_card_lines(provider: &ProviderSummary) -> Vec<Line<'static>> {
     let (symbol, color, auth, health) = provider_auth_status(provider);
+    let endpoint = provider_endpoint_label(provider);
+    let mut lines = vec![session_card_header_line(
+        symbol,
+        color,
+        &provider.name,
+        &provider.kind,
+        &endpoint,
+        health,
+    )];
+    lines.push(session_card_detail_line("auth", auth));
+    lines.push(session_card_detail_line("endpoint", &endpoint));
+    lines.push(session_card_detail_line(
+        "models",
+        &provider_models_label(provider),
+    ));
+    lines.push(session_card_detail_line(
+        "roles",
+        &provider_roles_label(provider),
+    ));
+    lines.push(session_card_actions_line(&provider_action_commands(
+        provider, health,
+    )));
+    lines
+}
+
+fn provider_endpoint_label(provider: &ProviderSummary) -> String {
     let endpoint = if provider.endpoint.trim().is_empty()
         || provider.endpoint == "-"
         || provider.endpoint == "—"
@@ -4964,35 +5044,52 @@ fn provider_summary_line(provider: &ProviderSummary) -> Line<'static> {
     } else {
         truncate_text(&provider.endpoint, 42)
     };
-    Line::from(
-        vec![
-            Span::styled(
-                format!("  {symbol} "),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("{:<13}", provider.name),
-                Style::default().fg(TIFFANY_SOFT),
-            ),
-            Span::styled(
-                format!("{:<11}", provider.kind),
-                Style::default().fg(Color::Gray),
-            ),
-            Span::styled(format!("{auth:<10}"), Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{:<44}", endpoint),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(health, Style::default().fg(color)),
-        ]
-        .into_iter()
-        .chain(provider_assoc_spans(provider))
-        .collect::<Vec<_>>(),
-    )
+    endpoint
+}
+
+fn provider_models_label(provider: &ProviderSummary) -> String {
+    provider
+        .models
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .filter(|value| *value != "-")
+        .map(str::to_string)
+        .unwrap_or_else(|| "none configured".to_string())
+}
+
+fn provider_roles_label(provider: &ProviderSummary) -> String {
+    provider
+        .roles
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .filter(|value| *value != "-")
+        .map(str::to_string)
+        .unwrap_or_else(|| "none bound".to_string())
+}
+
+fn provider_action_commands(provider: &ProviderSummary, health: &str) -> Vec<String> {
+    let mut actions = Vec::new();
+    if health == "needs auth" || provider.kind == "missing" {
+        actions.push(format!("/provider edit {}", provider.name));
+    } else {
+        actions.push(format!("/provider {}", provider.name));
+    }
+    if provider
+        .roles
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .filter(|value| *value != "-")
+        .is_some()
+    {
+        actions.push("/roles".to_string());
+    } else {
+        actions.push("/role".to_string());
+    }
+    actions.push("/doctor".to_string());
+    actions
 }
 
 fn role_summary_card_lines(role: &RoleSummary) -> Vec<Line<'static>> {
-    let target = role_target_label(role);
     let teams = if role.teams { "teams on" } else { "teams off" };
     let (symbol, color, health) = role_health_status(role);
     let model = role
@@ -5009,8 +5106,15 @@ fn role_summary_card_lines(role: &RoleSummary) -> Vec<Line<'static>> {
         model,
         &health,
     )];
-    lines.push(session_card_detail_line("model id", &role.model));
-    lines.push(session_card_detail_line("api model", &target));
+    lines.push(session_card_detail_line(
+        "provider",
+        &role_provider_label(role),
+    ));
+    lines.push(session_card_detail_line(
+        "api model",
+        &role_api_model_label(role),
+    ));
+    lines.push(session_card_detail_line("internal id", &role.model));
     lines.push(session_card_detail_line("mode", teams));
     if is_worker_role_name(&role.name) {
         lines.push(session_card_detail_line(
@@ -5018,22 +5122,52 @@ fn role_summary_card_lines(role: &RoleSummary) -> Vec<Line<'static>> {
             &role_session_label(role),
         ));
     }
-    let actions = if is_worker_role_name(&role.name) {
-        vec![
-            format!("/role {}", role.name),
-            format!("/thread {}", role.name),
-            format!("/continue open {}", role.name),
-            format!("/history role {}", role.name),
-        ]
-    } else {
-        vec![
-            format!("/role {}", role.name),
-            "/roles profile".to_string(),
-            "/doctor".to_string(),
-        ]
-    };
-    lines.push(session_card_actions_line(&actions));
+    lines.push(session_card_actions_line(&role_action_commands(
+        role,
+        health.as_str(),
+    )));
     lines
+}
+
+fn role_action_commands(role: &RoleSummary, health: &str) -> Vec<String> {
+    let mut actions = vec![format!("/role {}", role.name)];
+    if role_provider_is_unbound(role) || role_api_model_is_unbound(role) {
+        actions.push("/provider".to_string());
+        actions.push("/doctor".to_string());
+        return actions;
+    }
+
+    if is_worker_role_name(&role.name) {
+        actions.push(format!("/thread {}", role.name));
+        actions.push(format!("/continue open {}", role.name));
+        actions.push(format!("/history role {}", role.name));
+    } else {
+        actions.push("/roles profile".to_string());
+        actions.push("/doctor".to_string());
+    }
+    if health != "ready" && !actions.iter().any(|action| action == "/doctor") {
+        actions.push("/doctor".to_string());
+    }
+    actions
+}
+
+fn role_provider_label(role: &RoleSummary) -> String {
+    role.provider
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .filter(|value| *value != "-")
+        .map(str::to_string)
+        .unwrap_or_else(|| "unbound".to_string())
+}
+
+fn role_api_model_label(role: &RoleSummary) -> String {
+    role.api_model
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .filter(|value| *value != "-")
+        .or(role.display_model.as_deref().and_then(nonempty_trimmed))
+        .unwrap_or(&role.model)
+        .to_string()
 }
 
 fn role_session_label(role: &RoleSummary) -> String {
@@ -5193,27 +5327,38 @@ fn session_card_actions_line(actions: &[String]) -> Line<'static> {
     ])
 }
 
-fn role_target_label(role: &RoleSummary) -> String {
-    match (
-        role.provider.as_deref().filter(|value| !value.is_empty()),
-        role.api_model.as_deref().filter(|value| !value.is_empty()),
-    ) {
-        (Some(provider), Some(api_model)) if api_model != "-" => format!("{provider}/{api_model}"),
-        (Some(provider), _) if provider != "-" => provider.to_string(),
-        (_, Some(api_model)) if api_model != "-" => api_model.to_string(),
-        _ => role
-            .display_model
-            .as_deref()
-            .unwrap_or(&role.model)
-            .to_string(),
-    }
-}
-
 fn role_health_status(role: &RoleSummary) -> (&'static str, Color, String) {
     match role.health.as_deref().map(str::trim) {
-        Some("ready") | None | Some("") => ("✓", TIFFANY_BLUE, "ready".to_string()),
-        Some(health) => ("⚠", Color::Yellow, health.to_string()),
+        Some(health) if !health.is_empty() && health != "ready" => {
+            return ("⚠", Color::Yellow, health.to_string());
+        }
+        _ => {}
     }
+
+    if role_provider_is_unbound(role) {
+        return ("⚠", Color::Yellow, "provider unbound".to_string());
+    }
+    if role_api_model_is_unbound(role) {
+        return ("⚠", Color::Yellow, "api model unbound".to_string());
+    }
+    ("✓", TIFFANY_BLUE, "ready".to_string())
+}
+
+fn role_provider_is_unbound(role: &RoleSummary) -> bool {
+    role.provider
+        .as_deref()
+        .and_then(nonempty_trimmed)
+        .filter(|value| *value != "-")
+        .is_none()
+}
+
+fn role_api_model_is_unbound(role: &RoleSummary) -> bool {
+    role.api_model
+        .as_deref()
+        .or(role.display_model.as_deref())
+        .and_then(nonempty_trimmed)
+        .filter(|value| *value != "-")
+        .is_none()
 }
 
 fn provider_auth_status(
@@ -5239,33 +5384,6 @@ fn provider_auth_status(
         return ("⚠", Color::Yellow, "no key", "needs auth");
     }
     ("✓", TIFFANY_BLUE, "auth set", "ready")
-}
-
-fn provider_assoc_spans(provider: &ProviderSummary) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    if let Some(models) = provider
-        .models
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "-")
-    {
-        spans.push(Span::styled(
-            format!("  models {}", truncate_text(models, 22)),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
-    if let Some(roles) = provider
-        .roles
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "-")
-    {
-        spans.push(Span::styled(
-            format!("  roles {}", truncate_text(roles, 22)),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
-    spans
 }
 
 fn spawn_error_lines(
@@ -5429,7 +5547,7 @@ fn diagnostic_detail_lines(text: &str, max_lines: usize) -> Vec<String> {
         .lines()
         .map(str::trim_end)
         .filter(|line| !line.trim().is_empty())
-        .map(|line| event_format::humanize_user_visible_text(line, CONTROL_SUMMARY_MAX_CHARS))
+        .map(diagnostic_detail_line)
         .collect::<Vec<_>>();
     if lines.len() <= max_lines {
         return lines;
@@ -5453,6 +5571,28 @@ fn diagnostic_detail_lines(text: &str, max_lines: usize) -> Vec<String> {
             .rev(),
     );
     out
+}
+
+fn diagnostic_detail_line(line: &str) -> String {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("no json found")
+        || lower.contains("expected value at line")
+        || lower.contains("invalid json")
+        || lower.contains("malformed json")
+        || lower.contains("no sub_tasks")
+        || lower.contains("no_sub_tasks")
+        || lower.contains("no sub tasks")
+        || lower.contains("returned no sub_tasks")
+        || lower.contains("returned no_sub_tasks")
+        || lower.contains("returned no sub tasks")
+        || lower.contains("no worker runs")
+        || lower.contains("no usable worker runs")
+        || lower.contains("parse failed")
+        || lower.contains("parse error")
+    {
+        return control_reason_label(line);
+    }
+    event_format::humanize_user_visible_text(line, CONTROL_SUMMARY_MAX_CHARS)
 }
 
 fn read_orchestrator_tui_log_tail(max_lines: usize) -> Option<String> {
@@ -5946,13 +6086,12 @@ fn run_status_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
     } else {
         format!("{} turn(s)", launch.context_turn_count)
     };
-    let flow = launch_route(launch).display_label();
     Line::from(vec![
         status_chip("status", "running", TIFFANY_BLUE),
         Span::raw("  "),
         status_chip("route", route_label(&launch.extra_args), TIFFANY_BLUE),
         Span::raw("  "),
-        status_chip("flow", flow, TIFFANY_SOFT),
+        status_chip("flow", "runtime", TIFFANY_SOFT),
         Span::raw("  "),
         status_chip("context", context, TIFFANY_SOFT),
         Span::raw("  "),
@@ -5985,77 +6124,43 @@ fn workflow_line() -> Line<'static> {
 }
 
 fn run_workflow_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
-    match launch_route(launch) {
-        event_format::OrchestrationRoute::DirectAnswer => direct_workflow_line("direct"),
-        event_format::OrchestrationRoute::SingleWorker => direct_workflow_line("single"),
-        event_format::OrchestrationRoute::FullPipeline => full_workflow_line(),
-    }
+    let _ = launch;
+    Line::from(vec![
+        Span::styled(
+            "flow",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled("runtime", Style::default().fg(TIFFANY_SOFT)),
+        Span::styled("  →  ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled("direct / single / full", Style::default().fg(TIFFANY_SOFT)),
+        Span::styled("  →  ", Style::default().fg(TIFFANY_DARK)),
+        Span::styled(
+            "actual route events",
+            Style::default()
+                .fg(TIFFANY_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
 }
 
 fn run_reason_line(launch: &TiffanyOrchestratorLaunch) -> Line<'static> {
+    let _ = launch;
     Line::from(vec![
         Span::styled(
-            "reason",
+            "route",
             Style::default()
                 .fg(TIFFANY_BLUE)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(
-            launch_route(launch).reason(),
+            "waiting for orchestrator runtime classification",
             Style::default().fg(TIFFANY_SOFT),
         ),
     ])
-}
-
-fn full_workflow_line() -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            "flow",
-            Style::default()
-                .fg(TIFFANY_BLUE)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled("planner", Style::default().fg(TIFFANY_SOFT)),
-        Span::styled(" → ", Style::default().fg(TIFFANY_DARK)),
-        Span::styled("critic", Style::default().fg(TIFFANY_SOFT)),
-        Span::styled(" → ", Style::default().fg(TIFFANY_DARK)),
-        Span::styled(
-            "worker",
-            Style::default()
-                .fg(TIFFANY_BLUE)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" → ", Style::default().fg(TIFFANY_DARK)),
-        Span::styled("reviewer", Style::default().fg(TIFFANY_SOFT)),
-    ])
-}
-
-fn direct_workflow_line(label: &'static str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            "flow",
-            Style::default()
-                .fg(TIFFANY_BLUE)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(label, Style::default().fg(TIFFANY_SOFT)),
-        Span::styled(" → ", Style::default().fg(TIFFANY_DARK)),
-        Span::styled(
-            "worker",
-            Style::default()
-                .fg(TIFFANY_BLUE)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" → ", Style::default().fg(TIFFANY_DARK)),
-        Span::styled("answer", Style::default().fg(TIFFANY_SOFT)),
-    ])
-}
-
-fn launch_route(launch: &TiffanyOrchestratorLaunch) -> event_format::OrchestrationRoute {
-    event_format::classify_orchestration_route(&launch.prompt)
 }
 
 fn command_hint_line(label: &'static str, commands: &[&'static str]) -> Line<'static> {
@@ -6273,7 +6378,7 @@ fn worker_output_event_lines(event: &TiffanyProgressEvent, content: &str) -> Vec
         .content
         .as_deref()
         .and_then(|content| worker_visible_output_kind_for_event(event, content));
-    let (symbol, color) = worker_output_kind_marker(kind);
+    let (symbol, color) = worker_output_kind_marker_for_content(kind, content);
     let mut lines = vec![Line::from(vec![
         Span::styled(
             symbol,
@@ -6329,18 +6434,24 @@ fn worker_tool_pair_event_lines(
 ) -> Vec<Line<'static>> {
     let label = output_label(result_event);
     let title = worker_tool_pair_title(&label, call_content);
+    let result_failed = tool_result_content_failed(result_content);
+    let (title_symbol, title_color) = if result_failed {
+        ("✗", Color::Red)
+    } else {
+        ("↳", TIFFANY_BLUE)
+    };
     let mut lines = vec![Line::from(vec![
         Span::styled(
-            "↳",
+            title_symbol,
             Style::default()
-                .fg(TIFFANY_BLUE)
+                .fg(title_color)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::styled(
             title,
             Style::default()
-                .fg(TIFFANY_BLUE)
+                .fg(title_color)
                 .add_modifier(Modifier::BOLD),
         ),
     ])];
@@ -6416,6 +6527,32 @@ fn worker_output_body_lines(
         .enumerate()
         .map(|(idx, line)| output_body_line_for_kind(line, kind, idx == 0))
         .collect()
+}
+
+fn tool_result_content_failed(content: &str) -> bool {
+    content
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .is_some_and(tool_result_line_failed)
+}
+
+fn tool_result_line_failed(line: &str) -> bool {
+    let lower = line.trim_start().to_ascii_lowercase();
+    if lower.starts_with("tool error") {
+        return true;
+    }
+    let Some(rest) = lower.strip_prefix("exit ") else {
+        return false;
+    };
+    rest.split_whitespace()
+        .next()
+        .and_then(|code| {
+            code.trim_matches(|ch: char| !ch.is_ascii_digit())
+                .parse::<i32>()
+                .ok()
+        })
+        .is_some_and(|code| code != 0)
 }
 
 fn worker_visible_process_lines(
@@ -6504,6 +6641,18 @@ fn worker_output_kind_marker(
         Some(event_format::VisibleAgentOutputKind::Final) => ("✓", TIFFANY_BLUE),
         Some(event_format::VisibleAgentOutputKind::Normal) | None => ("│", TIFFANY_DARK),
     }
+}
+
+fn worker_output_kind_marker_for_content(
+    kind: Option<event_format::VisibleAgentOutputKind>,
+    content: &str,
+) -> (&'static str, Color) {
+    if kind == Some(event_format::VisibleAgentOutputKind::ToolResult)
+        && tool_result_content_failed(content)
+    {
+        return ("✗", Color::Red);
+    }
+    worker_output_kind_marker(kind)
 }
 
 fn emit_lines(app_event_tx: &AppEventSender, lines: Vec<Line<'static>>) {
@@ -7088,10 +7237,18 @@ fn control_reason_label(reason: &str) -> String {
         || lower.contains("malformed json")
     {
         "returned plain text"
+    } else if lower.contains("no sub_tasks")
+        || lower.contains("no_sub_tasks")
+        || lower.contains("no sub tasks")
+        || lower.contains("returned no sub_tasks")
+        || lower.contains("returned no_sub_tasks")
+        || lower.contains("returned no sub tasks")
+        || lower.contains("no worker runs")
+        || lower.contains("no usable worker runs")
+    {
+        "planner returned no worker runs"
     } else if lower.contains("parse failed") || lower.contains("parse error") {
         "could not parse structured response"
-    } else if lower.contains("no sub_tasks") || lower.contains("returned no sub_tasks") {
-        "planner returned no worker runs"
     } else {
         reason
     };
@@ -7725,13 +7882,16 @@ fn output_body_line_for_kind(
         Some(event_format::VisibleAgentOutputKind::ToolCall) => {
             process_body_line(line, "↳", TIFFANY_BLUE, Style::default(), first_line)
         }
-        Some(event_format::VisibleAgentOutputKind::ToolResult) => process_body_line(
-            line,
-            "✓",
-            Color::Gray,
-            Style::default().fg(Color::Gray),
-            first_line,
-        ),
+        Some(event_format::VisibleAgentOutputKind::ToolResult) => {
+            let failed = tool_result_line_failed(line);
+            process_body_line(
+                line,
+                if failed { "✗" } else { "✓" },
+                if failed { Color::Red } else { Color::Gray },
+                Style::default().fg(if failed { Color::Red } else { Color::Gray }),
+                first_line,
+            )
+        }
         Some(event_format::VisibleAgentOutputKind::Patch)
         | Some(event_format::VisibleAgentOutputKind::FileUpdate) => process_body_line(
             line,
@@ -9946,7 +10106,7 @@ mod tests {
     fn jobs_retry_handoff_renders_current_tui_queue_card() {
         let output = std::process::Output {
             status: test_exit_status(0),
-            stdout: "Job abcd1234 prepared for TUI retry\n  status: queued in current TUI input queue\n  prompt: first line second line\n  retry prompt: first line\\nsecond line\n\nNext:\n  /queue run\n  /jobs\n\nJobs\n  active: 0  shown: 1\n\n✗ abcd1234 failed    first line second line\n  timing created 5m ago  flow direct-answer  role worker-cc  error model not found\n"
+            stdout: "Job abcd1234 prepared for TUI retry\n  status: queued in current TUI input queue\n  prompt: first line second line\n  retry prompt: first line\\nsecond line\n\nNext:\n  /queue run\n  /jobs\n\nJobs\n  active: 1  shown: 2\n\n✗ abcd1234 failed    first line second line\n  timing created 5m ago  flow direct-answer  role worker-cc  error model not found\n● live9999 running   active follow-up\n  timing created 1m ago · running 10s  flow single-worker  role worker-codex  session live-session  thread live-thread\n"
                 .as_bytes()
                 .to_vec(),
             stderr: Vec::new(),
@@ -9963,14 +10123,20 @@ mod tests {
         assert!(text.contains("↳ current TUI queue"));
         assert!(text.contains("retry"));
         assert!(text.contains("task  first line second line"));
-        assert!(text.contains("state  restored from persisted job"));
+        assert!(text.contains(
+            "state  restored from persisted job; stays in the bottom queue until it runs"
+        ));
         assert!(text.contains("prompt  2 line(s) restored into the current input queue"));
         assert!(text.contains("actions /queue run"));
         assert!(text.contains("/queue show"));
         assert!(text.contains("/jobs show abcd1234"));
         assert!(text.contains("next  /queue run  start the restored retry prompt now"));
-        assert!(text.contains("✗ worker-cc"));
-        assert!(text.contains("error  model not found"));
+        assert!(text.contains("✓ jobs  1 active · 1 shown"));
+        assert!(text.contains("● worker-codex"));
+        assert!(text.contains("state  active worker run"));
+        assert!(!text.contains("✗ worker-cc"));
+        assert!(!text.contains("error  model not found"));
+        assert!(!text.contains("state  needs attention; retry with /jobs retry abcd1234"));
         assert!(!text.contains("retry prompt:"));
     }
 
@@ -10093,113 +10259,43 @@ mod tests {
     }
 
     #[test]
-    fn run_intro_uses_direct_flow_for_chat_requests() {
-        let launch = test_launch("你好", "你好", 0);
-        let lines = [
-            run_status_line(&launch),
-            run_reason_line(&launch),
-            run_workflow_line(&launch),
+    fn run_intro_defers_route_to_runtime_events() {
+        let cases = [
+            test_launch("你好", "你好", 0),
+            test_launch(
+                "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle",
+                "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle",
+                0,
+            ),
+            test_launch("写参赛 agent", "写参赛 agent", 0),
+            test_launch("优化 TUI 显示", "优化 TUI 显示", 2),
+            test_launch(
+                "继续",
+                "Previous turns:\nuser:\n优化 tiffany-loop 编排流程\n\nassistant result:\n已完成。\n\n---\nCurrent user request:\n继续",
+                1,
+            ),
         ];
-        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-        assert!(text.contains("flow direct"));
-        assert!(text.contains("reason  simple conversational or explanatory request"));
-        assert!(text.contains("flow  direct → worker → answer"));
-        assert!(!text.contains("planner → critic"));
-    }
+        for launch in cases {
+            let lines = [
+                run_status_line(&launch),
+                run_reason_line(&launch),
+                run_workflow_line(&launch),
+            ];
+            let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-    #[test]
-    fn run_intro_uses_single_flow_for_link_inspection() {
-        let launch = test_launch(
-            "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle",
-            "https://www.kaggle.com/competitions/pokemon-tcg-ai-battle",
-            0,
-        );
-        let lines = [
-            run_status_line(&launch),
-            run_reason_line(&launch),
-            run_workflow_line(&launch),
-        ];
-        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
-
-        assert!(text.contains("flow single"));
-        assert!(
-            text.contains("reason  atomic request; planner, critic, and reviewer are not needed")
-        );
-        assert!(text.contains("flow  single → worker → answer"));
-        assert!(!text.contains("planner → critic"));
-    }
-
-    #[test]
-    fn run_intro_uses_single_flow_for_atomic_worker_requests() {
-        let launch = test_launch("写参赛 agent", "写参赛 agent", 0);
-        let lines = [
-            run_status_line(&launch),
-            run_reason_line(&launch),
-            run_workflow_line(&launch),
-        ];
-        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
-
-        assert!(text.contains("flow single"));
-        assert!(
-            text.contains("reason  atomic request; planner, critic, and reviewer are not needed")
-        );
-        assert!(text.contains("flow  single → worker → answer"));
-        assert!(!text.contains("planner → critic"));
-    }
-
-    #[test]
-    fn run_intro_uses_single_flow_for_external_atomic_followups() {
-        let prompt = "Previous turns:\nuser:\n优化 tiffany-loop 编排流程\n\nassistant result:\n已完成。\n\n---\nCurrent user request:\n写参赛 agent";
-        let launch = test_launch(prompt, prompt, 1);
-        let lines = [
-            run_status_line(&launch),
-            run_reason_line(&launch),
-            run_workflow_line(&launch),
-        ];
-        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
-
-        assert!(text.contains("flow single"));
-        assert!(
-            text.contains("reason  atomic request; planner, critic, and reviewer are not needed")
-        );
-        assert!(text.contains("context 1 turn(s)"));
-        assert!(text.contains("flow  single → worker → answer"));
-    }
-
-    #[test]
-    fn run_intro_uses_full_flow_for_engineering_requests() {
-        let launch = test_launch("优化 TUI 显示", "优化 TUI 显示", 2);
-        let lines = [
-            run_status_line(&launch),
-            run_reason_line(&launch),
-            run_workflow_line(&launch),
-        ];
-        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
-
-        assert!(text.contains("flow full"));
-        assert!(text.contains(
-            "reason  project or implementation work; planner, critic, worker, and reviewer will run"
-        ));
-        assert!(text.contains("context 2 turn(s)"));
-        assert!(text.contains("flow  planner → critic → worker → reviewer"));
-    }
-
-    #[test]
-    fn run_intro_uses_contextual_route_for_continuations() {
-        let prompt = "Previous turns:\nuser:\n优化 tiffany-loop 编排流程\n\nassistant result:\n已完成。\n\n---\nCurrent user request:\n继续";
-        let launch = test_launch("继续", prompt, 1);
-        let lines = [
-            run_status_line(&launch),
-            run_reason_line(&launch),
-            run_workflow_line(&launch),
-        ];
-        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
-
-        assert!(text.contains("flow full"));
-        assert!(text.contains("context 1 turn(s)"));
-        assert!(text.contains("flow  planner → critic → worker → reviewer"));
-        assert!(!text.contains("flow single"));
+            assert!(text.contains("flow runtime"));
+            assert!(text.contains("route  waiting for orchestrator runtime classification"));
+            assert!(
+                text.contains("flow  runtime  →  direct / single / full  →  actual route events")
+            );
+            assert!(!text.contains("reason  simple conversational"));
+            assert!(!text.contains("reason  atomic request"));
+            assert!(!text.contains("reason  project or implementation work"));
+            assert!(!text.contains("flow  direct → worker → answer"));
+            assert!(!text.contains("flow  single → worker → answer"));
+            assert!(!text.contains("flow  planner → critic"));
+        }
     }
 
     #[test]
@@ -10407,8 +10503,13 @@ mod tests {
         assert!(text.contains("needs auth"));
         assert!(text.contains("● ollama"));
         assert!(text.contains("local"));
-        assert!(text.contains("models sonnet,opus"));
-        assert!(text.contains("roles planner,reviewer"));
+        assert!(text.contains("models  sonnet,opus"));
+        assert!(text.contains("roles  planner,reviewer"));
+        assert!(text.contains("actions /provider anthropic"));
+        assert!(text.contains("actions /provider edit google"));
+        assert!(text.contains("actions /provider ollama"));
+        assert!(text.contains("/roles"));
+        assert!(text.contains("/role"));
         assert!(text.contains("next  /provider edit <name>  fix auth or endpoint"));
         assert!(text.contains("next  /role  bind roles to provider models"));
         assert!(text.contains("next  /doctor  verify provider/model/runtime wiring"));
@@ -10474,10 +10575,11 @@ mod tests {
         assert!(text.contains("anthropic"));
         assert!(text.contains("auth set"));
         assert!(text.contains("https://api.anthropic.com"));
-        assert!(text.contains("models sonnet"));
-        assert!(text.contains("roles planner"));
+        assert!(text.contains("models  sonnet"));
+        assert!(text.contains("roles  planner"));
         assert!(text.contains("⚠ google"));
         assert!(text.contains("no key"));
+        assert!(text.contains("actions /provider edit google"));
         assert!(!text.contains("Models (1)"));
     }
 
@@ -10511,8 +10613,10 @@ mod tests {
         assert!(text.contains("local"));
         assert!(text.contains("⚠ minimax"));
         assert!(text.contains("missing"));
-        assert!(text.contains("models gpt4o"));
-        assert!(text.contains("roles worker-codex"));
+        assert!(text.contains("models  gpt4o"));
+        assert!(text.contains("roles  worker-codex"));
+        assert!(text.contains("actions /provider edit openai"));
+        assert!(text.contains("actions /provider edit minimax"));
         assert!(!text.contains("Provider registry"));
         assert!(!text.contains("Actions:"));
         assert!(!text.contains("Health:"));
@@ -10541,8 +10645,11 @@ mod tests {
         assert!(text.contains("openai"));
         assert!(text.contains("no key"));
         assert!(text.contains("https://api.openai.com/v1"));
-        assert!(text.contains("models gpt4o"));
-        assert!(text.contains("roles worker-codex"));
+        assert!(text.contains("models  gpt4o"));
+        assert!(text.contains("roles  worker-codex"));
+        assert!(text.contains("actions /provider edit openai"));
+        assert!(text.contains("/roles"));
+        assert!(text.contains("/doctor"));
         assert!(!text.contains("Model bindings:"));
         assert!(!text.contains("Actions:"));
     }
@@ -10564,9 +10671,10 @@ mod tests {
         assert!(text.contains("✓ roles  3 registered"));
         assert!(text.contains("critic"));
         assert!(text.contains("MiniMax-M3"));
-        assert!(text.contains("model id  minimax-m3-codex"));
-        assert!(text.contains("api model  minimax/MiniMax-M3"));
-        assert!(text.contains("minimax/MiniMax-M3"));
+        assert!(text.contains("provider  minimax"));
+        assert!(text.contains("api model  MiniMax-M3"));
+        assert!(text.contains("internal id  minimax-m3-codex"));
+        assert!(!text.contains("model id"));
         assert!(text.contains("worker-cc"));
         assert!(text.contains("teams on"));
         assert!(text.contains("session  pending; first worker run creates native session"));
@@ -10701,6 +10809,7 @@ mod tests {
         assert!(text.contains("f2dabd3b"));
         assert!(text.contains("task  Improve the fake runtime smoke flow again"));
         assert!(text.contains("state  complete; native session is available for handoff"));
+        assert!(text.contains("next  /continue open worker-cc · resume the native CLI session"));
         assert!(text.contains("task id  99999999"));
         assert!(text.contains("timing  created 10m ago · updated 2m ago · duration 6m"));
         assert!(text.contains("session  abcdef12"));
@@ -10711,8 +10820,12 @@ mod tests {
         assert!(text.contains("✗ worker-codex"));
         assert!(text.contains("direct-answer"));
         assert!(text.contains("state  needs attention; retry with /jobs retry abcd1234"));
+        assert!(text.contains(
+            "next  /jobs retry abcd1234 · restore retry prompt into the current TUI queue"
+        ));
         assert!(text.contains("timing  created 5m ago · updated 1m ago · duration 2m"));
-        assert!(text.contains("error  [1211][模型不存在] invalid model"));
+        assert!(text.contains("error  model not found: 模型不存在 (1211)"));
+        assert!(!text.contains("[1211][模型不存在] invalid model"));
         assert!(text.contains("fix  check model binding with /role worker-codex"));
         assert!(text.contains("/jobs retry abcd1234"));
         assert!(text.contains("actions /continue open worker-cc"));
@@ -10757,6 +10870,7 @@ mod tests {
 
         assert!(text.contains("↳ worker-cc"));
         assert!(text.contains("state  waiting in the Tiffany queue"));
+        assert!(text.contains("next  /queue run · start queued work when ready"));
         assert!(text.contains("timing  created 4m ago"));
         assert!(text.contains("actions /jobs show 11111111"));
         assert!(text.contains("/jobs show 11111111"));
@@ -10765,6 +10879,11 @@ mod tests {
         assert!(text.contains("/queue show"));
         assert!(text.contains("● worker-codex"));
         assert!(text.contains("state  active worker run"));
+        assert!(
+            text.contains(
+                "next  /process 200 · inspect live worker events; /jobs recover if stale"
+            )
+        );
         assert!(text.contains("timing  created 3m ago · running 42s"));
         assert!(text.contains("thread  2222abcd"));
         assert!(text.contains("actions /jobs show 22222222"));
@@ -10776,6 +10895,7 @@ mod tests {
         assert!(text.contains("/history thread 2222abcd"));
         assert!(text.contains("✓ worker"));
         assert!(text.contains("state  complete; result captured in Tiffany history"));
+        assert!(text.contains("next  /history session 12345678 · inspect saved result"));
         assert!(text.contains("timing  created 2m ago · duration 12s"));
         assert!(text.contains("/history session 12345678"));
         assert!(!text.contains("/continue open worker"));
@@ -10798,8 +10918,15 @@ mod tests {
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
         assert!(text.contains("actions /jobs retry abcd1234"));
+        assert!(text.contains(
+            "next  /jobs retry abcd1234 · restore retry prompt into the current TUI queue"
+        ));
         assert!(text.contains("actions /continue open worker-gemini"));
+        assert!(
+            text.contains("next  /continue open worker-gemini · resume the native CLI session")
+        );
         assert!(text.contains("actions /history session session-3333"));
+        assert!(text.contains("next  /history session session-3333 · inspect saved result"));
         assert!(!text.contains("orchestrator jobs retry"));
         assert!(!text.contains("open tiffany-loop and run"));
         assert!(!text.contains("orchestrator sessions show"));
@@ -10865,7 +10992,17 @@ mod tests {
         assert!(text.contains("✓ role  worker-codex configured"));
         assert!(text.contains("worker-codex"));
         assert!(text.contains("MiniMax-M3"));
+        assert!(text.contains("provider  unbound"));
+        assert!(text.contains("api model  MiniMax-M3"));
+        assert!(text.contains("internal id  minimax-m3-codex"));
+        assert!(!text.contains("model id"));
         assert!(text.contains("teams off"));
+        assert!(text.contains("provider unbound"));
+        assert!(text.contains("actions /role worker-codex"));
+        assert!(text.contains("/provider"));
+        assert!(text.contains("/doctor"));
+        assert!(!text.contains("/continue open worker-codex"));
+        assert!(!text.contains("/history role worker-codex"));
     }
 
     #[test]
@@ -12422,10 +12559,17 @@ mod tests {
             ..unavailable
         };
         let text = line_text(&waterfall_status_line(&malformed));
-        assert_eq!(text, "⚠ review  unavailable · 12345678 · returned plain text");
+        assert_eq!(
+            text,
+            "⚠ review  unavailable · 12345678 · returned plain text"
+        );
         assert!(!text.contains("JSON"));
         assert!(!text.contains("CLI response"));
         assert!(!text.contains("expected value"));
+        assert_eq!(
+            control_reason_label("planner returned no_sub_tasks (parse failed)"),
+            "planner returned no worker runs"
+        );
     }
 
     #[test]
@@ -12632,6 +12776,27 @@ mod tests {
         let result_lines = output_event_lines(&result, &result_visible);
         assert_eq!(line_text(&result_lines[1]), "  ✓ ok");
         assert_eq!(line_text(&result_lines[2]), "  │ all passed");
+
+        let repeated_result = TiffanyProgressEvent {
+            event_kind: Some("tool_result".to_string()),
+            content: Some(
+                "claude-code user: tool result: first line\nclaude-code user: tool result: second line\ntool result: third line"
+                    .to_string(),
+            ),
+            ..base.clone()
+        };
+        let repeated_visible = visible_content(&repeated_result).expect("repeated result visible");
+        let repeated_lines = output_event_lines(&repeated_result, &repeated_visible);
+        let repeated_text = repeated_lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(line_text(&repeated_lines[1]), "  ✓ first line");
+        assert_eq!(line_text(&repeated_lines[2]), "  │ second line");
+        assert_eq!(line_text(&repeated_lines[3]), "  │ third line");
+        assert!(!repeated_text.contains("claude-code user:"));
+        assert!(!repeated_text.contains("tool result:"));
 
         let question_visible = visible_content(&question).expect("question visible");
         let question_lines = output_event_lines(&question, &question_visible);
@@ -12853,6 +13018,8 @@ mod tests {
         let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
         assert!(text.contains("worker stderr · worker-codex · minimax/MiniMax-M3 · 12345678"));
+        assert!(text.contains("model not found: 模型不存在 (1211)"));
+        assert!(!text.contains("API Error"));
         assert!(text.contains("fix model not found"));
         assert!(text.contains("Check the role's provider/model in /role"));
     }
@@ -13393,7 +13560,7 @@ mod tests {
 
         assert_eq!(
             visible_content(&event).as_deref(),
-            Some("[1211] 模型不存在")
+            Some("model not found: 模型不存在 (1211)")
         );
     }
 
@@ -13568,6 +13735,37 @@ mod tests {
     }
 
     #[test]
+    fn worker_waterfall_marks_failed_tool_results_without_success_checkmark() {
+        let base = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            ..worker_output_event("worker output", "claude-code", "placeholder")
+        };
+        let call = TiffanyProgressEvent {
+            event_kind: Some("tool_use".to_string()),
+            content: Some("claude-code tool_use: tool Bash: cargo test --all".to_string()),
+            ..base.clone()
+        };
+        let result = TiffanyProgressEvent {
+            event_kind: Some("tool_result".to_string()),
+            content: Some("claude-code tool_result: tool error: exit 2\ntests failed".to_string()),
+            ..base
+        };
+
+        let call_visible = visible_content(&call).expect("tool call visible");
+        let result_visible = visible_content(&result).expect("failed result visible");
+        let lines = worker_tool_pair_event_lines(&call, &call_visible, &result, &result_visible);
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            rendered.first().map(String::as_str),
+            Some("✗ worker Bash · worker-cc · claude-code · 12345678")
+        );
+        assert!(rendered.iter().any(|line| line == "  ✗ exit 2"));
+        assert!(rendered.iter().any(|line| line == "  │ tests failed"));
+        assert!(!rendered.iter().any(|line| line == "  ✓ exit 2"));
+    }
+
+    #[test]
     fn bridge_state_dedupes_visible_duplicate_answer_events() {
         let assistant = TiffanyProgressEvent {
             worker_role: Some("worker-cc".to_string()),
@@ -13706,7 +13904,11 @@ mod tests {
             .join("\n");
 
         assert_eq!(cells.len(), 1);
-        assert_eq!(text.matches("waiting for user input: Answer questions?").count(), 1);
+        assert_eq!(
+            text.matches("waiting for user input: Answer questions?")
+                .count(),
+            1
+        );
         assert!(text.contains("next  /continue open worker-cc"));
         assert!(!text.contains("tool error: Answer questions?"));
         assert!(!text.contains("AskUserQuestion"));
@@ -13986,6 +14188,32 @@ mod tests {
         assert_eq!(created_visible, "file created: /tmp/agent.py");
         assert!(output_title(&created).starts_with("worker file update"));
 
+        let updated = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            event_kind: Some("tool_result".to_string()),
+            ..worker_output_event(
+                "worker output",
+                "claude-code",
+                "claude-code user: tool result: File updated successfully at: /tmp/README.md (file state is current in your context -- no need to Read it back)",
+            )
+        };
+        let updated_visible = visible_content(&updated).expect("file update visible");
+        assert_eq!(updated_visible, "file updated: /tmp/README.md");
+        assert!(output_title(&updated).starts_with("worker file update"));
+
+        let deleted = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            event_kind: Some("tool_result".to_string()),
+            ..worker_output_event(
+                "worker output",
+                "claude-code",
+                "claude-code user: tool result: The file /tmp/old.py has been deleted successfully. (file state is current in your context -- no need to Read it back)",
+            )
+        };
+        let deleted_visible = visible_content(&deleted).expect("file delete visible");
+        assert_eq!(deleted_visible, "file deleted: /tmp/old.py");
+        assert!(output_title(&deleted).starts_with("worker file update"));
+
         let no_output = TiffanyProgressEvent {
             worker_role: Some("worker-cc".to_string()),
             event_kind: Some("tool_result".to_string()),
@@ -13996,6 +14224,47 @@ mod tests {
             )
         };
         assert_eq!(visible_content(&no_output), None);
+
+        let pip_notice = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            event_kind: Some("tool_result".to_string()),
+            ..worker_output_event(
+                "worker output",
+                "claude-code",
+                "claude-code user: tool result: [notice] A new release of pip is available: 26.1.1 -> 26.1.2\n[notice] To update, run: /tmp/.venv/bin/python -m pip install --upgrade pip",
+            )
+        };
+        assert_eq!(visible_content(&pip_notice), None);
+
+        let npm_notice = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            event_kind: Some("tool_result".to_string()),
+            ..worker_output_event(
+                "worker output",
+                "claude-code",
+                "claude-code user: tool result: npm notice\nnpm notice New major version of npm available! 10.8.2 -> 11.0.0\nnpm notice Changelog: https://github.com/npm/cli/releases/tag/v11.0.0\nnpm notice To update run: npm install -g npm@11.0.0\nnpm notice",
+            )
+        };
+        assert_eq!(visible_content(&npm_notice), None);
+
+        let pep_668 = TiffanyProgressEvent {
+            worker_role: Some("worker-cc".to_string()),
+            event_kind: Some("tool_result".to_string()),
+            ..worker_output_event(
+                "worker output",
+                "claude-code",
+                "claude-code user: tool result: error: externally-managed-environment\n\n× This environment is externally managed\n\nRead more about this behavior here: <https://peps.python.org/pep-0668/>",
+            )
+        };
+        let pep_visible = visible_content(&pep_668).expect("pep 668 visible");
+        let pep_text = output_event_lines(&pep_668, &pep_visible)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(pep_text.contains("Python package install blocked by externally managed environment (PEP 668); create a virtual environment and install dependencies there"));
+        assert!(!pep_text.contains("externally-managed-environment"));
+        assert!(!pep_text.contains("peps.python.org"));
 
         let failed_exit = TiffanyProgressEvent {
             worker_role: Some("worker-cc".to_string()),
@@ -14052,7 +14321,7 @@ mod tests {
                 })
                 .to_string(),
                 "worker tool result",
-                "tool shell result: exit 0\nok",
+                "ok",
             ),
             (
                 "worker-codex",
@@ -14090,6 +14359,70 @@ mod tests {
             assert!(!visible.contains('{'));
             assert!(!visible.contains("event_msg"));
         }
+
+        let success_no_output = serde_json::json!({
+            "timestamp": "2026-06-26T00:00:04Z",
+            "item": {
+                "event_msg": {
+                    "exec_command_end": {
+                        "exit_code": 0,
+                        "stdout": "",
+                        "stderr": ""
+                    }
+                }
+            }
+        })
+        .to_string();
+        let summary = event_format::summarize_cli_stream_line(&success_no_output, 8_000)
+            .expect("success summary");
+        let event = TiffanyProgressEvent {
+            worker_role: Some("worker-codex".to_string()),
+            event_kind: Some("tool_result".to_string()),
+            ..worker_output_event(
+                "worker output",
+                "codex",
+                &format!("codex tool_result: {}", summary.text),
+            )
+        };
+        assert_eq!(visible_content(&event), None);
+
+        let failure = serde_json::json!({
+            "timestamp": "2026-06-26T00:00:05Z",
+            "item": {
+                "event_msg": {
+                    "exec_command_end": {
+                        "exit_code": 2,
+                        "stderr": "tests failed"
+                    }
+                }
+            }
+        })
+        .to_string();
+        let summary =
+            event_format::summarize_cli_stream_line(&failure, 8_000).expect("failure summary");
+        let event = TiffanyProgressEvent {
+            worker_role: Some("worker-codex".to_string()),
+            event_kind: Some("tool_result".to_string()),
+            ..worker_output_event(
+                "worker output",
+                "codex",
+                &format!("codex tool_result: {}", summary.text),
+            )
+        };
+        let visible = visible_content(&event).expect("failure visible");
+        assert!(visible.contains("exit 2"));
+        assert!(visible.contains("tests failed"));
+        let lines = output_event_lines(&event, &visible)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>();
+        assert!(
+            lines
+                .first()
+                .is_some_and(|line| line.starts_with("✗ worker tool result"))
+        );
+        assert!(lines.iter().any(|line| line == "  ✗ exit 2"));
+        assert!(!lines.iter().any(|line| line == "  ✓ exit 2"));
     }
 
     #[test]
@@ -14853,6 +15186,26 @@ mod tests {
         assert!(text.contains("planner returned no worker runs"));
         assert!(!text.contains("sub_tasks"));
         assert!(!text.contains("ignored malformed event"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failure_lines_humanize_plain_text_parse_failures() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let lines = orchestrator_failure_lines(
+            ExitStatus::from_raw(1 << 8),
+            "reviewing task abc: no JSON found in CLI response (first 500 chars):",
+            "",
+            &[],
+        );
+        let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(text.contains("returned plain text"));
+        assert!(!text.contains("no JSON found"));
+        assert!(!text.contains("CLI response"));
+        assert!(text.contains("fix agent output could not be parsed"));
+        assert!(text.contains("/process full"));
     }
 
     #[cfg(unix)]

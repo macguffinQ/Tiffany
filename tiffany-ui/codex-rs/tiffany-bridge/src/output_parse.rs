@@ -972,7 +972,9 @@ fn parse_job_meta_line_into(line: &str, job: &mut JobSummary) {
             "native" => job.native = Some(value.to_string()),
             "history" => job.history = Some(value.to_string()),
             "next" => job.next = Some(value.to_string()),
-            "error" => job.error = Some(tiffany_event_format::humanize_jsonish(value, 220)),
+            "error" => {
+                job.error = Some(tiffany_event_format::humanize_agent_status_text(value, 220))
+            }
             "result" => job.result = Some(tiffany_event_format::humanize_jsonish(value, 220)),
             _ => {}
         }
@@ -1262,6 +1264,18 @@ mod tests {
             !failed_actions
                 .iter()
                 .any(|action| action.contains("orchestrator jobs retry"))
+        );
+
+        let model_error = parse_job_summaries(
+            "Jobs\n\
+               active: 0  shown: 1\n\
+             \n\
+             ✗ abcd1234 failed    queued follow-up\n\
+               timing created 1m ago  flow single-worker  role worker-codex  error {\"message\":\"[1211][模型不存在] invalid model\"}\n",
+        );
+        assert_eq!(
+            model_error[0].error.as_deref(),
+            Some("model not found: 模型不存在 (1211)")
         );
     }
 

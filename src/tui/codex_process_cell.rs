@@ -1011,8 +1011,7 @@ mod tests {
         )
         .expect("critic issue should be visible");
 
-        assert!(critic.2.contains("needs changes"));
-        assert!(critic.2.contains("模型不存在"));
+        assert!(critic.2.contains("model not found"));
         assert!(!critic.2.contains("\"approved\""));
     }
 

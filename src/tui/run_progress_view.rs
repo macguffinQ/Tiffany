@@ -966,7 +966,7 @@ mod tests {
         .expect("soft fallback history");
         assert_eq!(
             soft_fallback.line,
-            "planner  single-worker fallback · replanner returned no usable worker runs; using original task"
+            "planner  single-worker fallback · planner returned no worker runs"
         );
     }
 }
