@@ -944,3 +944,675 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - No blocker.
 - Next:
   - Continue M2 with more raw/debug-only separation for worker status/control wrappers, or switch to M1 provider/role setup polish.
+
+## M2 run intro route prediction removed — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui run_intro_defers_route_to_runtime_events --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui timeline_compacts_stale_route_selected_when_route_updates --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - The TUI run intro no longer predicts `direct`, `single`, or `full` using a local prompt classifier before the runtime starts.
+  - Normal run headers now show `flow runtime` and `route waiting for orchestrator runtime classification`, then rely on actual `RouteSelected` / `RouteUpdated` events for the real flow.
+  - This removes misleading combinations such as an intro showing `flow single` while the pipeline later emits `route selected · full-pipeline`.
+  - Existing timeline compaction still hides stale `route selected · full` when the runtime downgrades to `single-worker` after planner fallback.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M2 on remaining waterfall noise/raw-debug separation, especially controller fallback and long tool-run grouping.
+
+## M2 control fallback reasons humanized — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format formats_control_fallbacks_for_user_visible_surfaces --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format humanizes --quiet` — green, 12 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui reviewer_status_lines_track_worker_review_lifecycle --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui run_intro_defers_route_to_runtime_events --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Shared control-fallback formatting now normalizes internal parse phrases before display.
+  - `no JSON found`, `expected value at line`, `invalid json`, and `malformed json` render as `returned plain text`.
+  - `no_sub_tasks`, `returned no_sub_tasks`, and no-worker-run variants render as `planner returned no worker runs`, even when the raw reason also contains `parse failed`.
+  - TUI review-unavailable/control reason labels use the same no-worker-run ordering so normal waterfall output does not leak parser jargon.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M2 on long tool-run grouping/raw-debug separation, or move to M1 `/doctor` one-line fixes.
+
+## M2 orchestrator failure details humanized — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui failure_lines_humanize_plain_text_parse_failures --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui failure_lines --lib --quiet` — green, 7 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format classifies_common_agent_failures --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format humanizes --quiet` — green, 12 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+- Decisions:
+  - Normal orchestrator failure detail lines now apply the same control-reason humanization as timeline fallback rows.
+  - `no JSON found in CLI response` and parser detail lines render as `returned plain text` instead of leaking internal parser jargon into the waterfall.
+  - `no_sub_tasks` / no-worker-run variants continue to render as `planner returned no worker runs`.
+  - The shared agent-failure classifier now treats `no json found` and `no_sub_tasks` as parse failures, so the TUI can show the parse repair hint pointing users to `/process full`.
+  - Raw diagnostics remain available through full process/debug surfaces; only normal failure display is changed.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Pivot to the current Claude priority: M3 real-runtime session continuity and handoff checks across Claude Code, Codex, and Gemini, unless the user asks to package the current M2 slice first.
+
+## M3 real adapter runtime continuity verified — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `./scripts/tiffany-real-runtime-check --self-test` — green.
+  - `./scripts/tiffany-real-runtime-check --check-installed --runtime all` — green.
+  - `./scripts/tiffany-real-runtime-check --adapter-run --runtime all` — green; Claude Code, Codex, and Gemini adapter probes passed.
+- Decisions:
+  - Verified the current installed local native CLIs are present: `claude`, `codex`, and `gemini`.
+  - Verified transcript stores are discoverable for all three runtimes.
+  - The real adapter probe completed two same-role runs for each runtime and validated thread detail, jobs, thread export, native history import, and native history query paths.
+  - This is the strongest current M3 signal: real adapter continuity works on this machine for Claude Code, Codex, and Gemini.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker from the real adapter continuity check.
+- Next:
+  - Decide whether to commit the current M2+M3 verification slice, then continue M3 with native TUI `/continue open <role>` manual smoke and restart recovery documentation.
+
+## M3 native TUI handoff dry-run seam added — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui native_cli_handoff_command_ --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Added a hidden `TIFFANY_NATIVE_CLI_DRY_RUN_LOG` execution seam for the native TUI `/continue open <role>` path.
+  - Normal production behavior is unchanged: Tiffany still restores the terminal and runs the parsed native handoff command.
+  - Dry-run mode records the exact command that would be executed and returns success without opening Claude Code, Codex, or Gemini.
+  - This closes the automated evidence gap between "thread detail exposes `/continue open`" and "the TUI command execution seam can safely receive and execute a native handoff command"; full human-interactive PTY smoke remains optional future coverage.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M3 restart/recovery documentation or move to M1 provider/role polish.
+
+## M3 native session recovery docs corrected — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Updated README and README.zh-CN to describe the real busy/missing native-session policy.
+  - Busy native sessions now document the continuity-preserving behavior: wait and retry with the same native session.
+  - Missing/unresumable native sessions now document the fresh-session fallback: clear the stale native id and retry once.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M1 provider/role polish or M4 queue/jobs visual states; M3 now has stronger real-runtime, dry-run, and user-doc evidence but still lacks a full interactive PTY smoke.
+
+## M1 role summary prioritizes provider/API model — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - `/roles` and `/role <name>` cards now put `provider` and `api model` before the internal model id.
+  - The internal model id remains visible as `internal id` for scripting/debugging, but normal role setup reads as provider/API-model/runtime first.
+  - Single-role output without provider metadata now shows `provider  unbound`, making the missing binding explicit instead of implying the model id is the primary setup target.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M1 provider detail/editor polish or move to M4 queue/jobs visual states.
+
+## M1 provider summary renders actionable cards — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_summary_lines --lib --quiet` — green, 4 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - `/provider` summaries now render each provider as a compact card instead of a dense table row.
+  - Provider cards show type, endpoint, auth state, model bindings, role bindings, and health in separate scan-friendly lines.
+  - Action rows now point directly at `/provider <name>` for healthy providers, `/provider edit <name>` for missing auth or missing providers, `/role` or `/roles` depending on role binding state, and `/doctor`.
+  - Existing parser support for config-show output, provider registry output, and provider detail output is preserved.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M1 by tightening the provider editor/delete path, or move to M4 queue/jobs visual states.
+
+## M4 jobs cards show primary next steps — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_summary_lines --lib --quiet` — green, 4 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - `/jobs` cards now show a status-specific `next` line before lower-level metadata.
+  - Queued jobs point to `/queue run`; running jobs point to `/process 200` plus `/jobs recover`; failed jobs point to `/jobs retry <id>`.
+  - Completed native jobs point to `/continue open <role>`; completed Tiffany-only jobs point to `/history session <id>` or `/jobs show <id>`.
+  - This keeps the existing action row but makes the primary recovery/handoff action visible without scanning the whole card.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M4 queue affordances or return to the updated Claude priority: M3 restart/handoff checks with real native runtimes.
+
+## M4 queue show explains execution order and merge mode — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_queue_show --lib --quiet` — green, 2 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_queue --lib --quiet` — green, 8 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Native TUI `/queue show` now adds `order`, `mode`, and `auto` lines.
+  - `order` makes retry-first-vs-normal queue execution explicit.
+  - `mode` tells the user whether queued prompts will merge into one numbered follow-up or run unchanged.
+  - `auto` tells the user whether the queue is paused, armed behind the current orchestration, ready to run now, or idle.
+  - This directly addresses the previous confusion that queued messages might be executed separately or silently merged without explanation.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M4 by improving queue state visibility while a run is active, or switch to the M3 real-runtime restart/handoff gate.
+
+## M3 real-runtime restart continuity harness strengthened — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `bash -n scripts/tiffany-real-runtime-check` — green.
+  - `./scripts/tiffany-real-runtime-check --self-test` — green.
+  - `./scripts/tiffany-real-runtime-check --adapter-run --runtime all` — green; Claude Code, Codex, and Gemini all passed.
+- Decisions:
+  - The real-runtime adapter harness now prints explicit restart-continuity evidence when the same role reuses the same Tiffany worker thread and native session across separate orchestrator processes.
+  - The adapter-run jobs check now asserts the persisted job output contains the reused native session id.
+  - The thread-export check now asserts the export command output names the same Tiffany worker thread that was captured after the second run.
+  - This makes the M3 gate stronger: the harness verifies runtime continuity, persisted jobs, thread export, native-history import/query, and `/continue open <role>` handoff actions for Claude Code, Codex, and Gemini.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker. Full interactive PTY smoke for `/continue open <role>` remains future coverage, but the dry-run seam and real adapter harness now cover the non-interactive proof points.
+- Next:
+  - Continue M3 by adding an optional interactive PTY smoke, or move to M4 active-run queue visibility and recovery affordances.
+
+## M4 active-run queue preview is regression-covered — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_orchestrator_shell_uses_batch_queue_preview --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui render_tiffany_batch_messages --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_queue --lib --quiet` — green, 8 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Confirmed the native Tiffany shell already switches the bottom pending-input preview into queued-batch mode.
+  - Added focused regression coverage so entering Tiffany orchestrator mode keeps queued follow-ups displayed as a batch, and leaving the mode restores the normal preview semantics.
+  - This protects the M4 invariant that prompts entered during a run remain visibly queued at the bottom until the batch executes, without adding duplicate history noise.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - No blocker.
+- Next:
+  - Continue M4 by improving active queue pause/resume affordances, or move to the M5 open-source release docs once the v0.2 tag decision is made.
+
+## M4 queue help card and v0.2 CI failure check — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_queue --lib --quiet` — green, 9 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui startup_health_actions --lib --quiet` — green, 3 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_orchestrator --lib --quiet` — green, 247 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Read Claude's updated active instruction: hold external `v0.2` tag movement until the user chooses force-move `v0.2` versus cut `v0.2.1`.
+  - Added native `/queue help` output so the TUI itself explains numbered batch merging, retry-first ordering, bottom-preview retention, and the main `/queue` actions.
+  - Confirmed the CI-failure test area now uses temp launchable runtimes: `startup_health_actions` and the full `tiffany_orchestrator --lib` filtered suite pass locally.
+  - Did not run the full release preflight and did not push or move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` or cut `v0.2.1`.
+- Next:
+  - If the user picks a tag path, run `./scripts/tiffany-release-preflight --full --tag <chosen-tag>` before any push/tag action.
+  - Otherwise continue M4 active queue pause/resume affordances or M2 waterfall de-duplication.
+
+## M4 queue pause/resume state stays visible — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui tiffany_queue --lib --quiet` — green, 11 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui render_tiffany_paused_batch_messages --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui pending_input_preview --lib --quiet` — green, 15 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - `/queue pause` now renders the same structured queue status card as `/queue show`, instead of a one-off info line.
+  - `/queue show` adds a `hold` line while paused so the user sees that queued prompts remain in the bottom preview until `/queue resume` or `/queue run`.
+  - The bottom pending-input preview now carries an explicit paused state: queued Tiffany batches render as `Queued batch paused: ...`, and retry-first messages no longer imply they will auto-submit at end of turn while autosend is paused.
+  - `/queue resume` and `/queue run` clear the bottom paused marker immediately; if the current orchestration is still running, the queue card shows the batch is armed rather than submitting early.
+  - Added regressions proving paused queued prompts do not submit when the active orchestration finishes, and resume arms then drains the merged numbered batch.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` or cut `v0.2.1`.
+- Next:
+  - Continue M4 with failed/retry job recovery visibility, or switch to M2 worker waterfall de-duplication and JSON cleanup.
+
+## M2 worker waterfall filters pip notice noise — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format normalizes_claude_tool_status_wrappers --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_waterfall_normalizes_claude_tool_status_wrappers --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_waterfall --lib --quiet` — green, 8 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui output --lib --quiet` — green, 78 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Normal-mode worker output now drops low-value pip upgrade notices (`[notice] A new release of pip is available` / `pip install --upgrade pip`) after stripping runtime/tool-result wrappers.
+  - Python PEP 668 / externally-managed-environment output now renders as one actionable line: create a virtual environment and install dependencies there.
+  - Added formatter-level and native TUI waterfall regressions so raw `externally-managed-environment`, PEP links, and pip notice lines do not leak into normal process output.
+  - Kept this in `tiffany-event-format` so renderer behavior stays shared and raw/debug traces can still preserve original event content.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` or cut `v0.2.1`.
+- Next:
+  - Continue M2 with the next noisy wrapper class in worker waterfall output, especially duplicate `tool result`/`user` wrappers and long tool-result grouping.
+
+## M2 worker waterfall strips repeated tool-result wrappers — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format visible_agent_output --quiet` — green, 2 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_output_body_uses_native_kind_markers --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_waterfall --lib --quiet` — green, 8 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui output --lib --quiet` — green, 78 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Normal-mode worker output now strips secondary wrappers per line, including repeated `claude-code user: tool result:`, `tool result:`, `tool_output:`, `assistant:`, `result:`, and `final:` prefixes.
+  - Multi-line tool results now keep the useful content while removing repeated transport labels from subsequent lines.
+  - The native TUI waterfall regression asserts rendered worker lines no longer expose `claude-code user:` or `tool result:` wrapper text in normal mode.
+  - Raw/debug trace behavior is unchanged so `/raw` and trace views can still preserve original event payloads.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` or cut `v0.2.1`.
+- Next:
+  - Continue M2 with long tool-result grouping, or switch to M4 failed/retry job recovery visibility.
+
+## M2 worker model errors render as actionable text — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml --all` — green; stable rustfmt emitted the existing `imports_granularity` warning.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml -p codex-tui` — green; same existing warning.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format keeps_actionable_stderr_visible --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_error_output_adds_actionable_fix_line --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format --quiet` — green, 45 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui output --lib --quiet` — green, 78 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Normal-mode worker stderr now turns provider model failures such as `API Error: 400 [1211][模型不存在]` into `model not found: 模型不存在 (1211)`.
+  - The worker waterfall keeps the actionable fix line (`fix model not found` plus `/role` and `/doctor` guidance) while hiding raw `API Error` noise from the main body.
+  - This directly covers the previously reported `[1211][模型不存在]` failure class without changing raw/debug traces.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` or cut `v0.2.1`.
+- Next:
+  - Continue M2 with remaining worker waterfall grouping/noise, or move to M4 failed/retry job recovery visibility.
+
+## M4 failed jobs reuse humanized model errors — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml --all` — green; stable rustfmt emitted the existing `imports_granularity` warning.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml -p tiffany-bridge -p codex-tui` — green; same existing warning.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format keeps_actionable_stderr_visible --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge parses_jobs_and_actions_without_raw_cli_next_actions --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_summary_lines_render_queue_cards_without_raw_stdout --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-bridge jobs --quiet` — green, 2 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_summary_lines --lib --quiet` — green, 4 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_retry --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Added a shared `humanize_agent_status_text` helper so stored job errors can reuse the same normal-mode status cleanup as worker waterfall output.
+  - `/jobs` failed-job cards now render model errors such as `{"message":"[1211][模型不存在] invalid model"}` as `model not found: 模型不存在 (1211)` instead of exposing raw provider payload text.
+  - The existing failed-job repair line remains intact: `check model binding with /role <role>, then run /doctor`.
+  - Result text is intentionally still parsed with the generic JSON humanizer, not the status-error humanizer.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` or cut `v0.2.1`.
+- Next:
+  - Continue M4 with failed/retry job recovery visibility, especially retry prompt queue placement, or return to M2 remaining waterfall grouping/noise.
+
+## M4 jobs retry handoff names bottom queue visibility — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path tiffany-ui/codex-rs/Cargo.toml -p codex-tui` — green; stable rustfmt emitted the existing `imports_granularity` warning.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_retry_handoff_renders_current_tui_queue_card --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_retry --lib --quiet` — green, 2 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_summary_lines --lib --quiet` — green, 4 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - `/jobs retry` success cards now explicitly say the restored prompt stays in the bottom queue until it runs.
+  - This makes the handoff match the M4 invariant: queued prompts stay visible instead of seeming to disappear into the job subsystem.
+  - The existing `/queue run`, `/queue show`, and `/jobs show <id>` actions remain unchanged.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` or cut `v0.2.1`.
+- Next:
+  - Continue M4 by reducing duplicate `/jobs retry` acknowledgement noise, or return to M2 remaining waterfall grouping/noise.
+
+## M4 jobs retry hides the already-queued failed job card — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml -p codex-tui` — green; stable rustfmt emitted the existing `imports_granularity` warning.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_retry_handoff_renders_current_tui_queue_card --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_retry --lib --quiet` — green, 2 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_summary_lines --lib --quiet` — green, 4 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - `/jobs retry <id>` success output now keeps the retry handoff card and filters the original failed job `<id>` out of the appended jobs summary.
+  - Other persisted jobs still render below the handoff card, with recalculated active/shown counts.
+  - This removes the confusing duplicate state where Tiffany said the retry was queued while also showing the same failed job with another `/jobs retry <id>` next action.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` or cut `v0.2.1`.
+- Next:
+  - Continue M4 queue/job polish or return to M2 remaining waterfall grouping/noise.
+
+## v0.2 release workflow uses the full preflight gate — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/release.yml"); puts "release.yml yaml ok"'` — green.
+  - `bash -n scripts/tiffany-release-preflight scripts/tiffany-check scripts/tiffany-slim-smoke scripts/tiffany-real-runtime-check` — green.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui startup_health_actions --lib --quiet` — green, 3 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Read Claude's updated v0.2 CI-failure instruction and kept the external tag hold in place.
+  - Changed `.github/workflows/release.yml` so a pushed release tag runs `./scripts/tiffany-release-preflight --full --tag "${GITHUB_REF_NAME}"`, not the weaker quick gate.
+  - Updated `docs/homebrew.md` to match the new release workflow and local release rule.
+  - Rechecked the `startup_health_actions` area; the tests now use temporary launchable runtime binaries, so CI/PATH state should not add the old ambient runtime warning.
+  - Did not run a full release preflight in this slice, and did not push or move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` or cut `v0.2.1`.
+- Next:
+  - If a release path is chosen, run `./scripts/tiffany-release-preflight --full --tag <chosen-tag>` on the exact commit before any push/tag action.
+
+## M0 e2e scripts accept tiffany-loop-only binary dirs — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `bash -n scripts/lib/tiffany-binaries.sh scripts/tiffany-e2e-fake-runtime scripts/tiffany-e2e-multi-runtime scripts/tiffany-check-script-helpers` — green.
+  - `./scripts/tiffany-check-script-helpers` — green.
+  - `./scripts/tiffany-e2e-fake-runtime` — green.
+  - `./scripts/tiffany-e2e-multi-runtime` — green.
+  - `tmp_bin=$(mktemp -d); ln -s target/dev-small/tiffany-loop "$tmp_bin/tiffany-loop"; ./scripts/tiffany-e2e-fake-runtime --bin-dir "$tmp_bin"` — green; proved the script works with no `orchestrator` file in the supplied bin dir.
+  - `tmp_bin=$(mktemp -d); ln -s target/dev-small/tiffany-loop "$tmp_bin/tiffany-loop"; ./scripts/tiffany-e2e-multi-runtime --bin-dir "$tmp_bin"` — green; proved the multi-runtime script works with no `orchestrator` file in the supplied bin dir.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Added `scripts/lib/tiffany-binaries.sh` with a small runtime alias resolver.
+  - `tiffany-e2e-fake-runtime` and `tiffany-e2e-multi-runtime` now prefer an existing `orchestrator` alias but can create a temporary `orchestrator` argv[0] alias from `tiffany-loop` when the bin dir only contains the primary binary.
+  - This removes another release-script assumption that `orchestrator` must be a standalone file already present in the bin dir, while preserving the argv[0] dispatch contract.
+  - Added helper-script coverage for the tiffany-loop-only alias path.
+  - Did not run a full release preflight in this slice, and did not push or move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` or cut `v0.2.1`.
+- Next:
+  - Remaining release proof is the expensive gate: `./scripts/tiffany-release-preflight --full --tag <chosen-tag>` on the exact release commit.
+
+## M0 tagged preflight blocks stale existing tags — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `bash -n scripts/tiffany-release-preflight` — green.
+  - `TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --quick --tag v0.2` — expected failure before expensive checks: existing `v0.2` points at `1211d9b...` while HEAD is `d3cd973...`; output says the tag does not point at HEAD.
+  - `TIFFANY_RELEASE_ALLOW_FREQUENT=1 TIFFANY_RELEASE_ALLOW_TAG_REWRITE=1 ./scripts/tiffany-release-preflight --quick --tag v0.2` — rerun exposed stale tests, then after fixes passed all steps up to the full serial `codex-tui --lib` gate; the first failure there was the expected queue-preview snapshot drift.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop shared_visible_output_classifier_keeps_role_errors_only --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop status_view_updates_stage_and_assistant_text --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format keeps_actionable_stderr_visible --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui jobs_parser_keeps_result_and_error_fields_separate --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui shows_actionable_stderr_instead_of_hiding_model_errors --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui chatwidget_tall --lib --quiet` — green, 1 passed.
+  - `./scripts/tiffany-codex-tui-lib-test` — green, 3162 passed, 1 ignored.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - `scripts/tiffany-release-preflight --tag <tag>` now fails fast when the tag already exists but does not point at HEAD.
+  - This prevents a false local green where HEAD passes checks but GitHub Actions would still run the old tagged commit.
+  - Added explicit `TIFFANY_RELEASE_ALLOW_TAG_REWRITE=1` override wording for the rare force-move path; this should only be used after the user explicitly chooses to force-move an existing tag.
+  - Updated README, README.zh-CN, and Homebrew docs with the existing-tag rewrite guard.
+  - Fixed stale root/TUI tests that were still expecting pre-humanization parser/model-error text.
+  - Improved shared model-error formatting so bare `[1211] 模型不存在` renders as `model not found: 模型不存在 (1211)`, while already-human text like `model not found with several words` is not over-collapsed.
+  - Accepted the `chatwidget_tall` snapshot update for the numbered queue preview (`Queued follow-up inputs: 30 item(s)` with indexed rows).
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` with explicit override, or cut `v0.2.1` after bumping versions/changelog.
+- Next:
+  - If the user chooses `v0.2.1`, bump versions and changelog, then run `./scripts/tiffany-release-preflight --full --tag v0.2.1`.
+  - If the user chooses force-moving `v0.2`, run `TIFFANY_RELEASE_ALLOW_TAG_REWRITE=1 ./scripts/tiffany-release-preflight --full --tag v0.2` on the exact intended commit before touching the tag.
+
+## M5 architecture docs synced to current product shape — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Rewrote `docs/architecture.md` to match the current product contract instead of the older 7-layer prototype description.
+  - The architecture doc now names the one multi-call binary shape, current TUI/runtime/adapter layering, `tiffany-ui/codex-rs/tiffany-bridge/`, direct/single/full routing, visible-output contract, persistence, queue/jobs behavior, Tiffany-only slash commands, native runtime adapter contract, and release gates.
+  - Corrected the bridge-crate path in `docs/engineering-plan.md`; the source-of-truth now says pure Tiffany helpers live under `tiffany-ui/codex-rs/tiffany-bridge/` inside the Codex fork workspace, with no dependency back on `codex-tui`.
+  - This advances M5 documentation quality without changing runtime behavior.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` with explicit override, or cut `v0.2.1` after bumping versions/changelog.
+- Next:
+  - Continue M2 worker waterfall de-duplication/JSON cleanup, or continue M1 provider/role setup polish.
+
+## M2 worker waterfall filters npm upgrade notice noise — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format normalizes_claude_tool_status_wrappers --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_waterfall_normalizes_claude_tool_status_wrappers --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Extended the shared worker visible-output cleanup to drop low-value npm upgrade notices, matching the existing pip upgrade notice filtering.
+  - Normal worker waterfall output now hides `npm notice New major version of npm available`, changelog, update command, and standalone `npm notice` lines when they are only package-manager update noise.
+  - Kept the rule in `tiffany-event-format` so raw/debug traces can still preserve the original event payload, while normal TUI views avoid another common package-manager wrapper.
+  - Added formatter-level and native TUI waterfall regressions.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` with explicit override, or cut `v0.2.1` after bumping versions/changelog.
+- Next:
+  - Continue M2 with remaining worker waterfall grouping/noise, or move to M1 provider/role setup polish.
+
+## M2 worker waterfall normalizes Claude file operation wrappers — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml --all` — green.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml -p codex-tui` — green; stable rustfmt still prints the existing `imports_granularity = Item` warnings.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format normalizes_claude_tool_status_wrappers --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_waterfall_normalizes_claude_tool_status_wrappers --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Extended shared worker visible-output cleanup for Claude Code file-operation wrappers beyond the previous `File created successfully at:` and `The file ... has been updated successfully` cases.
+  - Normal waterfall output now renders `File updated successfully at: ...`, `File deleted successfully at: ...`, `The file ... has been deleted successfully`, and related modified/removed aliases as compact `file updated: ...` or `file deleted: ...` lines.
+  - This keeps file-operation events in the `file update` display bucket, so the native waterfall title, output scope, and history filters stay consistent instead of showing a raw `tool result` wrapper.
+  - Added formatter-level and native TUI waterfall regressions.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` with explicit override, or cut `v0.2.1` after bumping versions/changelog.
+- Next:
+  - Continue M2 with remaining worker waterfall grouping/noise, or move to M1 provider/role setup polish.
+
+## M2 worker waterfall hides successful Codex exit-code noise — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml --all` — green.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml -p codex-tui` — green; stable rustfmt still prints the existing `imports_granularity = Item` warnings.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-event-format unwraps_codex_rollout_event_msg_fields_without_raw_json --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_waterfall_humanizes_native_codex_rollout_events --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Changed Codex rollout `exec_command_end` summaries so successful command results no longer add `exit 0` to normal worker waterfall output.
+  - Successful shell results with stdout/stderr now show only the useful output body; successful shell results with no stdout/stderr collapse to low-value `tool result` and are hidden from normal view.
+  - Failed shell results still keep the exit code and stderr/stdout body, so actionable failures remain visible.
+  - Added formatter-level and native TUI rollout regressions for success-with-output, success-without-output, and failure cases.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` with explicit override, or cut `v0.2.1` after bumping versions/changelog.
+- Next:
+  - Continue M2 with remaining worker waterfall grouping/noise, or move to M1 provider/role setup polish.
+
+## M2 worker waterfall marks failed tool results clearly — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml -p codex-tui` — green; stable rustfmt still prints the existing `imports_granularity = Item` warnings.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml --all` — green.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_waterfall_marks_failed_tool_results_without_success_checkmark --lib --quiet` — green, 1 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui worker_waterfall_humanizes_native_codex_rollout_events --lib --quiet` — green, 1 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Native worker waterfall now detects failed tool results from explicit `tool error` output or non-zero `exit N` content.
+  - Failed tool-result cells and grouped tool call/result cells render with a red `✗` title marker instead of the previous gray success checkmark.
+  - The first failed result body line also uses `✗ exit N`; successful tool results still keep the existing gray `✓`.
+  - This makes Codex/Claude/Gemini tool failures visually distinct without changing raw trace preservation.
+  - Added native TUI regressions for grouped failed tool results and Codex rollout failed `exec_command_end` output.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` with explicit override, or cut `v0.2.1` after bumping versions/changelog.
+- Next:
+  - Continue M2 with remaining worker waterfall grouping/noise, or move to M1 provider/role setup polish.
+
+## M1 role cards flag unbound providers before native handoff actions — 2026-06-29
+
+- Commits:
+  - none yet
+- Build/tests:
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml -p codex-tui` — green; stable rustfmt still prints the existing `imports_granularity = Item` warnings.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 fmt --manifest-path Cargo.toml --all` — green.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider --quiet` — green, 45 passed plus filtered tail.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib --quiet` — green, 6 passed.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib --quiet` — green, 2 passed.
+  - `git diff --check` — green.
+- Decisions:
+  - Native `/role` and `/roles` cards now derive health from missing provider/model bindings when the runtime output does not provide an explicit health failure.
+  - Worker roles with an unbound provider are shown as `provider unbound` instead of looking ready.
+  - For unbound worker roles, actions now lead to `/role <name>`, `/provider`, and `/doctor` instead of showing `/continue open <role>` or `/history role <role>` before a native worker session can actually exist.
+  - Worker roles that already have provider/API model bindings still keep `/thread`, `/continue open`, and `/history role` actions, even when they have a runtime warning and need `/doctor`.
+  - Added native TUI role-summary regressions for the unbound worker role path.
+  - Did not push and did not move the `v0.2` tag.
+- Blockers / questions for Claude:
+  - External release remains blocked on the user's tag decision: force-move `v0.2` with explicit override, or cut `v0.2.1` after bumping versions/changelog.
+- Next:
+  - Continue M1 provider/role setup polish, especially `/doctor` one-line fixes, or return to M2 if more real-output noise appears.

@@ -101,7 +101,7 @@ Name: HOMEBREW_TAP_TOKEN
 
 After that, pushing a tag like `vX.Y.Z` will:
 
-1. Run `./scripts/tiffany-release-preflight --quick --tag <tag>` on the tagged commit.
+1. Run `./scripts/tiffany-release-preflight --full --tag <tag>` on the tagged commit.
 2. Build the macOS Apple Silicon release archive used by Homebrew.
 3. Publish the GitHub Release.
 4. Update `macguffinQ/homebrew-tap` with a `tiffany-loop` formula that exposes
@@ -125,6 +125,11 @@ tag. This keeps small fixes batched under `CHANGELOG.md` `Unreleased` instead
 of producing noisy patch releases. For an urgent installer, startup, or security
 fix, set the repository variable `TIFFANY_RELEASE_ALLOW_FREQUENT=1` for that
 tag push, then remove it after the release.
+
+Tagged preflight also fails when the requested tag already exists but does not
+point at the checked-out commit. Prefer cutting a new patch tag. Only set
+`TIFFANY_RELEASE_ALLOW_TAG_REWRITE=1` for the local preflight after explicitly
+deciding to force-move an existing tag.
 
 If the automatic tap update fails, confirm the GitHub Release, tap commit, and
 formula with:

@@ -6,21 +6,43 @@ executes.** Each card below is a self-contained task Codex can pick up. The
 planner (Claude) owns scope, ordering, dependencies, and acceptance; the worker
 (Codex) owns implementation.
 
-## Active instructions from Claude (updated 2026-06-29 — v0.2 CI failure)
+## Active instructions from Claude (updated 2026-06-29 — STOP polish, ship v0.2.1 NOW)
 
-- **⚠ v0.2 CI FAILURE — HOLD the tag move; user decision pending.** v0.2 was
-  pushed + tagged; GitHub Actions FAILED before publishing artifacts (no
-  artifacts, no Homebrew tap update → no user-facing damage). Two failures:
-  (1) `startup_health_actions_report_ok_when_ready` assumed an adjacent standalone
-  `orchestrator` binary — a consequence of the F3 merge making `orchestrator` an
-  alias; (2) the release workflow's preflight step. Codex's hermetic-test fix
-  (temp launchable binaries) + CI/preflight `--lib` alignment is correct. Before
-  any re-push: (a) rerun `./scripts/tiffany-release-preflight --full --tag v0.2`
-  green; (b) grep for OTHER tests/code with the same ambient-`orchestrator`
-  assumption and fix them; (c) confirm the WHOLE release.yml passes, not just the
-  one test; (d) **DO NOT move or force-push the v0.2 tag until the user picks
-  force-move-v0.2 vs cut-v0.2.1** — force-pushing a tag is destructive and beyond
-  the original clean push+tag authorization.
+- **⛔ STOP all M1/M2/M3/M4/M5 polish. Pivot to the `v0.2.1` release NOW — it is
+  the next and ONLY action.** You have done roughly 30 polish slices since the CI
+  failure; that is more than enough for v0.2.1. Any further polish waits for
+  v0.2.2. Do NOT start another polish slice. Execute the `v0.2.1` release
+  procedure in the next bullet immediately: commit all pending work → bump
+  `0.2.1` + CHANGELOG → `./scripts/tiffany-release-preflight --full --tag v0.2.1`
+  → push `main` + tag. The release is gated ONLY on a green full preflight —
+  nothing else is pending.
+
+- **Decision (user, 2026-06-29): cut `v0.2.1`; leave the broken `v0.2` tag alone.**
+  The failed `v0.2` tag stays at `1211d9b` — do NOT force-move, rewrite, or delete
+  it. Release the fix as a new `v0.2.1`. Good work holding the tag through ~30
+  slices; the wait was used well: the CI root cause is fixed thoroughly (hermetic
+  startup tests, e2e scripts accept tiffany-loop-only bin dirs, release.yml now
+  runs the FULL preflight on tag, preflight guards against stale existing tags),
+  plus large M1/M2/M3/M4/M5 polish and real M3 runtime-continuity evidence
+  (Claude/Codex/Gemini adapter runs reuse worker thread + native session across
+  separate processes).
+- **`v0.2.1` release procedure — execute now:**
+  1. **Commit all pending M1–M5 work first** so the tree is clean (many slices are
+     still uncommitted). Group logically; every commit builds green. Do not tag
+     over a dirty tree.
+  2. **Bump to `0.2.1`** (root `tiffany-loop`, `tiffany-cli`, `codex-tui`), refresh
+     both lockfiles, add a `## [0.2.1] - 2026-06-29` CHANGELOG entry. Commit as
+     `Prepare v0.2.1 release`.
+  3. **Run `./scripts/tiffany-release-preflight --full --tag v0.2.1`** on that
+     exact commit. `v0.2.1` is a NEW tag → the existing-tag guard will NOT block
+     and NO `TIFFANY_RELEASE_ALLOW_TAG_REWRITE` is needed.
+  4. **Green →** `git push origin main`, then `git tag v0.2.1 && git push origin
+     v0.2.1`. The tag fires release.yml (full preflight on CI → artifacts +
+     Homebrew tap update). If ANY gate fails, STOP and report; do not tag.
+- **The broken `v0.2` tag is intentionally left in place** (user chose the
+  non-destructive path). If CI/preflight ever complains about the stale `v0.2`,
+  use the `TIFFANY_RELEASE_ALLOW_TAG_REWRITE` override ONLY on `v0.2.1` work, never
+  touch `v0.2`.
 
 - **PHASE DECISION (supersedes the stale F7-era bullets below): foundation push
   is substantially complete — STOP grinding extraction.** Tree clean, 146 ahead,

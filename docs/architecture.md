@@ -1,154 +1,262 @@
-# tiffany-loop architecture
+# tiffany-loop Architecture
 
-tiffany-loop is a preview-stage multi-agent orchestration shell. The public
-product name is `tiffany-loop`; the installed `orchestrator` and `tiffany`
-commands are compatibility aliases for the same multi-call binary.
+`tiffany-loop` is a lightweight native terminal orchestration shell for existing
+agent CLIs. It is not a replacement for Claude Code, Codex, Gemini, or future
+tools; it is a small control layer that routes prompts to registered roles,
+captures what each worker did, and keeps enough state to continue either inside
+Tiffany or in the original native tool.
 
-## Layers (7 + session log)
+This document mirrors the current source of truth in
+[`docs/engineering-plan.md`](engineering-plan.md). When behavior changes, update
+both files together.
 
-1. **Worker runtime** — `claude` CLI, `codex` CLI, direct API
-2. **MCP tool pool** — shared fs / git / github / slack servers
-3. **Adapter layer** — `WorkerAdapter` trait + 3 implementations (CC, Codex, direct)
-4. **Shared state** — SQLite task queue + git worktree pool
-4.5. **Session log** — JSONL per session + SQLite index; new agents can read prior sessions
-5. **Orchestrator core** — route every turn to direct worker, single worker, or full Plan → Critique → Execute → Review
-6. **Observability** — terminal chat + structured JSON logs (tracing)
-7. **Entry layer** — CLI (clap) / terminal chat / ACP / webhook (axum)
+## Product Shape
 
-## 6 Roles
+- `tiffany-loop` is the primary user-facing command.
+- `orchestrator` is the runtime and scripting command.
+- `tiffany` is a compatibility alias.
+- All three names are exposed by one multi-call binary. The invoked name
+  (`argv[0]`) selects the entrypoint, so installed users should not need
+  `--bin`, PATH probing, or an adjacent standalone `orchestrator` binary.
+- The primary TUI is the Codex Ratatui fork under `tiffany-ui/codex-rs/`.
+- Tiffany config/state is separate from upstream Codex state:
+  `~/.tiffany` for UI state and `~/.orchestrator/config.yaml` for runtime
+  routing.
 
-- **Planner** (default: Codex via direct API or CLI) — decomposes full-pipeline implementation work into a DAG
-- **Critic** (default: CC) — red-teams the plan, forces re-plan on rejection
-- **Router** (built-in) — 3-tier resolution: CLI flag > task tag > config default
-- **Worker** (CC / Codex / direct) — executes a routed worker run or one planned DAG task
-- **Reviewer** (default: Codex cheap model) — gates implementation worker output before merge; direct and single-worker routes do not invoke it
-- **A/B Judge** (built-in) — picks a winner from two configured worker-route runs using success status, diff size, and session-log size fallback
+## Runtime Flow
 
-## Pipeline
-
-```
-User task
-   ↓
-0. Route classifier
-   ├─ direct-answer → one worker answer
-   ├─ single-worker → one worker run
-   └─ full-pipeline
-        ↓
-     1a. Plan (Planner)
-        ↓
-     1b. Critique (Critic) ← reject → loop to 1a
-        ↓
-     2.  Workers (CC + Codex + direct, parallel via DAG)
-        ↓
-     3.  Review (Reviewer) ← implementation results only
-        ↓
-     Result
-   ↓
-4.5. Session log (consumed by next agent)
+```text
+tiffany-loop TUI
+  -> Tiffany orchestrator bridge
+  -> orchestrator runtime
+  -> native tool adapters
+  -> Claude Code / Codex CLI / Gemini CLI / direct providers
 ```
 
-Conversational prompts such as greetings, simple Q&A, or explanations still
-produce run events, but they route directly to one worker answer and do not
-invoke planner, critic, or reviewer. External links, research, diagnostics, and
-scaffolding can route to a single worker with the same route/worker/done
-visibility. Only implementation work runs the full planner → critic → worker →
-reviewer path. Older session logs may contain `ReviewSkipped` events from the
-previous routing model; UI code keeps those readable for compatibility.
+The TUI owns the conversation surface, slash commands, queue preview, waterfall
+history cells, and native handoff actions. The runtime owns provider/model/role
+routing, pipeline execution, adapter invocation, event streaming, SQLite state,
+JSONL logs, and background jobs.
 
-## Configuration
+## Main Components
 
-`~/.orchestrator/config.yaml` — see `config.example.yaml`. Three priority levels:
-
-1. **CLI flag** (e.g. `--worker codex`)
-2. **Task tag** mapping (e.g. `tag: refactor → worker-cc`)
-3. **Default** in `roles:` section
-
-## File layout
-
-```
-~/code/orchestrator/
-├── Cargo.toml
-├── config.example.yaml
-├── README.md
-├── LICENSE
-├── scripts/                  # tiffany-loop dev/build/check entrypoints
-├── tiffany-ui/               # primary tiffany-loop TUI fork
+```text
+repo root
 ├── src/
-│   ├── cli_entry.rs           # runtime CLI entry exported through the library
-│   ├── lib.rs                 # library re-exports
-│   ├── cli.rs                 # command dispatch
-│   ├── config.rs              # YAML config + types
-│   ├── core/                  # types, traits, session store
-│   ├── adapters/              # claude_code, codex_cli, direct_api
-│   ├── providers/             # anthropic, openai, google, ollama
-│   ├── roles/                 # planner, critic, reviewer, router, ab_judge
-│   ├── pipeline/orchestrator.rs
-│   ├── storage/               # worktree, queue
-│   ├── mux/                   # zellij + fallback
-│   ├── tui/                   # legacy terminal chat fallback
-│   ├── mcp/                   # MCP server pool
-│   └── webhook/               # axum
-└── tests/
+│   ├── cli_entry.rs              # runtime CLI entry used by the multi-call binary
+│   ├── cli.rs                    # runtime command dispatch
+│   ├── config.rs                 # provider/model/role config
+│   ├── doctor.rs                 # setup diagnostics
+│   ├── adapters/                 # claude_code, codex_cli, gemini, direct
+│   ├── core/                     # workers, tasks, sessions, stores
+│   ├── pipeline/orchestrator.rs  # direct/single/full routing pipeline
+│   ├── providers/                # Anthropic, OpenAI, Google, Ollama, compatible APIs
+│   ├── roles/                    # planner, critic, reviewer, router, judge helpers
+│   ├── tui/                      # legacy terminal chat fallback only
+│   └── tui_jobs.rs               # persisted job helpers
+├── tiffany-cli/
+│   └── src/main.rs               # single installed binary entrypoint
+├── tiffany-ui/codex-rs/
+│   ├── tui/                      # Codex Ratatui fork plus Tiffany UI seams
+│   └── tiffany-bridge/           # pure Tiffany parsing/formatting/session helpers
+├── docs/
+│   ├── engineering-plan.md       # product contract and milestone state
+│   ├── execution-plan.md         # worker task cards and current Claude instructions
+│   └── codex-log.md              # execution log from Codex worker slices
+└── scripts/                      # build, smoke, release, runtime verification
 ```
 
-## Building
+New UI work should prefer `tiffany-ui/codex-rs/tiffany-bridge/` for pure logic
+and keep fork-side Ratatui files thin. The legacy `src/tui/` path is a
+compatibility fallback and should not receive new hand-written UI work except
+narrow shims or bug fixes needed by the runtime.
+
+## Role And Provider Model
+
+Users configure roles rather than hard-coding one model everywhere.
+
+```text
+provider
+  -> API model name
+  -> Tiffany model binding
+  -> role
+  -> runtime adapter
+```
+
+Examples:
+
+- `planner` can use Codex CLI with one provider/model.
+- `critic` can use Claude Code with another provider/model.
+- `worker-cc` can use Claude Code and preserve its native session.
+- `worker-codex` can use Codex CLI and preserve its native session.
+- `worker-gemini` can use Gemini CLI and preserve its native session.
+- `reviewer` can use a cheaper or stricter role-specific model.
+
+Normal UI surfaces should show `provider`, `api model`, and `runtime` first.
+Internal model ids remain available for config and scripting, but they should
+not be the primary operator concept.
+
+## Routing Pipeline
+
+Every prompt is classified into one of three flows:
+
+```text
+user prompt
+  -> route classifier
+     -> direct: one worker answers conversational/explanatory prompts
+     -> single: one worker handles atomic tasks, links, diagnostics, scaffolds
+     -> full: planner -> critic -> worker(s) -> reviewer for implementation work
+```
+
+The direct and single paths still emit route/worker/done events so the run is
+observable, but they avoid planner/critic/reviewer noise. The full path is kept
+for implementation work where decomposition and adversarial review can improve
+the result.
+
+## Event And Display Contract
+
+Normal TUI output should be readable without inspecting JSON.
+
+- Route headers show `direct`, `single`, or `full` from runtime events.
+- Planner, critic, and reviewer control output collapses to compact timeline
+  rows unless there is actionable detail.
+- Worker answers stream as normal assistant text.
+- Tool calls, tool results, diffs, approvals, stderr, file updates, and native
+  session recovery render as labeled waterfall cells.
+- Raw JSON remains available through raw/process/history views, not normal
+  conversation output.
+- `/o` toggles compact/full process history.
+- `/process`, `/history kind ...`, and `/raw` expose the full trace when needed.
+
+Most formatting and de-duplication lives in:
+
+```text
+crates/tiffany-event-format/src/lib.rs
+tiffany-ui/codex-rs/tiffany-bridge/src/visible_output.rs
+tiffany-ui/codex-rs/tiffany-bridge/src/output_parse.rs
+```
+
+The Ratatui fork adapts those pure results into history cells rather than
+duplicating parser logic in rendering code.
+
+## Persistence
+
+Tiffany persists both its own orchestration state and native worker continuity.
+
+- SQLite stores indexed sessions, events, tasks, worker threads, and jobs.
+- JSONL stores append-only full event/session traces.
+- `~/.tiffany/tiffany-orchestrator/native-sessions.json` mirrors local native
+  history for TUI-side continuity.
+- `/thread` shows worker roles, Tiffany worker thread ids, native session ids,
+  and handoff actions.
+- `/history` can list, filter, export, graph, compact, and sync native history.
+- `/continue open <role>` restores the terminal and opens the original native
+  CLI session when enough native session data exists.
+
+## Queue And Jobs
+
+Tiffany has two related work queues:
+
+- The bottom input queue stores follow-up prompts typed while a run is active.
+  These prompts stay visible until they execute. In orchestrator mode, normal
+  follow-ups are submitted as a numbered batch rather than silently merging.
+- Persisted jobs store detached or recoverable work. `/jobs` exposes
+  status-specific next actions such as retry, cancel, recover, inspect history,
+  or open the native worker session.
+
+The key invariant is that queued work should not disappear. If work is paused,
+armed, retrying, failed, or running, the UI should say so with a concrete next
+action.
+
+## Slash Command Surface
+
+In Tiffany orchestrator mode the slash menu intentionally hides upstream
+Codex-only commands that are not wired for this product surface. Supported
+native commands include:
+
+```text
+/provider  /role      /roles     /queue     /thread
+/jobs      /continue  /history   /approvals /compact
+/process   /o         /doctor    /status    /help
+/copy      /raw       /diff      /clear     /exit
+```
+
+Known hidden upstream or legacy commands should return a specific explanation
+and point to the Tiffany equivalent. Unknown commands can remain normal chat
+input.
+
+## Native Runtime Adapter Contract
+
+Each runtime adapter should provide:
+
+- launch command and compatible CLI arguments;
+- provider/model/runtime error normalization;
+- visible event summaries for tool calls, tool results, approvals, stderr, and
+  answers;
+- native session id capture when the tool supports it;
+- same-role session reuse across orchestrator processes;
+- a busy/missing session recovery policy;
+- handoff information for `/thread`, `/continue open`, `/thread export`, and
+  `/history`.
+
+The real-runtime harness verifies Claude Code, Codex, and Gemini adapter
+continuity:
 
 ```bash
-./scripts/tiffany-build --locked
-./scripts/tiffany-build --dev --locked
-./scripts/tiffany-build --fast-release --locked
+./scripts/tiffany-real-runtime-check --adapter-run --runtime all
 ```
 
-The build scripts use a shared Cargo target directory. Source-checkout builds
-default to the smaller `dev-small` profile, so `./scripts/tiffany-build --locked`
-writes local runnable binaries to `target/dev-small/`. Use
-`./scripts/tiffany-build --dev --locked` only when you need Cargo's normal debug
-profile and full debug symbols in `target/debug/`.
+It runs two same-role prompts per runtime and checks Tiffany worker-thread
+reuse, native session reuse, persisted jobs, thread export, native-history
+import, and history query paths. It may consume model quota.
 
-Normal release builds use `target/release/`. Fast distributable builds use
-`target/tiffany-dist/` and expose the same multi-call `tiffany-loop` binary as
-`orchestrator` and the compatibility `tiffany` alias. The final binaries are
-small relative to the build cache; use
-`./scripts/tiffany-build --fast-release --locked --prune-dist-cache` or
-`./scripts/tiffany-clean-targets --dist-cache` when you want to keep the runnable
-dist binaries but remove rebuildable dist internals.
+## Build And Release Shape
 
-## Terminal chat
+The installed release should provide one binary with three names:
 
-The primary terminal UI is the tiffany-loop UI:
+```text
+tiffany-loop  # primary UI
+orchestrator  # runtime/scripting alias
+tiffany       # compatibility alias
+```
+
+Important gates:
 
 ```bash
-./scripts/tiffany-dev      # source checkout
-tiffany-loop               # installed binary
-orchestrator tui           # delegates to tiffany-loop when installed
+/Users/allendred/.cargo/bin/cargo +1.95.0 test -p tiffany-loop provider
+/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui provider_args --lib
+/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui role_summary_lines --lib
+git diff --check
 ```
 
-`orchestrator tui` falls back to the legacy terminal chat only when the
-`tiffany-loop` binary is unavailable, or when `ORCHESTRATOR_LEGACY_TUI=1` is
-set.
+Pre-release gates include the full Codex-fork TUI library suite, fake runtime
+e2e, multi-runtime e2e, open-source audit, and release preflight:
 
-- The tiffany-loop UI preserves upstream Ratatui/Crossterm rendering, resize,
-  history cells, bottom pane, overlays, and exit rendering behavior.
-- Planner, critic, worker, reviewer, and worker answer events stream through the
-  tiffany-loop orchestrator adapter.
-- Follow-up prompts entered during a run stay queued at the bottom until they execute.
-- Native slash commands expose provider setup, role registration, stable worker
-  sessions, diagnostics, status, diff, copy/raw mode, clear, and exit. Older
-  process/log/queue/history helpers remain in the legacy fallback runner.
-- Typing `/` opens a command menu. `Up`/`Down` select and `Enter` confirms.
-
-## Webhook
-
-The crate contains an axum webhook module, but the public CLI subcommand is not wired yet. The intended shape is:
-
-```json
-POST /run
-{
-  "prompt": "implement X",
-  "tags": ["refactor"]
-}
+```bash
+./scripts/tiffany-codex-tui-lib-test
+./scripts/tiffany-e2e-fake-runtime
+./scripts/tiffany-e2e-multi-runtime
+./scripts/open-source-audit
+./scripts/tiffany-release-preflight --full --tag vX.Y.Z
 ```
 
-## zellij
+Existing release tags must not be moved unless the user explicitly chooses that
+path and the tagged preflight is rerun with the documented override. The safer
+path after a failed tag is usually a new patch tag.
 
-If `ZELLIJ` env var is set, tiffany-loop auto-detects and uses zellij for tab/pane management. Otherwise it falls back to plain subprocesses.
+## Current Milestone State
+
+The foundation is working but not complete:
+
+- M0 shell stabilization is mostly done locally, but the external release/tag
+  decision is still held.
+- M1 provider/role setup is partial and needs more operator polish.
+- M2 execution display is partial and still needs stricter de-duplication and
+  JSON/raw-debug separation.
+- M3 session continuity is partial but has strong real-runtime adapter evidence.
+- M4 queue/background jobs are partial and need clearer paused/running/retry
+  states.
+- M5 release/open-source quality is partial and depends on docs, packaging, and
+  milestone-based versioning discipline.
+- M6 pipeline efficacy is not started; it needs evidence that the full pipeline
+  improves outcomes enough to justify its cost.

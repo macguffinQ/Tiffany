@@ -98,14 +98,19 @@ Working:
   shown, cleared, exported, synced, and recovered.
 - Claude Code, Codex, and Gemini adapters have session-id capture/reuse work in
   place.
+- The real-runtime adapter harness verifies Claude Code, Codex, and Gemini
+  same-role continuity across separate orchestrator processes, including
+  persisted jobs, thread export, native-history import, and `/continue open`
+  handoff actions.
 - Homebrew and release automation exist.
 
 Known gaps:
 
 - The visible process stream still needs stricter de-duplication and cleaner
   event grouping for long tool runs.
-- Native handoff must be tested more heavily with real Claude Code, Codex, and
-  Gemini sessions across restarts.
+- Native handoff still needs a heavier interactive PTY smoke, but the automated
+  real-runtime restart/continuity harness now covers Claude Code, Codex, and
+  Gemini adapter reuse.
 - `/role` and `/provider` setup flows need more operator polish and fewer
   fallback-looking screens.
 - Background queue behavior needs stronger UI affordances for running, paused,
@@ -260,11 +265,12 @@ Acceptance:
 
 - Keep upstream Ratatui event/state/render architecture intact.
 - Tiffany behavior lives in a separate bridge crate
-  (`tiffany-ui/tiffany-bridge`) that depends on `codex-tui`'s public API. It
-  must not accumulate as a single monolithic file inside the forked crate. The
-  current `tiffany_orchestrator.rs` (roughly 18k lines) is the migration target:
-  it is decomposed into the bridge crate, and new Tiffany logic is added there
-  rather than by growing that file.
+  (`tiffany-ui/codex-rs/tiffany-bridge/`) that stays inside the Codex fork
+  workspace and avoids a dependency back on `codex-tui`. Pure Tiffany parsing,
+  formatting, and session helpers move there; fork-side Ratatui code adapts
+  those results into UI. The current `tiffany_orchestrator.rs` remains a
+  migration target, but broad extraction is paused unless a slice directly
+  unblocks M2, M3, or M4.
 - Fork-side seams (app dispatch hooks, command menu items, history-cell
   formatting) stay thin: they delegate into the bridge crate and hold no Tiffany
   business logic of their own.
@@ -347,9 +353,9 @@ Acceptance:
    cut `v0.2.1`.
 2. Tighten worker waterfall de-duplication and JSON humanization.
 3. Finish role/provider/session display polish in the native TUI.
-4. Add a future fake-PTY or manual-smoke path for `/continue open <role>` if
-   full interactive handoff needs automated evidence beyond the current shell
-   execution seam.
+4. Keep hardening `/continue open <role>` evidence: the native command execution
+   seam now has a dry-run proof, while a full human-interactive PTY smoke remains
+   optional future coverage.
 5. Improve `/jobs` and `/queue` visual states for paused/running/retry/recover.
 6. Keep README and README.zh-CN aligned with the current install and setup flow.
 7. Continue small `tiffany-bridge` extractions only when they directly unblock
@@ -422,8 +428,9 @@ before any release tag.
   same-role Tiffany/native session reuse for Claude Code, Codex, and Gemini
   locally, checks `/thread export` handoff output, and proves native history can
   import into/query from the session DB. `/continue open` has unit proof for the
-  TUI handoff command execution seam; a full human-interactive PTY smoke is
-  still not automated.
+  TUI handoff command execution seam plus dry-run proof that the exact native
+  handoff command can be recorded without opening an interactive CLI; a full
+  human-interactive PTY smoke is still not automated.
 - M4 Queue/Background Jobs — partial. `/jobs` and `/queue` visual states for
   paused/retry/recover still needed.
 - M5 Release/Open-Source — partial. Milestone-based versioning not enforced;
