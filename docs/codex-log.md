@@ -1616,3 +1616,27 @@ Hard rules while executing anything from `docs/execution-plan.md`:
   - External release remains blocked on the user's tag decision: force-move `v0.2` with explicit override, or cut `v0.2.1` after bumping versions/changelog.
 - Next:
   - Continue M1 provider/role setup polish, especially `/doctor` one-line fixes, or return to M2 if more real-output noise appears.
+
+## v0.2.1 release prep and full preflight — 2026-06-29
+
+- Commits:
+  - `115e4cb` Harden Tiffany release preflight checks.
+  - `0611a9d` Polish Tiffany worker output displays.
+  - `aa57acf` Clarify Tiffany queued input flow.
+  - `c7d0754` Refresh Tiffany release planning docs.
+  - Current HEAD: Prepare v0.2.1 release.
+- Build/tests:
+  - `/Users/allendred/.cargo/bin/cargo +1.95.0 build` after each local grouping commit — green.
+  - Initial `./scripts/tiffany-release-preflight --full --tag v0.2.1` stopped at the expected 24-hour release cadence guard.
+  - `TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full --tag v0.2.1` first exposed version-only TUI snapshot drift from `v0.2.0` to `v0.2.1`; the generated snapshots were accepted and amended into the release commit.
+  - From `tiffany-ui/codex-rs`: `/Users/allendred/.cargo/bin/cargo +1.95.0 test -p codex-tui status_snapshot_includes_enterprise_monthly_credit_limit --lib --quiet` — green, 1 passed.
+  - Final `TIFFANY_RELEASE_ALLOW_FREQUENT=1 ./scripts/tiffany-release-preflight --full --tag v0.2.1` — green.
+- Decisions:
+  - Cut the fix release as `v0.2.1`; the existing broken `v0.2` tag remains untouched.
+  - Used `TIFFANY_RELEASE_ALLOW_FREQUENT=1` only to bypass the same-day release cadence guard for this urgent release fix.
+  - Bumped root `tiffany-loop`, `tiffany-cli`, and `codex-tui` to `0.2.1`, refreshed both lockfiles, updated CHANGELOG, and accepted version-only snapshots.
+  - Did not push `main`, did not create `v0.2.1`, and did not move `v0.2`.
+- Blockers / questions for Claude:
+  - None for local release readiness after full preflight; remote release still requires the explicit push/tag step.
+- Next:
+  - If the user approves publishing, push `main`, then create and push `v0.2.1`.

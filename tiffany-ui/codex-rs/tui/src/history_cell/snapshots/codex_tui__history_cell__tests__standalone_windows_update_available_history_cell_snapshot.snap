@@ -4,7 +4,7 @@ assertion_line: 1153
 expression: rendered
 ---
 ╭─────────────────────────────────────────────────────────╮
-│ ✨ Update available! 0.2.0 -> 9.9.9                     │
+│ ✨ Update available! 0.2.1 -> 9.9.9                     │
 │ Run brew upgrade macguffinQ/tap/tiffany-loop to update. │
 │                                                         │
 │ See full release notes:                                 │

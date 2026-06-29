@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.2.1] - 2026-06-29
+
+- Hardened the release path so tag-triggered CI runs the full Tiffany preflight
+  and existing tags fail fast unless a rewrite is explicitly allowed.
+- Made fake and multi-runtime e2e scripts work with install directories that
+  contain only the single `tiffany-loop` multi-call binary.
+- Improved native Tiffany process readability with cleaner worker waterfall
+  output, clearer failed tool results, provider/role/job action hints, and less
+  low-value package-manager noise.
+- Improved queued-input visibility with numbered follow-ups, paused queue
+  labels, and clearer `/queue` status/help behavior.
+- Updated architecture, Homebrew, and bilingual README docs for the current
+  release, session-continuity, and tag-safety behavior.
+
 ## [0.2.0] - 2026-06-28
 
 - Added a release build-time regression gate for the full multi-call

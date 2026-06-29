@@ -4018,7 +4018,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -13515,7 +13515,7 @@ dependencies = [
 
 [[package]]
 name = "tiffany-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -13535,7 +13535,7 @@ dependencies = [
 
 [[package]]
 name = "tiffany-loop"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
