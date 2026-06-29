@@ -25,6 +25,7 @@ pub(crate) struct PendingInputPreview {
     pub rejected_steers: Vec<String>,
     pub queued_messages: Vec<String>,
     queued_batch_mode: bool,
+    queue_autosend_paused: bool,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
     edit_binding: Option<key_hint::KeyBinding>,
@@ -41,6 +42,7 @@ impl PendingInputPreview {
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
             queued_batch_mode: false,
+            queue_autosend_paused: false,
             edit_binding: Some(key_hint::alt(KeyCode::Up)),
             interrupt_binding: Some(key_hint::plain(KeyCode::Esc)),
         }
@@ -48,6 +50,20 @@ impl PendingInputPreview {
 
     pub(crate) fn set_queued_batch_mode(&mut self, enabled: bool) {
         self.queued_batch_mode = enabled;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queued_batch_mode_enabled(&self) -> bool {
+        self.queued_batch_mode
+    }
+
+    pub(crate) fn set_queue_autosend_paused(&mut self, paused: bool) {
+        self.queue_autosend_paused = paused;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queue_autosend_paused(&self) -> bool {
+        self.queue_autosend_paused
     }
 
     /// Replace the keybinding shown in the hint line at the bottom of the
@@ -119,11 +135,12 @@ impl PendingInputPreview {
             if !lines.is_empty() {
                 lines.push(Line::from(""));
             }
-            Self::push_section_header(
-                &mut lines,
-                width,
-                "Messages to be submitted at end of turn".into(),
-            );
+            let header = if self.queue_autosend_paused {
+                "Retry-first messages paused until /queue resume"
+            } else {
+                "Messages to be submitted at end of turn"
+            };
+            Self::push_section_header(&mut lines, width, header.into());
 
             for steer in &self.rejected_steers {
                 let wrapped = adaptive_wrap_lines(
@@ -140,9 +157,19 @@ impl PendingInputPreview {
             if !lines.is_empty() {
                 lines.push(Line::from(""));
             }
-            let header = if self.queued_batch_mode {
+            let header = if self.queued_batch_mode && self.queue_autosend_paused {
+                format!(
+                    "Queued batch paused: {} item(s), /queue resume to run",
+                    self.queued_messages.len()
+                )
+            } else if self.queued_batch_mode {
                 format!(
                     "Queued batch: {} item(s), runs together after current orchestration",
+                    self.queued_messages.len()
+                )
+            } else if self.queue_autosend_paused {
+                format!(
+                    "Queued follow-up inputs paused: {} item(s), /queue resume to run",
                     self.queued_messages.len()
                 )
             } else {
@@ -273,6 +300,25 @@ mod tests {
         assert!(
             rendered.contains("Queued batch: 2 item(s), runs together after current orchestration")
         );
+        assert!(rendered.contains("1. first follow-up"));
+        assert!(rendered.contains("2. second follow-up"));
+        assert!(rendered.contains("edit last queued item before batch runs"));
+    }
+
+    #[test]
+    fn render_tiffany_paused_batch_messages() {
+        let mut queue = PendingInputPreview::new();
+        queue.set_queued_batch_mode(true);
+        queue.set_queue_autosend_paused(true);
+        queue.queued_messages.push("first follow-up".to_string());
+        queue.queued_messages.push("second follow-up".to_string());
+        let width = 88;
+        let height = queue.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        queue.render(Rect::new(0, 0, width, height), &mut buf);
+
+        let rendered = format!("{buf:?}");
+        assert!(rendered.contains("Queued batch paused: 2 item(s), /queue resume to run"));
         assert!(rendered.contains("1. first follow-up"));
         assert!(rendered.contains("2. second follow-up"));
         assert!(rendered.contains("edit last queued item before batch runs"));

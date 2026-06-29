@@ -491,6 +491,19 @@ async fn tiffany_orchestrator_shell_replaces_placeholder_header_hints() {
 }
 
 #[tokio::test]
+async fn tiffany_orchestrator_shell_uses_batch_queue_preview() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    assert!(!chat.bottom_pane.queued_batch_mode_enabled());
+
+    chat.set_tiffany_orchestrator_shell(true);
+    assert!(chat.bottom_pane.queued_batch_mode_enabled());
+
+    chat.set_tiffany_orchestrator_shell(false);
+    assert!(!chat.bottom_pane.queued_batch_mode_enabled());
+}
+
+#[tokio::test]
 async fn tiffany_orchestrator_rejects_hidden_codex_command_submit() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_tiffany_orchestrator_shell(true);
@@ -3326,6 +3339,20 @@ async fn tiffany_queue_show_lists_retry_first_and_queued_items() {
         "expected queue counts, got {rendered:?}"
     );
     assert!(
+        rendered.contains("order  retry-first batch, then queued follow-ups"),
+        "expected queue order, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains(
+            "mode   retry-first prompts drain as one restored steer before the normal queue"
+        ),
+        "expected retry-first mode, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("auto   ready now; /queue run starts the next batch"),
+        "expected queue auto state, got {rendered:?}"
+    );
+    assert!(
         rendered.contains("retry-first")
             && rendered.contains("retry first prompt")
             && rendered.contains("queued")
@@ -3333,6 +3360,162 @@ async fn tiffany_queue_show_lists_retry_first_and_queued_items() {
         "expected retry-first and queued previews, got {rendered:?}"
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn tiffany_queue_show_explains_numbered_batch_merge() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.queue_tiffany_orchestrator_prompt("first queued prompt".to_string());
+    chat.queue_tiffany_orchestrator_prompt("second queued prompt".to_string());
+
+    submit_composer_text(&mut chat, "/queue show");
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("2 queued · 0 retry-first · 0 pending"),
+        "expected queue counts, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("order  queued follow-ups in visible order"),
+        "expected visible queue order, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("mode   queued prompts merge into one numbered follow-up"),
+        "expected merge mode, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("auto   ready now; /queue run starts the next batch"),
+        "expected ready auto state, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("queued normal follow-up prompts")
+            && rendered.contains("first queued prompt")
+            && rendered.contains("second queued prompt"),
+        "expected queued prompt previews, got {rendered:?}"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn tiffany_queue_help_explains_batch_semantics() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+
+    submit_composer_text(&mut chat, "/queue help");
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("queue help"), "got {rendered:?}");
+    assert!(
+        rendered.contains("Usage: /queue [show|status|help|clear|pause|resume|run]"),
+        "got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Tiffany follow-ups merge into one numbered batch"),
+        "got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("retry-first prompts run before normal queued follow-ups"),
+        "got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("queued prompts stay in the bottom preview until submitted"),
+        "got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("/queue run  start now, or arm the batch behind the current run"),
+        "got {rendered:?}"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn tiffany_queue_pause_shows_status_and_holds_bottom_preview() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.on_tiffany_orchestrator_run_started();
+    chat.queue_tiffany_orchestrator_prompt("first queued prompt".to_string());
+    chat.queue_tiffany_orchestrator_prompt("second queued prompt".to_string());
+
+    submit_composer_text(&mut chat, "/queue pause");
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(chat.input_queue.suppress_queue_autosend);
+    assert!(chat.bottom_pane.queue_autosend_paused());
+    assert!(rendered.contains("queue paused"), "got {rendered:?}");
+    assert!(
+        rendered.contains("2 queued · 0 retry-first · 0 pending"),
+        "got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("auto   paused; will not drain until /queue resume or /queue run"),
+        "got {rendered:?}"
+    );
+    assert!(
+        rendered.contains(
+            "hold   queued prompts stay in the bottom preview until /queue resume or /queue run"
+        ),
+        "got {rendered:?}"
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    chat.on_tiffany_orchestrator_run_finished();
+
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 2);
+    assert!(chat.bottom_pane.queue_autosend_paused());
+}
+
+#[tokio::test]
+async fn tiffany_queue_resume_clears_paused_preview_and_arms_running_batch() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_tiffany_orchestrator_shell(true);
+    chat.on_tiffany_orchestrator_run_started();
+    chat.queue_tiffany_orchestrator_prompt("first queued prompt".to_string());
+    chat.queue_tiffany_orchestrator_prompt("second queued prompt".to_string());
+    submit_composer_text(&mut chat, "/queue pause");
+    let _ = drain_insert_history(&mut rx);
+
+    submit_composer_text(&mut chat, "/queue resume");
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!chat.input_queue.suppress_queue_autosend);
+    assert!(!chat.bottom_pane.queue_autosend_paused());
+    assert!(rendered.contains("queue waiting"), "got {rendered:?}");
+    assert!(
+        rendered.contains("auto   armed; drains after the current orchestration finishes"),
+        "got {rendered:?}"
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    chat.on_tiffany_orchestrator_run_finished();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "1. first queued prompt\n2. second queued prompt".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected merged queued user turn, got {other:?}"),
+    }
 }
 
 #[tokio::test]

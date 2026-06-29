@@ -230,6 +230,7 @@ impl ChatWidget {
             preview.queued_messages,
             preview.pending_steers,
             preview.rejected_steers,
+            self.input_queue.suppress_queue_autosend,
         );
     }
 

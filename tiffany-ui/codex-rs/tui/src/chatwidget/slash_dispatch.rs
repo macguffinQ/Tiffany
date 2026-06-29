@@ -57,7 +57,7 @@ const ROLES_USAGE: &str = "Usage: /roles [list|show <role>|register <role> --pro
 const THREAD_USAGE: &str = "Usage: /thread [list|show <role>|clear <role>|export <role> [--format markdown|html|--out <path>|--clipboard]]";
 const CONTINUE_USAGE: &str = "Usage: /continue [open] [<role>|claude|codex|gemini]";
 const DOCTOR_USAGE: &str = "Usage: /doctor [run]";
-const QUEUE_USAGE: &str = "Usage: /queue [show|clear|pause|resume|run]";
+const QUEUE_USAGE: &str = "Usage: /queue [show|status|help|clear|pause|resume|run]";
 const PROCESS_USAGE: &str =
     "Usage: /process [summary|full|compact|approvals|questions|tool|tool-call|diff|stderr]";
 
@@ -177,6 +177,46 @@ fn tiffany_queue_next_action(
         return "run the queued prompt";
     }
     "pending item already submitted"
+}
+
+fn tiffany_queue_order_label(queued: usize, rejected: usize, pending: usize) -> &'static str {
+    if rejected > 0 && queued > 0 {
+        "retry-first batch, then queued follow-ups"
+    } else if rejected > 0 {
+        "retry-first batch before normal queued prompts"
+    } else if queued > 0 {
+        "queued follow-ups in visible order"
+    } else if pending > 0 {
+        "pending steer already submitted"
+    } else {
+        "no queued work"
+    }
+}
+
+fn tiffany_queue_mode_label(queued: usize, rejected: usize, pending: usize) -> &'static str {
+    if queued + rejected + pending == 0 {
+        "empty"
+    } else if rejected > 0 {
+        "retry-first prompts drain as one restored steer before the normal queue"
+    } else if queued > 1 {
+        "queued prompts merge into one numbered follow-up"
+    } else if queued == 1 {
+        "single queued prompt runs unchanged"
+    } else {
+        "pending item is already submitted and waits for turn history"
+    }
+}
+
+fn tiffany_queue_autorun_label(paused: bool, running: bool, has_ready_work: bool) -> &'static str {
+    if paused {
+        "paused; will not drain until /queue resume or /queue run"
+    } else if running && has_ready_work {
+        "armed; drains after the current orchestration finishes"
+    } else if has_ready_work {
+        "ready now; /queue run starts the next batch"
+    } else {
+        "idle"
+    }
 }
 
 impl ChatWidget {
@@ -1035,6 +1075,7 @@ impl ChatWidget {
         let action = action.to_ascii_lowercase();
         match action.as_str() {
             "show" | "status" | "" => self.show_tiffany_queue_output(),
+            "help" | "-h" | "--help" => self.show_tiffany_queue_help_output(),
             "clear" | "reset" => {
                 let cleared = self.input_queue.queued_user_messages.len()
                     + self.input_queue.rejected_steers_queue.len();
@@ -1049,35 +1090,26 @@ impl ChatWidget {
                 );
             }
             "pause" => {
-                let ready = self.input_queue.queued_user_messages.len()
-                    + self.input_queue.rejected_steers_queue.len();
                 self.input_queue.suppress_queue_autosend = true;
-                self.add_info_message(
-                    format!(
-                        "Queue paused. {ready} queued item(s) will stay queued until /queue resume or /queue run."
-                    ),
-                    /*hint*/ None,
-                );
+                self.refresh_pending_input_preview();
+                self.show_tiffany_queue_output();
             }
             "resume" | "unpause" => {
                 self.input_queue.suppress_queue_autosend = false;
-                let ready = self.input_queue.queued_user_messages.len()
-                    + self.input_queue.rejected_steers_queue.len();
-                let running = self.is_user_turn_pending_or_running();
+                self.refresh_pending_input_preview();
                 let started = self.maybe_send_merged_tiffany_queued_input();
-                let message = if started {
-                    "Queue resumed. Started queued prompt(s).".to_string()
-                } else if running && ready > 0 {
-                    format!(
-                        "Queue resumed. {ready} queued item(s) armed; they will run after the current orchestration finishes."
-                    )
+                if started {
+                    self.add_info_message(
+                        "Queue resumed. Started queued prompt(s).".to_string(),
+                        /*hint*/ None,
+                    );
                 } else {
-                    format!("Queue resumed. {ready} queued item(s) ready.")
-                };
-                self.add_info_message(message, /*hint*/ None);
+                    self.show_tiffany_queue_output();
+                }
             }
             "run" | "start" | "go" => {
                 self.input_queue.suppress_queue_autosend = false;
+                self.refresh_pending_input_preview();
                 let has_queued = self.input_queue.has_queued_follow_up_messages();
                 let running = self.is_user_turn_pending_or_running();
                 if self.maybe_send_merged_tiffany_queued_input() {
@@ -1098,6 +1130,51 @@ impl ChatWidget {
             _ => self.add_error_message(QUEUE_USAGE.to_string()),
         }
         self.request_redraw();
+    }
+
+    fn show_tiffany_queue_help_output(&mut self) {
+        let lines: Vec<Line<'static>> = vec![
+            vec![
+                "◆ ".fg(crate::tiffany_orchestrator::TIFFANY_BLUE).bold(),
+                "queue ".bold(),
+                "help".into(),
+            ]
+            .into(),
+            vec!["usage ".dim(), QUEUE_USAGE.into()].into(),
+            vec![
+                "mode  ".dim(),
+                "Tiffany follow-ups merge into one numbered batch".into(),
+            ]
+            .into(),
+            vec![
+                "order ".dim(),
+                "retry-first prompts run before normal queued follow-ups".into(),
+            ]
+            .into(),
+            vec![
+                "bottom".dim(),
+                " queued prompts stay in the bottom preview until submitted".into(),
+            ]
+            .into(),
+            vec!["cmd   ".dim(), "/queue show  inspect queued prompts".into()].into(),
+            vec![
+                "cmd   ".dim(),
+                "/queue run  start now, or arm the batch behind the current run".into(),
+            ]
+            .into(),
+            vec![
+                "cmd   ".dim(),
+                "/queue pause  keep queued prompts from auto-running".into(),
+            ]
+            .into(),
+            vec![
+                "cmd   ".dim(),
+                "/queue resume  allow queued prompts to drain again".into(),
+            ]
+            .into(),
+            vec!["cmd   ".dim(), "/queue clear  remove queued prompts".into()].into(),
+        ];
+        self.add_to_history(history_cell::PlainHistoryCell::new(lines));
     }
 
     fn show_tiffany_queue_output(&mut self) {
@@ -1131,11 +1208,36 @@ impl ChatWidget {
                 tiffany_queue_next_action(queued, rejected, pending, paused, running).into(),
             ]
             .into(),
+            vec![
+                "order  ".dim(),
+                tiffany_queue_order_label(queued, rejected, pending).into(),
+            ]
+            .into(),
+            vec![
+                "mode   ".dim(),
+                tiffany_queue_mode_label(queued, rejected, pending).into(),
+            ]
+            .into(),
+            vec![
+                "auto   ".dim(),
+                tiffany_queue_autorun_label(paused, running, queued + rejected > 0).into(),
+            ]
+            .into(),
         ];
 
         if queued + rejected + pending == 0 {
             lines.push(vec!["state  ".dim(), "empty".into()].into());
         } else {
+            if paused && queued + rejected > 0 {
+                lines.push(
+                    vec![
+                        "hold   ".dim(),
+                        "queued prompts stay in the bottom preview until /queue resume or /queue run"
+                            .into(),
+                    ]
+                    .into(),
+                );
+            }
             push_tiffany_queue_preview_section(
                 &mut lines,
                 "retry-first",

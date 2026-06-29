@@ -6,6 +6,7 @@
 use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 
 #[cfg(windows)]
@@ -63,6 +64,26 @@ async fn git_output(cwd: &Path, args: &[&str]) -> Option<String> {
 }
 
 async fn run_native_cli_handoff_command(command_text: &str) -> std::io::Result<ExitStatus> {
+    let dry_run_log = std::env::var_os("TIFFANY_NATIVE_CLI_DRY_RUN_LOG").map(PathBuf::from);
+    run_native_cli_handoff_command_with_dry_run(command_text, dry_run_log.as_deref()).await
+}
+
+async fn run_native_cli_handoff_command_with_dry_run(
+    command_text: &str,
+    dry_run_log: Option<&Path>,
+) -> std::io::Result<ExitStatus> {
+    if let Some(path) = dry_run_log {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        writeln!(file, "{command_text}")?;
+        return Ok(success_exit_status());
+    }
+
     let mut shell = tokio::process::Command::new(default_shell_program());
     shell
         .arg(default_shell_flag())
@@ -72,6 +93,20 @@ async fn run_native_cli_handoff_command(command_text: &str) -> std::io::Result<E
         .stderr(Stdio::inherit())
         .status()
         .await
+}
+
+#[cfg(unix)]
+fn success_exit_status() -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    ExitStatus::from_raw(0)
+}
+
+#[cfg(windows)]
+fn success_exit_status() -> ExitStatus {
+    use std::os::windows::process::ExitStatusExt as _;
+
+    ExitStatus::from_raw(0)
 }
 
 impl App {
@@ -444,6 +479,29 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(marker).expect("marker"),
             "tiffany-native-open"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_cli_handoff_command_dry_run_records_without_opening_cli() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let marker = temp.path().join("should-not-be-created.txt");
+        let dry_run_log = temp.path().join("dry-run.log");
+        let command = format!("printf should-not-run > '{}'", marker.display());
+
+        let status =
+            super::run_native_cli_handoff_command_with_dry_run(&command, Some(&dry_run_log))
+                .await
+                .expect("native handoff dry run should record command");
+
+        assert!(status.success());
+        assert!(
+            !marker.exists(),
+            "dry run should not execute native command"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dry_run_log).expect("dry run log"),
+            format!("{command}\n")
         );
     }
 

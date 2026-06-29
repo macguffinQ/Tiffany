@@ -1032,6 +1032,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[cfg(test)]
+    pub(crate) fn queued_batch_mode_enabled(&self) -> bool {
+        self.pending_input_preview.queued_batch_mode_enabled()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queue_autosend_paused(&self) -> bool {
+        self.pending_input_preview.queue_autosend_paused()
+    }
+
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         if self.status.take().is_some() {
@@ -1197,10 +1207,13 @@ impl BottomPane {
         queued: Vec<String>,
         pending_steers: Vec<String>,
         rejected_steers: Vec<String>,
+        queue_autosend_paused: bool,
     ) {
         self.pending_input_preview.pending_steers = pending_steers;
         self.pending_input_preview.rejected_steers = rejected_steers;
         self.pending_input_preview.queued_messages = queued;
+        self.pending_input_preview
+            .set_queue_autosend_paused(queue_autosend_paused);
         self.request_redraw();
     }
 
@@ -2424,6 +2437,7 @@ mod tests {
             vec!["Queued follow-up question".to_string()],
             Vec::new(),
             Vec::new(),
+            false,
         );
 
         let width = 48;
@@ -2455,6 +2469,7 @@ mod tests {
             vec!["Queued follow-up question".to_string()],
             Vec::new(),
             Vec::new(),
+            false,
         );
         pane.hide_status_indicator();
 
@@ -2487,6 +2502,7 @@ mod tests {
             vec!["Queued follow-up question".to_string()],
             Vec::new(),
             Vec::new(),
+            false,
         );
 
         let width = 48;
